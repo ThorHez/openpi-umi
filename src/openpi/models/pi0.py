@@ -70,6 +70,10 @@ class Pi0(_model.BaseModel):
         # Store action loss mask if provided (for masking out padded action dimensions)
         # Store as tuple to avoid issues with jax.eval_shape, convert to array when used
         self.action_loss_mask = config.action_loss_mask
+        if self.action_loss_mask is not None:
+            print(f"action_loss_mask: {self.action_loss_mask}")
+
+
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
         # TODO: rewrite gemma in NNX. For now, use bridge.

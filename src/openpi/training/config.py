@@ -439,6 +439,7 @@ class LeRobotUmiDataConfigPadded(DataConfigFactory):
     
     use_delta_actions: bool = True
     action_sequence_keys: Sequence[str] = ("actions",)
+    training_mode: bool = True
     
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -452,6 +453,7 @@ class LeRobotUmiDataConfigPadded(DataConfigFactory):
                         "robot0_gripper_width": "observation.robot0_gripper_width",
                         "camera0_rgb": "observation.camera0_rgb",
                         "actions": "actions",
+                        "state": "state",
                         "prompt": "task",
                     }
                 )
@@ -469,6 +471,13 @@ class LeRobotUmiDataConfigPadded(DataConfigFactory):
             data_transforms = data_transforms.push(
                 inputs=[_transforms.DeltaActions(delta_action_mask)],
                 outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        if not self.training_mode:
+            # In inference mode, we need to transform the image to the desired resolution
+            print("In inference mode, transforming image to 224x224")
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.UmiImageTransform(out_res=(224, 224))],
             )
         
         # Model transforms - customized to pad AFTER normalization
@@ -1195,11 +1204,11 @@ _CONFIGS = [
             action_loss_mask=(1.0,) * 7 + (0.0,) * 25,
         ),
         data=LeRobotUmiDataConfigPadded(
-            repo_id="/root/openpi/umi_lerobot_dataset_7d",  # New dataset with 32-dim actions
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v3",  # New dataset with 32-dim actions
             assets=AssetsConfig(
                 # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
                 asset_id=".",
-                assets_dir="/root/openpi/umi_lerobot_dataset_7d",
+                assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_v3",
             ),
             base_config=DataConfig(prompt_from_task=True),
             use_delta_actions=True,
@@ -1215,9 +1224,9 @@ _CONFIGS = [
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=None,
         num_train_steps=30_000,
-        batch_size=4,
-        num_workers=0,
-        fsdp_devices=1,
+        batch_size=32,
+        num_workers=8,
+        fsdp_devices=8,
     ),
     TrainConfig(
         name="pi05_umi_32d_mp",

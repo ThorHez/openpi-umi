@@ -1,6 +1,0 @@
-warning: The `tool.uv.dev-dependencies` field (used in `packages/openpi-client/pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
-╭─ Parsing error ─────────────────────────────────────╮
-│ Unrecognized arguments: train_umi_32d_lora_v3_1.log │
-│ ─────────────────────────────────────────────────── │
-│ For full helptext, run train.py --help              │
-╰─────────────────────────────────────────────────────╯
