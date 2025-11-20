@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """
-Convert UMI zarr dataset to LeRobot format.
+Convert UMI zarr dataset to LeRobot format with multiprocessing support.
+
+This version uses parallel processing to significantly speed up the conversion:
+- Parallel episode data extraction
+- Parallel image processing
+- Batch frame insertion
 
 Usage:
-    python convert_umi_data_to_lerobot.py \
+    python convert_umi_data_to_lerobot_parallel.py \
         --input dataset.zarr.zip \
         --output ./umi_lerobot_dataset \
         --repo-id your_hf_username/umi_dataset \
-        --fps 30
+        --fps 30 \
+        --workers 8
 """
 
 import argparse
@@ -15,6 +21,8 @@ import shutil
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import Dict, List, Tuple
+from multiprocessing import Pool, cpu_count
 
 import numpy as np
 import zarr
@@ -45,6 +53,58 @@ def load_zarr_dataset(zarr_zip_path: str):
     return root, temp_dir
 
 
+def process_episode(args: Tuple[int, int, int, str, str]) -> List[Dict]:
+    """
+    Process a single episode and return all frames as a list of dictionaries.
+    
+    This function runs in a separate process to enable parallel processing.
+    
+    Args:
+        args: Tuple of (episode_idx, episode_start, episode_end, temp_dir, default_task)
+    
+    Returns:
+        List of frame dictionaries ready to be added to the dataset
+    """
+    _episode_idx, episode_start, episode_end, temp_dir, default_task = args
+    
+    # Open zarr in this process (each process needs its own handle)
+    root = zarr.open(temp_dir, mode='r')
+    data = root['data']
+    
+    frames = []
+    
+    for frame_idx in range(episode_start, episode_end):
+        # Construct action (next state for all but last frame)
+        if frame_idx < episode_end - 1:
+            action_7d = np.concatenate([
+                data['robot0_eef_pos'][frame_idx + 1],
+                data['robot0_eef_rot_axis_angle'][frame_idx + 1],
+                data['robot0_gripper_width'][frame_idx + 1],
+            ]).astype(np.float32)
+        else:
+            # Last frame: use current state as action
+            action_7d = np.concatenate([
+                data['robot0_eef_pos'][frame_idx],
+                data['robot0_eef_rot_axis_angle'][frame_idx],
+                data['robot0_gripper_width'][frame_idx],
+            ]).astype(np.float32)
+        
+        action = action_7d
+        
+        # Create frame dictionary
+        frame_data = {
+            "observation.robot0_eef_pos": data['robot0_eef_pos'][frame_idx].astype(np.float32),
+            "observation.robot0_eef_rot_axis_angle": data['robot0_eef_rot_axis_angle'][frame_idx].astype(np.float32),
+            "observation.robot0_gripper_width": data['robot0_gripper_width'][frame_idx].astype(np.float32).reshape(1),
+            "observation.camera0_rgb": np.array(data['camera0_rgb'][frame_idx]),  # Copy to avoid zarr reference
+            "actions": action,
+            "task": default_task,
+        }
+        frames.append(frame_data)
+    
+    return frames
+
+
 def convert_to_lerobot(
     zarr_path: str,
     output_dir: str,
@@ -52,9 +112,11 @@ def convert_to_lerobot(
     fps: int = 30,
     default_task: str = "umi manipulation task",
     push_to_hub: bool = False,
+    num_workers: int = None,
+    batch_size: int = 100,
 ):
     """
-    Convert UMI zarr dataset to LeRobot format.
+    Convert UMI zarr dataset to LeRobot format with multiprocessing.
     
     Args:
         zarr_path: Path to the zarr zip file
@@ -63,7 +125,14 @@ def convert_to_lerobot(
         fps: Frames per second of the dataset
         default_task: Default task description if not available in data
         push_to_hub: Whether to push to HuggingFace Hub after conversion
+        num_workers: Number of worker processes (default: cpu_count())
+        batch_size: Number of episodes to process in each batch
     """
+    
+    if num_workers is None:
+        num_workers = cpu_count()
+    
+    print(f"🚀 Using {num_workers} worker processes for parallel conversion")
     
     # Load zarr dataset
     root, temp_dir = load_zarr_dataset(zarr_path)
@@ -88,8 +157,14 @@ def convert_to_lerobot(
             arr = data[key]
             print(f"  • {key}: shape={arr.shape}, dtype={arr.dtype}")
         
+        # Prepare episode ranges
+        episode_starts = [0] + list(episode_ends[:-1])
+        episode_args = [
+            (idx, int(start), int(end), temp_dir, default_task)
+            for idx, (start, end) in enumerate(zip(episode_starts, episode_ends))
+        ]
+        
         # Create LeRobot dataset with explicit features
-        # Following the format used in examples/libero/convert_libero_data_to_lerobot.py
         print(f"\n🔨 Creating LeRobot dataset: {repo_id}")
         lerobot_dataset = LeRobotDataset.create(
             repo_id=repo_id,
@@ -124,51 +199,35 @@ def convert_to_lerobot(
                 },
             },
             use_videos=False,  # Store images as PNG
-            image_writer_threads=4,  # Parallel image writing for faster conversion
+            image_writer_threads=num_workers,  # Use more threads for image writing
             image_writer_processes=1,
         )
         
-        # Convert each episode
-        episode_start = 0
-        for episode_idx in tqdm(range(num_episodes), desc="Converting episodes"):
-            episode_end = episode_ends[episode_idx]
-            
-            # Add frames for this episode
-            for frame_idx in range(episode_start, episode_end):
-                # Construct action (next state for all but last frame)
-                if frame_idx < episode_end - 1:
-                    action_7d = np.concatenate([
-                        data['robot0_eef_pos'][frame_idx + 1],
-                        data['robot0_eef_rot_axis_angle'][frame_idx + 1],
-                        data['robot0_gripper_width'][frame_idx + 1],
-                    ]).astype(np.float32)
-                else:
-                    # Last frame: use current state as action
-                    action_7d = np.concatenate([
-                        data['robot0_eef_pos'][frame_idx],
-                        data['robot0_eef_rot_axis_angle'][frame_idx],
-                        data['robot0_gripper_width'][frame_idx],
-                    ]).astype(np.float32)
+        # Process episodes in parallel batches
+        print("\n🔄 Processing episodes in parallel...")
+        
+        with Pool(processes=num_workers) as pool:
+            # Process episodes in batches to manage memory
+            for batch_start in range(0, num_episodes, batch_size):
+                batch_end = min(batch_start + batch_size, num_episodes)
+                batch_args = episode_args[batch_start:batch_end]
                 
-                # Pad action to 32 dimensions (to match pi05_base pretrained model)
-                # action = np.zeros(32, dtype=np.float32)
-                # action[:7] = action_7d
-                action = action_7d
+                print(f"\n📦 Processing episodes {batch_start} to {batch_end-1} ({len(batch_args)} episodes)...")
                 
-                # Add frame to dataset
-                lerobot_dataset.add_frame({
-                    "observation.robot0_eef_pos": data['robot0_eef_pos'][frame_idx].astype(np.float32),
-                    "observation.robot0_eef_rot_axis_angle": data['robot0_eef_rot_axis_angle'][frame_idx].astype(np.float32),
-                    "observation.robot0_gripper_width": data['robot0_gripper_width'][frame_idx].astype(np.float32).reshape(1),  # Ensure shape (1,)
-                    "observation.camera0_rgb": data['camera0_rgb'][frame_idx],
-                    "actions": action,
-                    "task": default_task,
-                })
-            
-            # Mark episode as complete
-            lerobot_dataset.save_episode()
-            
-            episode_start = episode_end
+                # Process episodes in parallel with progress bar
+                episode_frames_list = list(tqdm(
+                    pool.imap(process_episode, batch_args),
+                    total=len(batch_args),
+                    desc="Processing episodes",
+                    unit="episode"
+                ))
+                
+                # Add frames to dataset sequentially (LeRobot dataset needs sequential writes)
+                print("💾 Writing frames to dataset...")
+                for episode_frames in tqdm(episode_frames_list, desc="Writing episodes", unit="episode"):
+                    for frame_data in episode_frames:
+                        lerobot_dataset.add_frame(frame_data)
+                    lerobot_dataset.save_episode()
         
         print("\n✅ Conversion complete!")
         print(f"   Output directory: {output_dir}")
@@ -199,7 +258,7 @@ def convert_to_lerobot(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Convert UMI zarr dataset to LeRobot format"
+        description="Convert UMI zarr dataset to LeRobot format (parallel version)"
     )
     parser.add_argument(
         "--input",
@@ -236,6 +295,18 @@ def main():
         action="store_true",
         help="Push to HuggingFace Hub after conversion",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help=f"Number of worker processes (default: {cpu_count()})",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=100,
+        help="Number of episodes to process in each batch (default: 100)",
+    )
     
     args = parser.parse_args()
     
@@ -244,15 +315,17 @@ def main():
         print(f"❌ Error: Input file not found: {args.input}")
         exit(1)
     
-    print("="*60)
-    print("UMI to LeRobot Dataset Conversion")
-    print("="*60)
+    print("=" * 60)
+    print("UMI to LeRobot Dataset Conversion (Parallel)")
+    print("=" * 60)
     print(f"\n📥 Input: {args.input}")
     print(f"📤 Output: {args.output}")
     print(f"🏷️  Repo ID: {args.repo_id}")
     print(f"⏱️  FPS: {args.fps}")
     print(f"📝 Task: {args.task}")
     print(f"☁️  Push to Hub: {args.push_to_hub}")
+    print(f"👷 Workers: {args.workers if args.workers else cpu_count()}")
+    print(f"📦 Batch size: {args.batch_size}")
     print()
     
     # Convert dataset
@@ -263,6 +336,8 @@ def main():
         fps=args.fps,
         default_task=args.task,
         push_to_hub=args.push_to_hub,
+        num_workers=args.workers,
+        batch_size=args.batch_size,
     )
 
 

@@ -105,9 +105,9 @@ def main(config_name: str, max_frames: int | None = None):
     for batch in tqdm.tqdm(data_loader, total=num_batches, desc="Computing stats"):
         for key in keys:
             stats[key].update(np.asarray(batch[key]))
-            # if key == "actions":
+            # if key == "state":
             #     print(f"******************")
-            #     print(f"actions_shape: {batch[key].shape}, actions: {np.asarray(batch[key])[0]}")
+            #     print(f"state_shape: {batch[key].shape}, state: {np.asarray(batch[key])[0]}")
             #     print(f"******************")
 
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
