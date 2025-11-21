@@ -121,7 +121,7 @@ def draw_predefined_mask(img, color=(0,0,0), mirror=True, gripper=True, finger=T
 
 
 def get_image_transform(in_res, out_res=(224, 224), crop_ratio:float = 1.0, bgr_to_rgb: bool=False):
-    iw, ih = in_res
+    ih, iw = in_res
     ow, oh = out_res
     ch = round(ih * crop_ratio)
     cw = round(ih * crop_ratio / oh * ow)
@@ -148,7 +148,17 @@ def get_image_transform(in_res, out_res=(224, 224), crop_ratio:float = 1.0, bgr_
 
 
 def generate_image_pipeline(image, no_mirror=True, out_res=(224, 224)):
-    img = image.to_ndarray(format='rgb24')
+    #img = image.to_ndarray(format='rgb24')
+    if hasattr(image, "to_ndarray"):
+        img = image.to_ndarray(format="rgb24")
+    else:
+        img = np.array(image, copy=False)
+
+    # 2. 确保 dtype / 连续性 / 可写
+    if img.dtype != np.uint8:
+        img = img.astype(np.uint8, copy=True)
+    if (not img.flags['C_CONTIGUOUS']) or (not img.flags['WRITEABLE']):
+        img = np.ascontiguousarray(img.copy())
 
     # mask out gripper
     img = draw_predefined_mask(img, color=(0,0,0), mirror=no_mirror, gripper=True, finger=False)
