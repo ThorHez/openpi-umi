@@ -12,6 +12,8 @@ from openpi.models import tokenizer as _tokenizer
 from openpi.shared import array_typing as at
 from openpi.shared import normalize as _normalize
 
+from openpi.utils.cv_util import generate_image_pipeline
+
 DataDict: TypeAlias = at.PyTree
 NormStats: TypeAlias = _normalize.NormStats
 
@@ -179,6 +181,17 @@ class Unnormalize(DataTransformFn):
         if (dim := q01.shape[-1]) < x.shape[-1]:
             return np.concatenate([(x[..., :dim] + 1.0) / 2.0 * (q99 - q01 + 1e-6) + q01, x[..., dim:]], axis=-1)
         return (x + 1.0) / 2.0 * (q99 - q01 + 1e-6) + q01
+
+
+
+@dataclasses.dataclass(frozen=True)
+class UmiImageTransform(DataTransformFn):
+    """Transform the UMI image to the desired resolution."""
+    out_res: tuple[int, int] = (224, 224)
+
+    def __call__(self, data: DataDict) -> DataDict:
+        data["image"] = {k: generate_image_pipeline(v, out_res=self.out_res) for k, v in data["image"].items()}
+        return data
 
 
 @dataclasses.dataclass(frozen=True)
@@ -475,3 +488,4 @@ def _assert_quantile_stats(norm_stats: at.PyTree[NormStats]) -> None:
             raise ValueError(
                 f"quantile stats must be provided if use_quantile_norm is True. Key {k} is missing q01 or q99."
             )
+

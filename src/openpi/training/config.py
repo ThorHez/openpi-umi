@@ -1347,6 +1347,50 @@ _CONFIGS = [
         policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]}
     ),
     TrainConfig(
+        name="pi05_umi_32d_infer",
+        seed=43,
+        # LoRA version with 32-dim actions
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=10,
+            discrete_state_input=False,
+            #paligemma_variant="gemma_2b_lora",
+            #action_expert_variant="gemma_300m_lora",
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 7 + (0.0,) * 25,
+
+        ),
+        data=LeRobotUmiDataConfigPadded(
+            repo_id="/root/openpi/umi_lerobot_dataset_7d",
+            assets=AssetsConfig(
+                assets_dir="/root/openpi/umi_lerobot_dataset_7d",
+                asset_id=".",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            use_delta_actions=True,
+            training_mode=False
+        ),
+        # Load pretrained weights before LoRA fine-tuning
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=5_000,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        num_train_steps=30_000,
+        batch_size=32,  # Reduced batch size per GPU
+        num_workers=0,  # Set to 0 to avoid multiprocessing overhead
+        fsdp_devices=1,  # Disable FSDP - use data parallel instead
+        #freeze_filter=pi0_config.Pi0Config(
+        #    paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        #).get_freeze_filter(),
+        policy_metadata={"reset_pose": [0, 0.5, 0.7, -0.7, 0, 0]}
+    ),
+    TrainConfig(
         name="pi05_umi_lora",
         # LoRA fine-tuning for low memory usage
         model=pi0_config.Pi0Config(
