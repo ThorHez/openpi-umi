@@ -9,7 +9,6 @@ from openpi.models import model as _model
 import os
 import cv2
 
-
 def make_umi_example() -> dict:
     """Creates a random input example for the UMI policy."""
     return {
@@ -29,9 +28,13 @@ def _parse_image(image) -> np.ndarray:
     1. Convert float32 [0, 1] to uint8 [0, 255]
     2. Rearrange from CHW to HWC format
     """
-    image = np.array(image, copy=True)
-
-    # 若是 CHW → 转 HWC
+    image = np.asarray(image)
+    
+    # Convert float32 [0, 1] to uint8 [0, 255]
+    if np.issubdtype(image.dtype, np.floating):
+        image = (255 * image).astype(np.uint8)
+    
+    # Rearrange from CHW to HWC
     if image.ndim == 3 and image.shape[0] == 3:
         image = einops.rearrange(image, "c h w -> h w c")
     return image
