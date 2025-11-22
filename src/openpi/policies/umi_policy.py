@@ -1,12 +1,13 @@
 import dataclasses
 
 import einops
-import os
-import time
 import numpy as np
 
 from openpi import transforms
 from openpi.models import model as _model
+
+import os
+import cv2
 
 
 def make_umi_example() -> dict:
@@ -16,40 +17,23 @@ def make_umi_example() -> dict:
         "robot0_eef_rot_axis_angle": np.random.rand(3),
         "robot0_gripper_width": np.random.rand(1),
         "camera0_rgb": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
+        "state": np.random.rand(7),
         "prompt": "do something",
     }
 
 
 def _parse_image(image) -> np.ndarray:
-    image = np.asarray(image)
-    if np.issubdtype(image.dtype, np.floating):
-        image = (255 * image).astype(np.uint8)
-    # If CHW, convert to HWC
+    """Parse image to uint8 (H,W,C) format.
+    
+    LeRobot automatically stores images as float32 (C,H,W), so we need to:
+    1. Convert float32 [0, 1] to uint8 [0, 255]
+    2. Rearrange from CHW to HWC format
+    """
+    image = np.array(image, copy=True)
+
+    # 若是 CHW → 转 HWC
     if image.ndim == 3 and image.shape[0] == 3:
         image = einops.rearrange(image, "c h w -> h w c")
-    # If grayscale HxW, expand to 3 channels
-    if image.ndim == 2:
-        image = np.stack([image, image, image], axis=-1)
-    # Normalize channels to 3 (drop alpha or repeat single channel)
-    if image.ndim == 3:
-        if image.shape[-1] == 4:
-            image = image[..., :3]
-        elif image.shape[-1] == 1:
-            image = np.repeat(image, 3, axis=-1)
-    # Resize to 224x224 if needed
-    if image.shape[0] != 224 or image.shape[1] != 224:
-        try:
-            from PIL import Image  # type: ignore
-
-            pil_img = Image.fromarray(image)
-            pil_img = pil_img.convert("RGB")
-            _resample = getattr(getattr(Image, "Resampling", Image), "BILINEAR", getattr(Image, "BILINEAR", 2))
-            pil_img = pil_img.resize((224, 224), resample=_resample)
-            image = np.asarray(pil_img)
-        except (ImportError, ModuleNotFoundError, ValueError, OSError, RuntimeError):
-            # As a last resort, simple numpy resize (not recommended for quality)
-            image = np.resize(image, (224, 224, 3))
-        image = image.astype(np.uint8, copy=False)
     return image
 
 
@@ -67,21 +51,12 @@ class UmiInputs(transforms.DataTransformFn):
     model_type: _model.ModelType
 
     def __call__(self, data: dict) -> dict:
-        # Combine the robot state from end-effector position, rotation (axis-angle), and gripper width.
+        # Get the robot state from the dataset.
         # For UMI, the state is 7-dimensional: [eef_pos (3D), eef_rot (3D), gripper_width (1D)]
-        eef_pos = np.asarray(data["robot0_eef_pos"])
-        eef_rot = np.asarray(data["robot0_eef_rot_axis_angle"])
-        gripper_width = np.asarray(data["robot0_gripper_width"])
-        
-        # Ensure gripper_width is 1D array
-        if gripper_width.ndim == 0:
-            gripper_width = gripper_width[np.newaxis]
-        
-        # Concatenate all state components
-        state = np.concatenate([eef_pos, eef_rot, gripper_width])
+        state = np.asarray(data["state"])
 
-        # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
-        # stores as float32 (C,H,W), gets skipped for policy inference.
+        # Parse images to uint8 (H,W,C) since LeRobot automatically
+        # stores as float32 (C,H,W).
         # Keep this for your own dataset, but if your dataset stores the images
         # in a different key than "camera0_rgb",
         # you should change it below.
@@ -109,53 +84,6 @@ class UmiInputs(transforms.DataTransformFn):
             },
         }
 
-        # Debug print for left_wrist_0_rgb to help locate data issues
-        try:
-            _lw = inputs["image"]["left_wrist_0_rgb"]
-            print(
-                f"left_wrist_0_rgb: shape={_lw.shape}, dtype={_lw.dtype}, min={_lw.min()}, max={_lw.max()}"
-            )
-            # Print a single pixel sample to avoid flooding logs
-            print(f"left_wrist_0_rgb[0,0]: {_lw[0,0].tolist()}")
-        except (KeyError, ValueError, AttributeError, IndexError) as e:
-            print(f"Failed to print left_wrist_0_rgb: {e}")
-
-        # Persist left_wrist_0_rgb image for later debugging
-        try:
-            debug_root = os.environ.get("OPENPI_DEBUG_DIR", "/root/openpi/debug")
-            save_dir = os.path.join(debug_root, "umi_left_wrist")
-            os.makedirs(save_dir, exist_ok=True)
-            ts = time.strftime("%Y%m%d-%H%M%S")
-            fn_base = f"left_wrist_0_rgb_{ts}_{time.time_ns()}"
-            npy_path = os.path.join(save_dir, fn_base + ".npy")
-            np.save(npy_path, _lw)
-            # Prepare PNG (optionally convert BGR->RGB for display only)
-            to_save_png = _lw
-            is_bgr = os.environ.get("OPENPI_IMAGE_IS_BGR", "0").lower() in ("1", "true", "yes", "y")
-            if (
-                is_bgr
-                and isinstance(to_save_png, np.ndarray)
-                and to_save_png.ndim == 3
-                and to_save_png.shape[-1] == 3
-            ):
-                to_save_png = to_save_png[..., ::-1]
-            # Best-effort PNG save
-            png_path = os.path.join(save_dir, fn_base + ".png")
-            try:
-                try:
-                    import imageio.v2 as iio
-                    iio.imwrite(png_path, to_save_png)
-                except (ImportError, ModuleNotFoundError, ValueError, OSError, RuntimeError):
-                    from PIL import Image  # type: ignore
-                    Image.fromarray(to_save_png).save(png_path)
-            except (OSError, ValueError, RuntimeError) as e:
-                print(f"Failed to save PNG for left_wrist_0_rgb: {e}")
-            print(
-                f"Saved left_wrist_0_rgb to {npy_path} and {png_path} (BGR->RGB swap: {is_bgr})"
-            )
-        except (OSError, ValueError, RuntimeError) as e:
-            print(f"Failed to persist left_wrist_0_rgb: {e}")
-
         # Pad actions to the model action dimension. Keep this for your own dataset.
         # Actions are only available during training.
         if "actions" in data:
@@ -166,9 +94,9 @@ class UmiInputs(transforms.DataTransformFn):
         # stored in "prompt"; the output dict always needs to have the key "prompt").
         # if "prompt" in data:
         #     inputs["prompt"] = data["prompt"]
-        inputs["prompt"] = "pick up the black bottle and place it on the white area"
+        inputs["prompt"] = "pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box"
 
-        print(f"inputs: {inputs}")
+        # print(f"inputs: {inputs}")
 
         return inputs
 

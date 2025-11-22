@@ -1,6 +1,7 @@
 import numpy as np
 import cv2
 import scipy.interpolate as si
+import os
 
 
 
@@ -103,7 +104,7 @@ def canonical_to_pixel_coords(coords, img_shape=(2028, 2704)):
     return pts
 
 
-def draw_predefined_mask(img, color=(0,0,0), mirror=True, gripper=True, finger=True, use_aa=False):
+def draw_predefined_mask(img, color=(0,0,0), mirror=False, gripper=True, finger=False, use_aa=False):
     all_coords = list()
     if mirror:
         all_coords.extend(get_mirror_canonical_polygon())
@@ -169,4 +170,25 @@ def generate_image_pipeline(image, no_mirror=True, out_res=(224, 224)):
             out_res=out_res
         )
     img = resize_tf(img)
+
+    save_dir = "debug_left_cam"
+    os.makedirs(save_dir, exist_ok=True)
+
+    # 找到下一个未使用的编号
+    existing = [f for f in os.listdir(save_dir) if f.startswith("left_cam_") and f.endswith(".jpg")]
+    if len(existing) == 0:
+        next_idx = 1
+    else:
+        # 从文件名中解析数字：left_cam_000123.jpg → 123
+        nums = [int(f.split("_")[2].split(".")[0]) for f in existing]
+        next_idx = max(nums) + 1
+
+    # 构造文件名：left_cam_000001.jpg
+    filename = f"left_cam_{next_idx:06d}.jpg"
+    save_path = os.path.join(save_dir, filename)
+
+    # 保存图像
+    cv2.imwrite(save_path, img)
+
+    print(f"[Saved] {save_path}")
     return img
