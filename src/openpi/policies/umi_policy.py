@@ -6,8 +6,6 @@ import numpy as np
 from openpi import transforms
 from openpi.models import model as _model
 
-import os
-import cv2
 
 def make_umi_example() -> dict:
     """Creates a random input example for the UMI policy."""
