@@ -21,6 +21,27 @@ NormStats: TypeAlias = _normalize.NormStats
 T = TypeVar("T")
 S = TypeVar("S")
 
+def make_bool_mask(*dims: int) -> tuple[bool, ...]:
+    """Make a boolean mask for the given dimensions.
+
+    Example:
+        make_bool_mask(2, -2, 2) == (True, True, False, False, True, True)
+        make_bool_mask(2, 0, 2) == (True, True, True, True)
+
+    Args:
+        dims: The dimensions to make the mask for.
+
+    Returns:
+        A tuple of booleans.
+    """
+    result = []
+    for dim in dims:
+        if dim > 0:
+            result.extend([True] * (dim))
+        else:
+            result.extend([False] * (-dim))
+    return tuple(result)
+
 
 @runtime_checkable
 class DataTransformFn(Protocol):
@@ -214,6 +235,31 @@ class SubsampleActions(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class RelativeState(DataTransformFn):
+    base_state_mask: Sequence[bool] | None
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "base_state" not in data or self.base_state_mask is None:
+            return data
+
+        base_state = data["base_state"]
+        base_state_mask = np.asarray(self.base_state_mask)
+        dims = base_state_mask.shape[-1]
+        base_state = pad_to_dim(base_state, dims, axis=-1)
+    
+        copy_state = data["state"].copy()
+        data["raw_state"] = data["state"].copy()
+        copy_state[..., :dims] -= np.where(base_state_mask, base_state[..., :dims], 0)
+        data["state"] = copy_state
+        # base = data["base_state"]
+        # print(f"base_state: {base}")
+        # print(f"state: {data['state']}")
+        # print(f"raw_state: {data['raw_state']}")
+        return data
+
+
+
+@dataclasses.dataclass(frozen=True)
 class DeltaActions(DataTransformFn):
     """Repacks absolute actions into delta action space."""
 
@@ -221,16 +267,18 @@ class DeltaActions(DataTransformFn):
     # can be smaller than the actual number of dimensions. If None, this transform is a no-op.
     # See `make_bool_mask` for more details.
     mask: Sequence[bool] | None
+    
 
     def __call__(self, data: DataDict) -> DataDict:
         if "actions" not in data or self.mask is None:
             return data
 
-        base_state, actions = data["state"], data["actions"]
+        state, actions = data["state"], data["actions"]
         mask = np.asarray(self.mask)
         dims = mask.shape[-1]
-        actions[..., :dims] -= np.expand_dims(np.where(mask, base_state[..., :dims], 0), axis=-2)
+        actions[..., :dims] -= np.expand_dims(np.where(mask, state[..., :dims], 0), axis=-2)
         data["actions"] = actions
+
         return data
 
 
@@ -248,7 +296,6 @@ class AbsoluteActions(DataTransformFn):
             return data
 
         state, actions = data["state"], data["actions"]
-        print(f"output state: {state}, output actions: {actions}")
         mask = np.asarray(self.mask)
         dims = mask.shape[-1]
         actions[..., :dims] += np.expand_dims(np.where(mask, state[..., :dims], 0), axis=-2)
@@ -457,28 +504,6 @@ def pad_to_dim(x: np.ndarray, target_dim: int, axis: int = -1, value: float = 0.
         pad_width[axis] = (0, target_dim - current_dim)
         return np.pad(x, pad_width, constant_values=value)
     return x
-
-
-def make_bool_mask(*dims: int) -> tuple[bool, ...]:
-    """Make a boolean mask for the given dimensions.
-
-    Example:
-        make_bool_mask(2, -2, 2) == (True, True, False, False, True, True)
-        make_bool_mask(2, 0, 2) == (True, True, True, True)
-
-    Args:
-        dims: The dimensions to make the mask for.
-
-    Returns:
-        A tuple of booleans.
-    """
-    result = []
-    for dim in dims:
-        if dim > 0:
-            result.extend([True] * (dim))
-        else:
-            result.extend([False] * (-dim))
-    return tuple(result)
 
 
 def _assert_quantile_stats(norm_stats: at.PyTree[NormStats]) -> None:
