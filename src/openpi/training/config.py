@@ -1330,6 +1330,50 @@ _CONFIGS = [
         fsdp_devices=8,
     ),
     TrainConfig(
+        name="pi05_umi_32d_80k_95_10d_relative_infer",
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=10,
+            discrete_state_input=False,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=LeRobotUmiDataConfigPadded_V2(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/data/umi_lerobot_dataset_v4",  # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+                asset_id=".",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/data/umi_lerobot_dataset_v4",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            # 使用delta动作
+            use_delta_actions=True,
+            # 使用相对状态输入
+            use_relative_state=True,
+            # 使用10d位姿
+            use_10d_pose=True,
+            # 使用推理模式
+            training_mode=False,
+        ),
+        # Now we can load pretrained weights!
+        weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/72000/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        num_train_steps=80_000,
+        batch_size=32,
+        num_workers=8,
+        fsdp_devices=8,
+        policy_metadata={"reset_pose": [0, 0.5, 0.4, -0.4, 0, 0, 0.11]}
+    ),
+    TrainConfig(
         name="pi05_umi_32d_80k_95",
         # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
         model=pi0_config.Pi0Config(
