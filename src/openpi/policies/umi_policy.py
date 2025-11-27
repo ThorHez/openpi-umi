@@ -6,6 +6,10 @@ import numpy as np
 from openpi import transforms
 from openpi.models import model as _model
 
+import os
+import cv2
+
+from openpi.utils.coordinate_transform import pose6d_to_9d, pose9d_to_6d
 
 def make_umi_example() -> dict:
     """Creates a random input example for the UMI policy."""
@@ -51,10 +55,15 @@ class UmiInputs(transforms.DataTransformFn):
     # Do not change this for your own dataset.
     model_type: _model.ModelType
 
+    use_10d_pose: bool = False
+
     def __call__(self, data: dict) -> dict:
         # Get the robot state from the dataset.
         # For UMI, the state is 7-dimensional: [eef_pos (3D), eef_rot (3D), gripper_width (1D)]
         state = np.asarray(data["state"])
+        if self.use_10d_pose:
+            pose9d = pose6d_to_9d(state[:6])
+            state = np.concatenate([pose9d, state[6:]], axis=-1)
 
         # Parse images to uint8 (H,W,C) since LeRobot automatically
         # stores as float32 (C,H,W).
@@ -83,12 +92,18 @@ class UmiInputs(transforms.DataTransformFn):
                 "left_wrist_0_rgb": np.True_,
                 "right_wrist_0_rgb": np.True_ if self.model_type == _model.ModelType.PI0_FAST else np.False_,
             },
+            "base_state": data["base_state"],
         }
 
         # Pad actions to the model action dimension. Keep this for your own dataset.
         # Actions are only available during training.
         if "actions" in data:
-            inputs["actions"] = data["actions"]
+            if self.use_10d_pose:
+                actions = np.asarray(data["actions"])
+                actions = np.concatenate([pose6d_to_9d(actions[:, :6]), actions[:, 6:]], axis=-1)
+                inputs["actions"] = actions
+            else:
+                inputs["actions"] = data["actions"]
 
         # Pass the prompt (aka language instruction) to the model.
         # Keep this for your own dataset (but modify the key if the instruction is not
@@ -111,9 +126,16 @@ class UmiOutputs(transforms.DataTransformFn):
     For your own dataset, you can copy this class and modify the action dimension based on the comments below.
     """
 
+    use_10d_pose: bool = False
+
     def __call__(self, data: dict) -> dict:
         # Only return the first N actions -- since we padded actions above to fit the model action
         # dimension, we need to now parse out the correct number of actions in the return dict.
         # For UMI, we only return the first 7 actions: [eef_pos (3D), eef_rot (3D), gripper_width (1D)].
         # For your own dataset, replace `7` with the action dimension of your dataset.
-        return {"actions": np.asarray(data["actions"][:, :7])}
+        if self.use_10d_pose:
+            actions = data["actions"]
+            actions = np.concatenate([pose9d_to_6d(actions[:, :9]), actions[:, 9:]], axis=-1)
+            return {"actions": np.asarray(actions)}
+        else:
+            return {"actions": np.asarray(data["actions"][:, :7])}
