@@ -1771,4 +1771,3 @@ def get_config(config_name: str) -> TrainConfig:
         raise ValueError(f"Config '{config_name}' not found.{closest_str}")
 
     return _CONFIGS_DICT[config_name]
-ß
