@@ -253,7 +253,6 @@ class AbsoluteActions(DataTransformFn):
         dims = mask.shape[-1]
         actions[..., :dims] += np.expand_dims(np.where(mask, state[..., :dims], 0), axis=-2)
         data["actions"] = actions
-        print(f"output actions: {data['actions']}")
         return data
 
 
