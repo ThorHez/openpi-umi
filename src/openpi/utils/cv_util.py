@@ -198,6 +198,7 @@ def generate_image_pipeline(image, no_mirror=True, out_res=(224, 224)):
         )
     img = resize_tf(img)
 
-    # save_debug_image(img, "generate_image_pipeline")
+    save_debug_image(img, "generate_image_pipeline")
 
     return img
+

@@ -19,6 +19,7 @@ def make_umi_example() -> dict:
         "robot0_gripper_width": np.random.rand(1),
         "camera0_rgb": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
         "state": np.random.rand(7),
+        "state": np.random.rand(7),
         "prompt": "do something",
     }
 
@@ -30,11 +31,21 @@ def _parse_image(image) -> np.ndarray:
     1. Convert float32 [0, 1] to uint8 [0, 255]
     2. Rearrange from CHW to HWC format
     """
+    """Parse image to uint8 (H,W,C) format.
+    
+    LeRobot automatically stores images as float32 (C,H,W), so we need to:
+    1. Convert float32 [0, 1] to uint8 [0, 255]
+    2. Rearrange from CHW to HWC format
+    """
     image = np.asarray(image)
+    
+    # Convert float32 [0, 1] to uint8 [0, 255]
     
     # Convert float32 [0, 1] to uint8 [0, 255]
     if np.issubdtype(image.dtype, np.floating):
         image = (255 * image).astype(np.uint8)
+    
+    # Rearrange from CHW to HWC
     
     # Rearrange from CHW to HWC
     if image.ndim == 3 and image.shape[0] == 3:
@@ -58,6 +69,7 @@ class UmiInputs(transforms.DataTransformFn):
     use_10d_pose: bool = False
 
     def __call__(self, data: dict) -> dict:
+        # Get the robot state from the dataset.
         # Get the robot state from the dataset.
         # For UMI, the state is 7-dimensional: [eef_pos (3D), eef_rot (3D), gripper_width (1D)]
         state = np.asarray(data["state"])
@@ -111,7 +123,9 @@ class UmiInputs(transforms.DataTransformFn):
         # if "prompt" in data:
         #     inputs["prompt"] = data["prompt"]
         inputs["prompt"] = "pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box"
+        inputs["prompt"] = "pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box"
 
+        # print(f"inputs: {inputs}")
         # print(f"inputs: {inputs}")
 
         return inputs

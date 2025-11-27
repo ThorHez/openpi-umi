@@ -1529,9 +1529,9 @@ _CONFIGS = [
             action_loss_mask=(1.0,) * 7 + (0.0,) * 25,
         ),
         data=LeRobotUmiDataConfigPadded(
-            repo_id="/root/openpi/umi_lerobot_dataset_7d",
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/data/umi_lerobot_dataset_v3",
             assets=AssetsConfig(
-                assets_dir="/root/openpi/umi_lerobot_dataset_7d",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/data/umi_lerobot_dataset_v3",
                 asset_id=".",
             ),
             base_config=DataConfig(prompt_from_task=True),
@@ -1551,10 +1551,11 @@ _CONFIGS = [
         batch_size=32,  # Reduced batch size per GPU
         num_workers=0,  # Set to 0 to avoid multiprocessing overhead
         fsdp_devices=1,  # Disable FSDP - use data parallel instead
-        freeze_filter=pi0_config.Pi0Config(
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
-        ).get_freeze_filter(),
-        policy_metadata={"reset_pose": [0, -1.5, 1.5, 0, 0, 0]}
+        #freeze_filter=pi0_config.Pi0Config(
+        #    paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        #).get_freeze_filter(),
+        # policy_metadata={"reset_pose": [0, 0, 0, 0, 0, 0]}
+        policy_metadata={"reset_pose": [0, 0.5, 0.4, -0.4, 0, 0, 0.11]}
     ),
     TrainConfig(
         name="pi05_umi_lora",
