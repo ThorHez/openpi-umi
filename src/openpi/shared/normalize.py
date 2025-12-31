@@ -10,6 +10,8 @@ import pydantic
 class NormStats:
     mean: numpydantic.NDArray
     std: numpydantic.NDArray
+    max: numpydantic.NDArray | None = None
+    min: numpydantic.NDArray | None = None
     q01: numpydantic.NDArray | None = None  # 1st quantile
     q99: numpydantic.NDArray | None = None  # 99th quantile
 
@@ -83,7 +85,7 @@ class RunningStats:
         variance = self._mean_of_squares - self._mean**2
         stddev = np.sqrt(np.maximum(0, variance))
         q01, q99 = self._compute_quantiles([0.01, 0.99])
-        return NormStats(mean=self._mean, std=stddev, q01=q01, q99=q99)
+        return NormStats(mean=self._mean, std=stddev, q01=q01, q99=q99, max=self._max, min=self._min)
 
     def _adjust_histograms(self):
         """Adjust histograms when min or max changes."""

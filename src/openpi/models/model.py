@@ -41,6 +41,11 @@ IMAGE_KEYS = (
     "left_wrist_0_rgb",
     "right_wrist_0_rgb",
 )
+# IMAGE_KEYS = (
+#     # "base_0_rgb",
+#     "left_wrist_0_rgb",
+#     "left_wrist_1_rgb",
+# )
 
 
 # This may need change if we release a small model.
@@ -164,6 +169,8 @@ def preprocess_observation(
         if image.shape[1:3] != image_resolution:
             logger.info(f"Resizing image {key} from {image.shape[1:3]} to {image_resolution}")
             image = image_tools.resize_with_pad(image, *image_resolution)
+
+        # jax.debug.print("image {} max: {}, min: {}", key, image.max(), image.min())
 
         if train:
             # Convert from [-1, 1] to [0, 1] for augmax.

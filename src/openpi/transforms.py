@@ -1,5 +1,6 @@
 from collections.abc import Callable, Mapping, Sequence
 import dataclasses
+from functools import partial
 import re
 from typing import Protocol, TypeAlias, TypeVar, runtime_checkable
 
@@ -137,71 +138,212 @@ class InjectDefaultPrompt(DataTransformFn):
 @dataclasses.dataclass(frozen=True)
 class Normalize(DataTransformFn):
     norm_stats: at.PyTree[NormStats] | None
-    # If true, will use quantile normalization. Otherwise, normal z-score normalization will be used.
+    # If true, will use quantile normalization for all keys (default behavior).
     use_quantiles: bool = False
     # If true, will raise an error if any of the keys in the norm stats are not present in the data.
     strict: bool = False
+    # Dict mapping key names to their norm_mask tuples.
+    # Use make_bool_mask() to create masks easily.
+    # Example: key_masks={"actions": make_bool_mask(3, -7), "state": make_bool_mask(3, -13)}
+    # Keys not in this dict will be normalized without mask (all dimensions normalized).
+    key_masks: dict[str, tuple[bool, ...]] | None = None
+    # Internal field, will be populated in __post_init__
+    key_methods: dict[str, Callable] | None = None
 
     def __post_init__(self):
         if self.norm_stats is not None and self.use_quantiles:
             _assert_quantile_stats(self.norm_stats)
+        
+        # Build key_methods from key_masks configuration
+        methods = {}
+        if self.key_masks:
+            for key, mask in self.key_masks.items():
+                if self.use_quantiles:
+                    methods[key] = partial(self._normalize_quantile, norm_mask=mask)
+                else:
+                    methods[key] = partial(self._normalize, norm_mask=mask)
+        
+        # Use object.__setattr__ to bypass frozen dataclass restriction
+        object.__setattr__(self, 'key_methods', methods if methods else None)
 
     def __call__(self, data: DataDict) -> DataDict:
         if self.norm_stats is None:
             return data
 
+        default_fn = self._normalize_quantile if self.use_quantiles else self._normalize
         return apply_tree(
             data,
             self.norm_stats,
-            self._normalize_quantile if self.use_quantiles else self._normalize,
+            self.key_methods,
             strict=self.strict,
+            default_fn=default_fn,
         )
 
-    def _normalize(self, x, stats: NormStats):
+    def _normalize(self, x, stats: NormStats, norm_mask: tuple[bool, ...] | None = None):
         mean, std = stats.mean[..., : x.shape[-1]], stats.std[..., : x.shape[-1]]
-        return (x - mean) / (std + 1e-6)
+        result = (x - mean) / (std + 1e-6)
+        
+        # Handle mask: True = normalize, False = keep original
+        if norm_mask is not None:
+            assert len(norm_mask) == x.shape[-1]
+            result = result.copy() if isinstance(result, np.ndarray) else np.array(result)
+            for dim in range(min(x.shape[-1], len(norm_mask))):
+                if not norm_mask[dim]:  # False means skip normalization
+                    result[..., dim] = x[..., dim]
+        
+        return result
 
-    def _normalize_quantile(self, x, stats: NormStats):
+    
+
+    # def _normalize_quantile(self, x, stats: NormStats):
+    #     assert stats.q01 is not None
+    #     assert stats.q99 is not None
+    #     q01, q99 = stats.q01[..., : x.shape[-1]], stats.q99[..., : x.shape[-1]]
+    #     return (x - q01) / (q99 - q01 + 1e-6) * 2.0 - 1.0
+
+    def _normalize_quantile(self, x, stats: NormStats, output_max: float = 1.0,
+                        output_min: float = -1.0,
+                        range_eps: float = 1e-7, norm_mask: tuple[bool, ...] | None = None):
         assert stats.q01 is not None
         assert stats.q99 is not None
-        q01, q99 = stats.q01[..., : x.shape[-1]], stats.q99[..., : x.shape[-1]]
-        return (x - q01) / (q99 - q01 + 1e-6) * 2.0 - 1.0
+
+        # 截断到当前 x 真实的维度数
+        input_min = stats.min[..., : x.shape[-1]]
+        input_max = stats.max[..., : x.shape[-1]]
+
+        # 像 get_range_normalizer_from_stat 一样，先算"范围"
+        input_range = input_max - input_min                     # 对应 input_max - input_min
+        ignore_dim = input_range < range_eps        # 哪些维度几乎是常数
+
+        # 避免除以很小的数：这些维度的范围直接设为 output_max - output_min（=2）
+        input_range_safe = input_range.copy() if isinstance(input_range, np.ndarray) else input_range
+        input_range_safe[ignore_dim] = (output_max - output_min)
+
+        # 跟 range_normalizer 一样算 scale / offset
+        scale = (output_max - output_min) / input_range_safe
+        offset = output_min - scale * input_min
+
+        # 对"常数维"，把中心对齐到 0：
+        # offset[ignore_dim] = (output_max + output_min) / 2 - q01[ignore_dim] = 0 - q01[ignore_dim]
+        offset[ignore_dim] = (output_max + output_min) / 2.0 - input_min[ignore_dim]
+
+        # Handle mask: True = normalize, False = pass through (scale=1, offset=0)
+        if norm_mask is not None:
+            if len(norm_mask) != x.shape[-1]:
+                raise ValueError(f"Mask length {len(norm_mask)} does not match input shape {x.shape[-1]}")
+            for dim in range(min(x.shape[-1], len(norm_mask))):
+                if not norm_mask[dim]:  # False means skip normalization
+                    scale[..., dim] = 1.0
+                    offset[..., dim] = 0.0
+
+        # Final normalize: x * scale + offset
+        return x * scale + offset
 
 
 @dataclasses.dataclass(frozen=True)
 class Unnormalize(DataTransformFn):
     norm_stats: at.PyTree[NormStats] | None
-    # If true, will use quantile normalization. Otherwise, normal z-score normalization will be used.
+    # If true, will use quantile unnormalization for all keys (default behavior).
     use_quantiles: bool = False
+    # Dict mapping key names to their norm_mask tuples. Must match key_masks in Normalize.
+    # Use make_bool_mask() to create masks easily.
+    # Example: key_masks={"actions": make_bool_mask(3, -7), "state": make_bool_mask(3, -13)}
+    # Keys not in this dict will be unnormalized without mask.
+    key_masks: dict[str, tuple[bool, ...]] | None = None
+    # Internal field, will be populated in __post_init__
+    key_methods: dict[str, Callable] | None = None
 
     def __post_init__(self):
         if self.norm_stats is not None and self.use_quantiles:
             _assert_quantile_stats(self.norm_stats)
+        
+        # Build key_methods from key_masks configuration
+        methods = {}
+        if self.key_masks:
+            for key, mask in self.key_masks.items():
+                if self.use_quantiles:
+                    methods[key] = partial(self._unnormalize_quantile, norm_mask=mask)
+                else:
+                    methods[key] = partial(self._unnormalize, norm_mask=mask)
+        
+        # Use object.__setattr__ to bypass frozen dataclass restriction
+        object.__setattr__(self, 'key_methods', methods if methods else None)
 
     def __call__(self, data: DataDict) -> DataDict:
         if self.norm_stats is None:
             return data
 
-        # Make sure that all the keys in the norm stats are present in the data.
+        default_fn = self._unnormalize_quantile if self.use_quantiles else self._unnormalize
+        
         return apply_tree(
             data,
             self.norm_stats,
-            self._unnormalize_quantile if self.use_quantiles else self._unnormalize,
-            strict=True,
+            self.key_methods,
+            strict=False,
+            default_fn=default_fn,
         )
 
-    def _unnormalize(self, x, stats: NormStats):
+    def _unnormalize(self, x, stats: NormStats, norm_mask: tuple[bool, ...] | None = None):
         mean = pad_to_dim(stats.mean, x.shape[-1], axis=-1, value=0.0)
         std = pad_to_dim(stats.std, x.shape[-1], axis=-1, value=1.0)
-        return x * (std + 1e-6) + mean
+        result = x * (std + 1e-6) + mean
+        
+        # Handle mask: True = was normalized, False = pass through
+        if norm_mask is not None:
+            assert len(norm_mask) == x.shape[-1]
+            result = result.copy() if isinstance(result, np.ndarray) else np.array(result)
+            for dim in range(min(x.shape[-1], len(norm_mask))):
+                if not norm_mask[dim]:  # False means was not normalized
+                    result[..., dim] = x[..., dim]
+        
+        return result
 
-    def _unnormalize_quantile(self, x, stats: NormStats):
+    # def _unnormalize_quantile(self, x, stats: NormStats):
+    #     assert stats.q01 is not None
+    #     assert stats.q99 is not None
+    #     q01, q99 = stats.q01, stats.q99
+    #     if (dim := q01.shape[-1]) < x.shape[-1]:
+    #         return np.concatenate([(x[..., :dim] + 1.0) / 2.0 * (q99 - q01 + 1e-6) + q01, x[..., dim:]], axis=-1)
+    #     return (x + 1.0) / 2.0 * (q99 - q01 + 1e-6) + q01
+
+    def _unnormalize_quantile(self, y, stats: NormStats,
+                          output_max: float = 1.0,
+                          output_min: float = -1.0,
+                          range_eps: float = 1e-7,
+                          norm_mask: tuple[bool, ...] | None = None):
+        """
+        Unnormalize quantile-normalized values from [-1, 1] back to original scale.
+        Requires stats with q01/q99, matching the stats used in _normalize_quantile.
+        """
         assert stats.q01 is not None
         assert stats.q99 is not None
-        q01, q99 = stats.q01, stats.q99
-        if (dim := q01.shape[-1]) < x.shape[-1]:
-            return np.concatenate([(x[..., :dim] + 1.0) / 2.0 * (q99 - q01 + 1e-6) + q01, x[..., dim:]], axis=-1)
-        return (x + 1.0) / 2.0 * (q99 - q01 + 1e-6) + q01
+
+        # Truncate to current y's actual dimension count
+        input_min = stats.min[..., : y.shape[-1]]
+        input_max = stats.max[..., : y.shape[-1]]
+
+        # Same range and ignore_dim logic as in normalize
+        input_range = input_max - input_min
+        ignore_dim = input_range < range_eps
+
+        input_range_safe = input_range.copy() if isinstance(input_range, np.ndarray) else input_range
+        input_range_safe[ignore_dim] = (output_max - output_min)  # = 2
+
+        scale = (output_max - output_min) / input_range_safe
+        offset = output_min - scale * input_min
+        offset[ignore_dim] = (output_max + output_min) / 2.0 - input_min[ignore_dim]
+
+        # Handle mask: True = was normalized, False = pass through (scale=1, offset=0)
+        if norm_mask is not None:
+            assert len(norm_mask) == y.shape[-1]
+            for dim in range(min(y.shape[-1], len(norm_mask))):
+                if not norm_mask[dim]:  # False means was not normalized
+                    scale[..., dim] = 1.0
+                    offset[..., dim] = 0.0
+
+        # Inverse affine transform: x = (y - offset) / scale
+        x = (y - offset) / scale
+        return x
 
 
 
@@ -413,6 +555,20 @@ class PadActionsOnly(DataTransformFn):
         return data
 
 
+@dataclasses.dataclass(frozen=True)
+class FlattenState(DataTransformFn):
+    """Platten the state to the model action dimension."""
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "state" not in data or len(data["state"].shape) <= 1:
+            return data
+        if len(data["state"].shape) > 2:
+            raise ValueError("State must be 2D or 3D")
+        data["state"] = data["state"].flatten()
+        return data
+
+
+
 def flatten_dict(tree: at.PyTree) -> dict:
     """Flatten a nested dictionary. Uses '/' as the separator."""
     return traverse_util.flatten_dict(tree, sep="/")
@@ -478,14 +634,46 @@ def transform_dict(patterns: Mapping[str, str | None], tree: at.PyTree) -> at.Py
 
 
 def apply_tree(
-    tree: at.PyTree[T], selector: at.PyTree[S], fn: Callable[[T, S], T], *, strict: bool = False
+    tree: at.PyTree[T], 
+    selector: at.PyTree[S], 
+    fn: Callable[[T, S], T] | dict[str, Callable[[T, S], T]], 
+    *, 
+    strict: bool = False,
+    default_fn: Callable[[T, S], T] | None = None,
 ) -> at.PyTree[T]:
+    """Apply function(s) to tree based on selector.
+    
+    Args:
+        tree: The data tree to transform.
+        selector: The selector tree (e.g., norm_stats).
+        fn: Either a single function to apply to all keys, or a dict mapping 
+            key names to their specific functions.
+            Example: {"actions": normalize_quantile, "state": normalize_zscore}
+        strict: If True, raise error if selector keys are not in tree.
+        default_fn: When fn is a dict, this function is used for keys not in fn.
+                   If None and fn is a dict, keys not in fn are left unchanged.
+    
+    Returns:
+        Transformed tree.
+    """
     tree = flatten_dict(tree)
     selector = flatten_dict(selector)
+    
+    # Check if fn is a dict of functions or a single function
+    fn_is_dict = isinstance(fn, dict)
 
     def transform(k: str, v: T) -> T:
         if k in selector:
-            return fn(v, selector[k])
+            if fn_is_dict:
+                # Use specific function for this key, or default_fn, or skip
+                if k in fn:
+                    return fn[k](v, selector[k])
+                elif default_fn is not None:
+                    return default_fn(v, selector[k])
+                else:
+                    return v  # No function specified for this key, keep original
+            else:
+                return fn(v, selector[k])
         return v
 
     if strict:
@@ -512,3 +700,205 @@ def _assert_quantile_stats(norm_stats: at.PyTree[NormStats]) -> None:
             raise ValueError(
                 f"quantile stats must be provided if use_quantile_norm is True. Key {k} is missing q01 or q99."
             )
+
+
+@dataclasses.dataclass(frozen=True)
+class ChunkActions(DataTransformFn):
+    """Truncate actions to a specified dimension.
+    
+    This is useful when:
+    - Model outputs more dimensions than the robot needs
+    - You want to extract only the first N dimensions from actions
+    
+    Example:
+        ChunkActions(target_dim=20)  # Keep only first 20 dims from 32-dim output
+    """
+    
+    # Target dimension to truncate to
+    target_dim: int
+    
+    def __call__(self, data: DataDict) -> DataDict:
+        if "actions" not in data:
+            return data
+        
+        actions = data["actions"]
+        # actions shape: (horizon, action_dim) or (action_dim,)
+        
+        current_dim = actions.shape[-1]
+        if current_dim <= self.target_dim:
+            # return data  # No truncation needed
+            return {
+                "actions": actions,
+            }
+        
+        # Truncate to target dimension
+        # data["actions"] = actions[..., :self.target_dim]
+        return {
+            "actions": actions[..., :self.target_dim],
+        }
+
+
+
+@dataclasses.dataclass(frozen=True)
+class ExpandBimanualActions(DataTransformFn):
+    """Expand bimanual robot actions from compact format to padded format.
+    
+    Original format: [left_arm (10), right_arm (10)] = 20 dims
+    Expanded format: [left_arm (10) + padding (6), right_arm (10) + padding (6)] = 32 dims
+    
+    This is used during training to match Pi0.5's 32-dim action space.
+    """
+    
+    # Number of dimensions per arm in original data
+    arm_dim: int = 10
+    # Target dimension per arm (with padding)
+    target_arm_dim: int = 16
+    # Padding value
+    pad_value: float = 0.0
+    
+    def __call__(self, data: DataDict) -> DataDict:
+        if "actions" not in data:
+            return data
+        
+        actions = data["actions"]
+        # actions shape: (horizon, 20) or (20,)
+        
+        has_horizon = len(actions.shape) == 2
+        if not has_horizon:
+            actions = actions[np.newaxis, :]  # Add horizon dim
+        
+        original_dim = actions.shape[-1]
+        
+        # Validate input dimension
+        expected_dim = self.arm_dim * 2
+        if original_dim != expected_dim:
+            raise ValueError(f"Expected action dim {expected_dim}, got {original_dim}")
+        
+        # Split into left and right arms
+        left_arm = actions[..., :self.arm_dim]  # (horizon, 10)
+        right_arm = actions[..., self.arm_dim:]  # (horizon, 10)
+        
+        # Pad each arm to target dimension
+        pad_size = self.target_arm_dim - self.arm_dim
+        left_padded = np.pad(
+            left_arm, 
+            [(0, 0), (0, pad_size)], 
+            mode='constant', 
+            constant_values=self.pad_value
+        )  # (horizon, 16)
+        right_padded = np.pad(
+            right_arm, 
+            [(0, 0), (0, pad_size)], 
+            mode='constant', 
+            constant_values=self.pad_value
+        )  # (horizon, 16)
+        
+        # Concatenate
+        expanded_actions = np.concatenate([left_padded, right_padded], axis=-1)  # (horizon, 32)
+        
+        if not has_horizon:
+            expanded_actions = expanded_actions[0]  # Remove horizon dim
+        
+        data["actions"] = expanded_actions
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
+class CompactBimanualActions(DataTransformFn):
+    """Compact bimanual robot actions from padded format back to original format.
+    
+    Padded format: [left_arm (10) + padding (6), right_arm (10) + padding (6)] = 32 dims
+    Original format: [left_arm (10), right_arm (10)] = 20 dims
+    
+    This is used during inference to extract actual robot commands from Pi0.5's output.
+    """
+    
+    # Number of actual dimensions per arm (excluding padding)
+    arm_dim: int = 10
+    # Padded dimension per arm
+    padded_arm_dim: int = 16
+    
+    def __call__(self, data: DataDict) -> DataDict:
+        if "actions" not in data:
+            return data
+        
+        actions = data["actions"]
+        # actions shape: (horizon, 32) or (32,)
+        
+        has_horizon = len(actions.shape) == 2
+        if not has_horizon:
+            actions = actions[np.newaxis, :]  # Add horizon dim
+        
+        expected_dim = self.padded_arm_dim * 2
+        if actions.shape[-1] != expected_dim:
+            raise ValueError(f"Expected action dim {expected_dim}, got {actions.shape[-1]}")
+        
+        # Extract left and right arms (ignoring padding)
+        left_arm = actions[..., :self.arm_dim]  # (horizon, 10)
+        right_arm = actions[..., self.padded_arm_dim:self.padded_arm_dim + self.arm_dim]  # (horizon, 10)
+        
+        # Concatenate back to original format
+        compact_actions = np.concatenate([left_arm, right_arm], axis=-1)  # (horizon, 20)
+        
+        if not has_horizon:
+            compact_actions = compact_actions[0]  # Remove horizon dim
+        
+        data["actions"] = compact_actions
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
+class ExpandBimanualState(DataTransformFn):
+    """Expand bimanual robot state from compact format to padded format.
+    
+    Original format: [left_arm (10), right_arm (10)] = 20 dims (or with additional dims)
+    Expanded format: [left_arm (10) + padding (6), right_arm (10) + padding (6)] = 32 dims
+    
+    This is used during training/inference to match Pi0.5's expected state format.
+    """
+    
+    # Number of dimensions per arm in original data
+    arm_dim: int = 10
+    # Target dimension per arm (with padding)
+    target_arm_dim: int = 16
+    # Padding value
+    pad_value: float = 0.0
+    
+    def __call__(self, data: DataDict) -> DataDict:
+        if "state" not in data:
+            return data
+        
+        state = data["state"]
+        # state shape: (20,) or (20 + extra,)
+        
+        original_dim = state.shape[-1]
+        
+        # Validate minimum input dimension
+        min_expected_dim = self.arm_dim * 2
+        if original_dim < min_expected_dim:
+            raise ValueError(f"Expected state dim >= {min_expected_dim}, got {original_dim}")
+        
+        # Split into left and right arms
+        left_arm = state[..., :self.arm_dim]  # (10,)
+        right_arm = state[..., self.arm_dim:self.arm_dim * 2]  # (10,)
+        
+        # Pad each arm to target dimension
+        pad_size = self.target_arm_dim - self.arm_dim
+        left_padded = np.pad(
+            left_arm, 
+            [(0, pad_size)], 
+            mode='constant', 
+            constant_values=self.pad_value
+        )  # (16,)
+        right_padded = np.pad(
+            right_arm, 
+            [(0, pad_size)], 
+            mode='constant', 
+            constant_values=self.pad_value
+        )  # (16,)
+        
+        # Concatenate
+        expanded_state = np.concatenate([left_padded, right_padded], axis=-1)  # (32,)
+        
+        data["state"] = expanded_state
+        return data

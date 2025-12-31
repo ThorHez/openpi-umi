@@ -1,0 +1,139 @@
+# UMI LeRobot 数据集配置文件
+# 用于定义数据集的特征格式
+
+# 数据集基本信息
+dataset:
+  fps: 20
+  robot_type: "umi"
+  action_horizon: 16        # 动作预测长度
+  action_dim: 10            # 动作维度 (每个机器人)
+  low_dim_obs_horizon: 2    # 低维观测长度
+  img_obs_horizon: 2        # 图像观测长度
+  obs_down_sample_steps: 3  # 观测下采样步长
+
+# 从原始数据集加载的字段
+# 这些是 zarr 数据集中的原始键名
+load_keys:
+  # Robot0 数据
+  - robot0_eef_pos
+  - robot0_eef_rot_axis_angle
+  - robot0_gripper_width
+  - robot0_demo_start_pose
+  # Robot1 数据
+  - robot1_eef_pos
+  - robot1_eef_rot_axis_angle
+  - robot1_gripper_width
+  - robot1_demo_start_pose
+  # 图像数据
+  - camera0_rgb
+  - camera1_rgb
+
+# 机器人配置
+# 启用哪些机器人，会自动启用对应的特征
+# 特征名称中包含 robot0 -> 需要 robot0 启用
+# 特征名称中包含 robot1 -> 需要 robot1 启用
+# 不包含机器人 ID 的特征 (如 actions) 始终启用
+robots:
+  - id: 0
+    name: "robot0"
+    enabled: true
+  # 如果是双机械臂，取消下面的注释
+  - id: 1
+    name: "robot1"
+    enabled: true
+
+# 特征定义
+# 每个特征包含:
+#   - dtype: 数据类型 (float32, image, etc.)
+#   - shape: 形状，支持变量 {low_dim_obs_horizon}, {action_horizon}, {action_dim}
+#   - description: 特征描述 (可选)
+# 
+# 注意: 特征是否启用由 robots 配置自动决定，无需手动设置 enabled
+features:
+  # ============ Robot0 观测特征 ============
+  robot0_eef_pos:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 3]
+    description: "Robot0 末端执行器位置"
+    
+  robot0_eef_rot_axis_angle:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 6]
+    description: "Robot0 末端执行器旋转 (6D表示)"
+    
+  robot0_eef_rot_axis_angle_wrt_start:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 6]
+    description: "Robot0 相对起始位姿的旋转"
+    
+  robot0_gripper_width:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 1]
+    description: "Robot0 夹爪宽度"
+
+  # ============ Robot1 观测特征 (双臂时自动启用) ============
+  robot1_eef_pos:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 3]
+    description: "Robot1 末端执行器位置"
+    
+  robot1_eef_rot_axis_angle:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 6]
+    description: "Robot1 末端执行器旋转 (6D表示)"
+    
+  robot1_eef_rot_axis_angle_wrt_start:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 6]
+    description: "Robot1 相对起始位姿的旋转"
+    
+  robot1_gripper_width:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 1]
+    description: "Robot1 夹爪宽度"
+
+  # ============ 相对位置特征 (双臂时自动启用) ============
+  robot0_eef_pos_wrt1:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 3]
+    description: "Robot0 相对于 Robot1 的位置"
+    
+  robot0_eef_rot_axis_angle_wrt1:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 6]
+    description: "Robot0 相对于 Robot1 的旋转"
+    
+  robot1_eef_pos_wrt0:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 3]
+    description: "Robot1 相对于 Robot0 的位置"
+    
+  robot1_eef_rot_axis_angle_wrt0:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 6]
+    description: "Robot1 相对于 Robot0 的旋转"
+
+  # ============ 动作特征 (始终启用) ============
+  actions:
+    dtype: "float32"
+    shape: ["{action_horizon}", "{action_dim}"]
+    description: "机器人动作序列"
+
+# 图像特征配置
+# 图像特征会自动为每个时间步生成独立的特征
+images:
+  left_wrist_0_rgb:
+    dtype: "image"
+    shape: [224, 224, 3]
+    source_key: "camera1_rgb"
+    per_timestep: true  # 每个时间步生成独立特征
+    description: "左手腕相机 RGB 图像 (robot1)"
+    
+  # 可以添加更多相机
+  right_wrist_0_rgb:
+    dtype: "image"
+    shape: [224, 224, 3]
+    source_key: "camera0_rgb"
+    per_timestep: true
+    description: "右手腕相机 RGB 图像(robot0)"
+

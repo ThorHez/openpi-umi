@@ -177,3 +177,5 @@ wandb/
 
 # Debug
 debug_output/
+debug_image/
+policy_records/
