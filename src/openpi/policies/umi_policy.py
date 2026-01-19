@@ -76,8 +76,14 @@ class UmiArxInputs(transforms.DataTransformFn):
             "left_wrist_0_rgb": np.True_,
             "right_wrist_0_rgb": np.False_,
         }
+        # data[
+        #     "prompt"] = "pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box"
         data[
-            "prompt"] = "pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box"
+            "prompt"] = "pick up the cube and place it into the box of matching color"
+
+
+        # data[
+        #     "prompt"] = "pick up electronic components and place them into the correct boxes"
         return data
 
 

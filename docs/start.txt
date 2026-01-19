@@ -1,0 +1,1 @@
+ python scripts/serve_policy.py --port 8123 policy:checkpoint --policy.config=pi05_umi_32d_80k_95_real_umi_batch_72_v4_infer --policy.dir=/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_merge_20251216

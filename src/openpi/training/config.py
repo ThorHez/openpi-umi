@@ -2076,18 +2076,47 @@ _CONFIGS = [
             action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
         ),
         data=LeRobotUmiDataConfigPadded_V4_Inference(
-            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/data/umi_lerobot_dataset_v7.3_merge_20251216",
+            # repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_v4_pick_elec_20260111",
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_merge_20251216",
             # New dataset with 32-dim actions
             assets=AssetsConfig(
                 # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
                 asset_id=".",
-                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/data/umi_lerobot_dataset_v7.3_merge_20251216",
+                # assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_v4_pick_elec_20260111",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_merge_20251216",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
         # Now we can load pretrained weights!
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_merge_20251216/params"),
+        # weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72/my_experiment_fix_norm/99999/"),
+    ),
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_freeze_vlm_infer",
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=16,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=LeRobotUmiDataConfigPadded_V4_Inference(
+            # repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_v4_pick_elec_20260111",
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_merge_20251216_freeze_vlm_only",
+            # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+                asset_id=".",
+                # assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_v4_pick_elec_20260111",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_merge_20251216_freeze_vlm_only",
+            ),
+            base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+        ),
+        # Now we can load pretrained weights!
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_merge_20251216_freeze_vlm_only/params"),
         # weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72/my_experiment_fix_norm/99999/"),
     ),
     TrainConfig(
@@ -2102,16 +2131,16 @@ _CONFIGS = [
             max_token_len=512,
         ),
         data=LeRobotUmiDataConfigPadded_V4_Bimanual_Inference(
-            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_bimanual_v2",  # New dataset with 32-dim actions
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/79999_v4_bimanual_20260111",  # New dataset with 32-dim actions
             assets=AssetsConfig(
                 # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
                 asset_id=".",
-                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_bimanual_v2",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/79999_v4_bimanual_20260111",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=())
         ),
         # Now we can load pretrained weights!
-        weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_bimanual_v2/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/79999_v4_bimanual_20260111/params"),
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95",
