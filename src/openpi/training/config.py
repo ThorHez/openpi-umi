@@ -2077,19 +2077,19 @@ _CONFIGS = [
         ),
         data=LeRobotUmiDataConfigPadded_V4_Inference(
             # repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_v4_pick_elec_20260111",
-            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_merge_20251216",
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_pick_elec_20260118",
             # New dataset with 32-dim actions
             assets=AssetsConfig(
                 # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
                 asset_id=".",
                 # assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_v4_pick_elec_20260111",
-                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_merge_20251216",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_pick_elec_20260118",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
         # Now we can load pretrained weights!
         weight_loader=weight_loaders.CheckpointWeightLoader(
-            "/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_merge_20251216/params"),
+            "/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_pick_elec_20260118/params"),
         # weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72/my_experiment_fix_norm/99999/"),
     ),
     TrainConfig(
@@ -2312,6 +2312,50 @@ _CONFIGS = [
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
     ),
+
+    #
+    # ============================================================================
+    # HYBRID TRAINING CONFIGS (Pi0.5 + FAST joint training)
+    # Use with: python scripts/train_hybrid.py --config pi05_umi_hybrid
+    # ============================================================================
+    #
+    # Note: Hybrid training requires the train_hybrid.py script which computes
+    # both Flow Matching and FAST losses: L_total = L_flow + lambda_fast * L_fast
+    # 
+    # To enable FAST loss, use: --use_fast_loss --lambda_fast 0.1
+    #
+    # TrainConfig(
+    #     name="pi05_umi_hybrid",
+    #     model=pi0_config.Pi0Config(
+    #         pi05=True,
+    #         action_dim=32,
+    #         action_horizon=16,
+    #         discrete_state_input=True,
+    #     ),
+    #     data=LeRobotUmiDataConfigPadded_V4(
+    #         repo_id="/path/to/your/dataset",
+    #         assets=AssetsConfig(assets_dir="/path/to/your/dataset"),
+    #     ),
+    #     weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+    #     lr_schedule=_optimizer.CosineDecaySchedule(
+    #         warmup_steps=2_000,
+    #         peak_lr=5e-5,
+    #         decay_steps=30_000,
+    #         decay_lr=1e-5,
+    #     ),
+    #     optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+    #     ema_decay=0.999,
+    #     num_train_steps=30_000,
+    #     batch_size=32,
+    #     # freeze_filter: Optionally freeze VLM to only train action expert
+    #     # freeze_filter=pi0_config.Pi0Config(pi05=True).get_freeze_filter_freeze_vlm_only(),
+    # ),
+    #
+    # RoboArena configs.
+    #
+
+
+
     #
     # RoboArena configs.
     #
