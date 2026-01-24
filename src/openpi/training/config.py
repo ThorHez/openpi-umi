@@ -1,7 +1,11 @@
 """See _CONFIGS for the list of available configs."""
 
 import abc
+<<<<<<< HEAD
 from collections.abc import Callable, Sequence
+=======
+from collections.abc import Sequence
+>>>>>>> b467a42 (update code)
 import dataclasses
 import difflib
 import logging
@@ -15,6 +19,10 @@ import tyro
 
 import openpi.models.model as _model
 import openpi.models.pi0_config as pi0_config
+<<<<<<< HEAD
+=======
+import openpi.models.pi0_discrete as pi0_discrete
+>>>>>>> b467a42 (update code)
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
@@ -28,8 +36,14 @@ import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
+<<<<<<< HEAD
 import openpi.models.pi0_discrete as pi0_discrete
 from openpi.transforms import make_bool_mask
+=======
+
+from openpi.transforms import make_bool_mask
+
+>>>>>>> b467a42 (update code)
 from openpi.models.pi0_discrete import CheckpointWeightLoaderWithDiscreteHead
 
 ModelType: TypeAlias = _model.ModelType
@@ -103,6 +117,7 @@ class DataConfig:
     # Path to the data filter file for DROID dataset
     filter_dict_path: str | None = None
 
+<<<<<<< HEAD
     # Per-sample action loss mask for multi-dataset training (e.g. single-arm 7d vs bimanual 20d).
     # If set, injected into each sample as "action_loss_mask"; model uses it when present.
     # Length must match model action_dim, e.g. (1.0,)*7 + (0.0,)*25 for 7 real dims.
@@ -118,6 +133,8 @@ class UmiDataConfig(DataConfig):
     use_quantile_norm: bool = True
     prompt_from_task: bool = True
 
+=======
+>>>>>>> b467a42 (update code)
 
 class GroupFactory(Protocol):
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
@@ -221,6 +238,7 @@ class DataConfigFactory(abc.ABC):
         return None
 
 
+<<<<<<< HEAD
 def _set_robot_type(config: DataConfig, robot_type: str) -> DataConfig:
     """Set robot_type on all tokenize transforms in model_transforms.
 
@@ -240,6 +258,8 @@ def _set_robot_type(config: DataConfig, robot_type: str) -> DataConfig:
     return dataclasses.replace(config, model_transforms=new_model_transforms)
 
 
+=======
+>>>>>>> b467a42 (update code)
 @dataclasses.dataclass(frozen=True)
 class FakeDataConfig(DataConfigFactory):
     repo_id: str = "fake"
@@ -544,7 +564,10 @@ class LeRobotUmiDataConfigPadded(DataConfigFactory):
         )
 
 
+<<<<<<< HEAD
 @dataclasses.dataclass(frozen=True)
+=======
+>>>>>>> b467a42 (update code)
 class UmiArxInferenceDataConfig(DataConfigFactory):
     """
     UMI inference data config.
@@ -598,17 +621,28 @@ class LeRobotUmiDataConfigPadded_V3(DataConfigFactory):
     """
     UMI data config that pads 7-dim actions to 32-dim AFTER normalization.
     This avoids the issue where padding values of 0 get normalized to -1.0.
+<<<<<<< HEAD
 
+=======
+    
+>>>>>>> b467a42 (update code)
     Key differences from LeRobotUmiDataConfig:
     - Uses 7-dim norm_stats (cleaner, no padding pollution)
     - Pads actions only (not state) to 32-dim after normalization (padding stays as 0)
     - State remains 7-dim (not wasted, Pi0.5 with discrete_state_input=False doesn't use it anyway)
     - Compatible with pi05_base pretrained weights (32-dim)
     """
+<<<<<<< HEAD
 
     action_sequence_keys: Sequence[str] = ("actions",)
     training_mode: bool = True
 
+=======
+    
+    action_sequence_keys: Sequence[str] = ("actions",)
+    training_mode: bool = True
+    
+>>>>>>> b467a42 (update code)
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         # Repack transform
@@ -628,14 +662,31 @@ class LeRobotUmiDataConfigPadded_V3(DataConfigFactory):
                 )
             ]
         )
+<<<<<<< HEAD
 
+=======
+        
+>>>>>>> b467a42 (update code)
         # Data transforms (UmiInputs + optional DeltaActions)
         data_transforms = _transforms.Group(
             inputs=[umi_policy.UmiInputsV2(model_type=model_config.model_type, training_mode=self.training_mode)],
             outputs=[umi_policy.UmiOutputsV2()],
         )
 
+<<<<<<< HEAD
         # Model transforms - customized to pad AFTER normalization
+=======
+        # if not self.training_mode:
+        #     # In inference mode, we need to transform the image to the desired resolution
+        #     print("In inference mode, transforming image to 224x224")
+        #     data_transforms = data_transforms.push(
+        #         inputs=[_transforms.UmiImageTransform(out_res=(224, 224))],
+        #     )
+        
+        # Model transforms - customized to pad AFTER normalization
+        # This ensures padding values stay as 0 instead of being normalized to -1.0
+        # Use PadActionsOnly since Pi0.5 with discrete_state_input=False doesn't use state
+>>>>>>> b467a42 (update code)
         model_transforms = _transforms.Group(
             inputs=[
                 _transforms.InjectDefaultPrompt(None),
@@ -648,7 +699,11 @@ class LeRobotUmiDataConfigPadded_V3(DataConfigFactory):
                 _transforms.FlattenState(),
             ],
         )
+<<<<<<< HEAD
 
+=======
+        
+>>>>>>> b467a42 (update code)
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=repack_transform,
@@ -662,7 +717,20 @@ class LeRobotUmiDataConfigPadded_V3(DataConfigFactory):
 class LeRobotUmiDataConfigPadded_V4(DataConfigFactory):
     """
     UMI data config that pads 7-dim actions to 32-dim AFTER normalization.
+<<<<<<< HEAD
     """
+=======
+    This avoids the issue where padding values of 0 get normalized to -1.0.
+    
+    Key differences from LeRobotUmiDataConfig:
+    - Uses 7-dim norm_stats (cleaner, no padding pollution)
+    - Pads actions only (not state) to 32-dim after normalization (padding stays as 0)
+    - State remains 7-dim (not wasted, Pi0.5 with discrete_state_input=False doesn't use it anyway)
+    - Compatible with pi05_base pretrained weights (32-dim)
+    """
+    
+    # action_sequence_keys: Sequence[str] = ("actions",)
+>>>>>>> b467a42 (update code)
 
     normalize_masks = {
         "actions": make_bool_mask(3, -7),
@@ -673,9 +741,16 @@ class LeRobotUmiDataConfigPadded_V4(DataConfigFactory):
         config = super().create_base_config(assets_dirs, model_config)
         config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
         return config
+<<<<<<< HEAD
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+=======
+    
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Repack transform
+>>>>>>> b467a42 (update code)
         repack_transform = _transforms.Group(
             inputs=[
                 _transforms.RepackTransform(
@@ -686,18 +761,43 @@ class LeRobotUmiDataConfigPadded_V4(DataConfigFactory):
                         "robot0_eef_rot_axis_angle_wrt_start": "observation.robot0_eef_rot_axis_angle_wrt_start",
                         "left_wrist_0_rgb_0": "observation.left_wrist_0_rgb_0",
                         "left_wrist_0_rgb_1": "observation.left_wrist_0_rgb_1",
+<<<<<<< HEAD
                         "actions": "actions",
                         "prompt": "task",
+=======
+                        # "base_0_rgb_0": "observation.base_0_rgb_0",
+                        # "base_0_rgb_1": "observation.base_0_rgb_1",
+                        "actions": "actions",
+                        "prompt": "task",   
+>>>>>>> b467a42 (update code)
                     }
                 )
             ]
         )
+<<<<<<< HEAD
 
+=======
+        
+        # Data transforms (UmiInputs + optional DeltaActions)
+>>>>>>> b467a42 (update code)
         data_transforms = _transforms.Group(
             inputs=[umi_policy.UmiInputsV4()],
             outputs=[umi_policy.UmiOutputsV4()],
         )
 
+<<<<<<< HEAD
+=======
+        # if not self.training_mode:
+        #     # In inference mode, we need to transform the image to the desired resolution
+        #     print("In inference mode, transforming image to 224x224")
+        #     data_transforms = data_transforms.push(
+        #         inputs=[_transforms.UmiImageTransform(out_res=(224, 224))],
+        #     )
+        
+        # Model transforms - customized to pad AFTER normalization
+        # This ensures padding values stay as 0 instead of being normalized to -1.0
+        # Use PadActionsOnly since Pi0.5 with discrete_state_input=False doesn't use state
+>>>>>>> b467a42 (update code)
         model_transforms = _transforms.Group(
             inputs=[
                 _transforms.InjectDefaultPrompt(None),
@@ -706,16 +806,25 @@ class LeRobotUmiDataConfigPadded_V4(DataConfigFactory):
                     _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
                     discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
                 ),
+<<<<<<< HEAD
                 _transforms.PadActionsOnly(model_config.action_dim),
                 _transforms.FlattenState(),
             ],
         )
 
+=======
+                _transforms.PadActionsOnly(model_config.action_dim),  # Pad actions only to 32-dim (after normalization)
+                _transforms.FlattenState(),
+            ],
+        )
+        
+>>>>>>> b467a42 (update code)
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+<<<<<<< HEAD
         )
 
 
@@ -943,6 +1052,25 @@ class LeRobotUmiDataConfigPadded_V4_Hybrid(DataConfigFactory):
     """
     UMI data config for hybrid (Pi0.5 + FAST) training.
     """
+=======
+            # action_sequence_keys=self.action_sequence_keys
+        )
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfigPadded_V4_Hybrid(DataConfigFactory):
+    """
+    UMI data config that pads 7-dim actions to 32-dim AFTER normalization.
+    This avoids the issue where padding values of 0 get normalized to -1.0.
+    
+    Key differences from LeRobotUmiDataConfig:
+    - Uses 7-dim norm_stats (cleaner, no padding pollution)
+    - Pads actions only (not state) to 32-dim after normalization (padding stays as 0)
+    - State remains 7-dim (not wasted, Pi0.5 with discrete_state_input=False doesn't use it anyway)
+    - Compatible with pi05_base pretrained weights (32-dim)
+    """
+    
+    # action_sequence_keys: Sequence[str] = ("actions",)
+>>>>>>> b467a42 (update code)
 
     normalize_masks = {
         "actions": make_bool_mask(3, -7),
@@ -953,9 +1081,16 @@ class LeRobotUmiDataConfigPadded_V4_Hybrid(DataConfigFactory):
         config = super().create_base_config(assets_dirs, model_config)
         config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
         return config
+<<<<<<< HEAD
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+=======
+    
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Repack transform
+>>>>>>> b467a42 (update code)
         repack_transform = _transforms.Group(
             inputs=[
                 _transforms.RepackTransform(
@@ -966,18 +1101,44 @@ class LeRobotUmiDataConfigPadded_V4_Hybrid(DataConfigFactory):
                         "robot0_eef_rot_axis_angle_wrt_start": "observation.robot0_eef_rot_axis_angle_wrt_start",
                         "left_wrist_0_rgb_0": "observation.left_wrist_0_rgb_0",
                         "left_wrist_0_rgb_1": "observation.left_wrist_0_rgb_1",
+<<<<<<< HEAD
                         "actions": "actions",
                         "prompt": "task",
+=======
+                        # "base_0_rgb_0": "observation.base_0_rgb_0",
+                        # "base_0_rgb_1": "observation.base_0_rgb_1",
+                        "actions": "actions",
+                        "prompt": "task",   
+>>>>>>> b467a42 (update code)
                     }
                 )
             ]
         )
+<<<<<<< HEAD
 
+=======
+        
+        # Data transforms (UmiInputs + optional DeltaActions)
+>>>>>>> b467a42 (update code)
         data_transforms = _transforms.Group(
             inputs=[umi_policy.UmiInputsV4()],
             outputs=[umi_policy.UmiOutputsV4()],
         )
 
+<<<<<<< HEAD
+=======
+        # if not self.training_mode:
+        #     # In inference mode, we need to transform the image to the desired resolution
+        #     print("In inference mode, transforming image to 224x224")
+        #     data_transforms = data_transforms.push(
+        #         inputs=[_transforms.UmiImageTransform(out_res=(224, 224))],
+        #     )
+        
+        # Model transforms - customized to pad AFTER normalization
+        # This ensures padding values stay as 0 instead of being normalized to -1.0
+        # Use PadActionsOnly since Pi0.5 with discrete_state_input=False doesn't use state
+
+>>>>>>> b467a42 (update code)
         tokenizer_kwargs = (
             {} if model_config.fast_model_tokenizer_kwargs is None else model_config.fast_model_tokenizer_kwargs
         )
@@ -991,16 +1152,28 @@ class LeRobotUmiDataConfigPadded_V4_Hybrid(DataConfigFactory):
                     discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
                     fast_tokenizer=_tokenizer.FASTTokenizer(model_config.max_token_len, **tokenizer_kwargs),
                 ),
+<<<<<<< HEAD
                 _transforms.PadActionsOnly(model_config.action_dim),
                 _transforms.FlattenState(),
             ],
         )
 
+=======
+                _transforms.PadActionsOnly(model_config.action_dim),  # Pad actions only to 32-dim (after normalization)
+                _transforms.FlattenState(),
+            ],
+        )
+        
+>>>>>>> b467a42 (update code)
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+<<<<<<< HEAD
+=======
+            # action_sequence_keys=self.action_sequence_keys
+>>>>>>> b467a42 (update code)
         )
 
 
@@ -1008,7 +1181,20 @@ class LeRobotUmiDataConfigPadded_V4_Hybrid(DataConfigFactory):
 class LeRobotUmiDataConfigPadded_V5(DataConfigFactory):
     """
     UMI data config that pads 7-dim actions to 32-dim AFTER normalization.
+<<<<<<< HEAD
     """
+=======
+    This avoids the issue where padding values of 0 get normalized to -1.0.
+    
+    Key differences from LeRobotUmiDataConfig:
+    - Uses 7-dim norm_stats (cleaner, no padding pollution)
+    - Pads actions only (not state) to 32-dim after normalization (padding stays as 0)
+    - State remains 7-dim (not wasted, Pi0.5 with discrete_state_input=False doesn't use it anyway)
+    - Compatible with pi05_base pretrained weights (32-dim)
+    """
+    
+    # action_sequence_keys: Sequence[str] = ("actions",)
+>>>>>>> b467a42 (update code)
 
     normalize_masks = {
         "actions": make_bool_mask(3, -7),
@@ -1019,9 +1205,16 @@ class LeRobotUmiDataConfigPadded_V5(DataConfigFactory):
         config = super().create_base_config(assets_dirs, model_config)
         config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
         return config
+<<<<<<< HEAD
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+=======
+    
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Repack transform
+>>>>>>> b467a42 (update code)
         repack_transform = _transforms.Group(
             inputs=[
                 _transforms.RepackTransform(
@@ -1029,20 +1222,48 @@ class LeRobotUmiDataConfigPadded_V5(DataConfigFactory):
                         "robot0_eef_pos": "observation.robot0_eef_pos",
                         "robot0_eef_rot_axis_angle": "observation.robot0_eef_rot_axis_angle",
                         "robot0_gripper_width": "observation.robot0_gripper_width",
+<<<<<<< HEAD
                         "left_wrist_0_rgb_0": "observation.left_wrist_0_rgb_0",
                         "left_wrist_0_rgb_1": "observation.left_wrist_0_rgb_1",
                         "actions": "actions",
                         "prompt": "task",
+=======
+                        # "robot0_eef_rot_axis_angle_wrt_start": "observation.robot0_eef_rot_axis_angle_wrt_start",
+                        "left_wrist_0_rgb_0": "observation.left_wrist_0_rgb_0",
+                        "left_wrist_0_rgb_1": "observation.left_wrist_0_rgb_1",
+                        # "base_0_rgb_0": "observation.base_0_rgb_0",
+                        # "base_0_rgb_1": "observation.base_0_rgb_1",
+                        "actions": "actions",
+                        "prompt": "task",   
+>>>>>>> b467a42 (update code)
                     }
                 )
             ]
         )
+<<<<<<< HEAD
 
+=======
+        
+        # Data transforms (UmiInputs + optional DeltaActions)
+>>>>>>> b467a42 (update code)
         data_transforms = _transforms.Group(
             inputs=[umi_policy.UmiInputsV5()],
             outputs=[umi_policy.UmiOutputsV4()],
         )
 
+<<<<<<< HEAD
+=======
+        # if not self.training_mode:
+        #     # In inference mode, we need to transform the image to the desired resolution
+        #     print("In inference mode, transforming image to 224x224")
+        #     data_transforms = data_transforms.push(
+        #         inputs=[_transforms.UmiImageTransform(out_res=(224, 224))],
+        #     )
+        
+        # Model transforms - customized to pad AFTER normalization
+        # This ensures padding values stay as 0 instead of being normalized to -1.0
+        # Use PadActionsOnly since Pi0.5 with discrete_state_input=False doesn't use state
+>>>>>>> b467a42 (update code)
         model_transforms = _transforms.Group(
             inputs=[
                 _transforms.InjectDefaultPrompt(None),
@@ -1051,24 +1272,50 @@ class LeRobotUmiDataConfigPadded_V5(DataConfigFactory):
                     _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
                     discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
                 ),
+<<<<<<< HEAD
                 _transforms.PadActionsOnly(model_config.action_dim),
                 _transforms.FlattenState(),
             ],
         )
 
+=======
+                _transforms.PadActionsOnly(model_config.action_dim),  # Pad actions only to 32-dim (after normalization)
+                _transforms.FlattenState(),
+            ],
+        )
+        
+>>>>>>> b467a42 (update code)
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+<<<<<<< HEAD
+=======
+            # action_sequence_keys=self.action_sequence_keys
+>>>>>>> b467a42 (update code)
         )
 
 
 @dataclasses.dataclass(frozen=True)
 class LeRobotUmiDataConfigPadded_V4_Bimanual(DataConfigFactory):
     """
+<<<<<<< HEAD
     UMI data config for bimanual (V4).
     """
+=======
+    UMI data config that pads 7-dim actions to 32-dim AFTER normalization.
+    This avoids the issue where padding values of 0 get normalized to -1.0.
+    
+    Key differences from LeRobotUmiDataConfig:
+    - Uses 7-dim norm_stats (cleaner, no padding pollution)
+    - Pads actions only (not state) to 32-dim after normalization (padding stays as 0)
+    - State remains 7-dim (not wasted, Pi0.5 with discrete_state_input=False doesn't use it anyway)
+    - Compatible with pi05_base pretrained weights (32-dim)
+    """
+    
+    # action_sequence_keys: Sequence[str] = ("actions",)
+>>>>>>> b467a42 (update code)
 
     normalize_masks = {
         "actions": make_bool_mask(3, -7, 3, -7),
@@ -1079,9 +1326,16 @@ class LeRobotUmiDataConfigPadded_V4_Bimanual(DataConfigFactory):
         config = super().create_base_config(assets_dirs, model_config)
         config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
         return config
+<<<<<<< HEAD
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+=======
+    
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Repack transform
+>>>>>>> b467a42 (update code)
         repack_transform = _transforms.Group(
             inputs=[
                 _transforms.RepackTransform(
@@ -1094,6 +1348,10 @@ class LeRobotUmiDataConfigPadded_V4_Bimanual(DataConfigFactory):
                         "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
                         "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
                         "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
+<<<<<<< HEAD
+=======
+
+>>>>>>> b467a42 (update code)
                         "robot1_eef_pos": "robot1_eef_pos",
                         "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
                         "robot1_gripper_width": "robot1_gripper_width",
@@ -1102,19 +1360,45 @@ class LeRobotUmiDataConfigPadded_V4_Bimanual(DataConfigFactory):
                         "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
                         "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
                         "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
+<<<<<<< HEAD
                         "base_0_rgb_0": "base_0_rgb_0",
                         "actions": "actions",
                         "prompt": "task",
+=======
+
+                        "base_0_rgb_0": "base_0_rgb_0",
+
+                        "actions": "actions",
+                        "prompt": "task",   
+>>>>>>> b467a42 (update code)
                     }
                 )
             ]
         )
+<<<<<<< HEAD
 
+=======
+        
+        # Data transforms (UmiInputs + optional DeltaActions)
+>>>>>>> b467a42 (update code)
         data_transforms = _transforms.Group(
             inputs=[umi_policy.UmiInputsV4_Bimanual()],
             outputs=[umi_policy.UmiOutputsV4()],
         )
 
+<<<<<<< HEAD
+=======
+        # if not self.training_mode:
+        #     # In inference mode, we need to transform the image to the desired resolution
+        #     print("In inference mode, transforming image to 224x224")
+        #     data_transforms = data_transforms.push(
+        #         inputs=[_transforms.UmiImageTransform(out_res=(224, 224))],
+        #     )
+
+        # Model transforms - customized to pad AFTER normalization
+        # This ensures padding values stay as 0 instead of being normalized to -1.0
+        # Use PadActionsOnly since Pi0.5 with discrete_state_input=False doesn't use state
+>>>>>>> b467a42 (update code)
         model_transforms = _transforms.Group(
             inputs=[
                 _transforms.InjectDefaultPrompt(None),
@@ -1123,25 +1407,52 @@ class LeRobotUmiDataConfigPadded_V4_Bimanual(DataConfigFactory):
                     _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
                     discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
                 ),
+<<<<<<< HEAD
                 _transforms.PadActionsOnly(model_config.action_dim),
                 _transforms.FlattenState(),
             ],
         )
 
+=======
+                _transforms.PadActionsOnly(model_config.action_dim),  # Pad actions only to 32-dim (after normalization)
+                _transforms.FlattenState(),
+                # _transforms.ExpandBimanualActions()
+            ],
+        )
+        
+>>>>>>> b467a42 (update code)
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+<<<<<<< HEAD
+=======
+            # action_sequence_keys=self.action_sequence_keys
+>>>>>>> b467a42 (update code)
         )
 
 @dataclasses.dataclass(frozen=True)
 class LeRobotUmiDataConfigPadded_V4_Inference(DataConfigFactory):
     """
+<<<<<<< HEAD
     UMI V4 inference data config.
     """
 
     prompt: str = "pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box"
+=======
+    UMI data config that pads 7-dim actions to 32-dim AFTER normalization.
+    This avoids the issue where padding values of 0 get normalized to -1.0.
+    
+    Key differences from LeRobotUmiDataConfig:
+    - Uses 7-dim norm_stats (cleaner, no padding pollution)
+    - Pads actions only (not state) to 32-dim after normalization (padding stays as 0)
+    - State remains 7-dim (not wasted, Pi0.5 with discrete_state_input=False doesn't use it anyway)
+    - Compatible with pi05_base pretrained weights (32-dim)
+    """
+    
+    # action_sequence_keys: Sequence[str] = ("actions",)
+>>>>>>> b467a42 (update code)
 
     normalize_masks = {
         "actions": make_bool_mask(3, -7),
@@ -1152,9 +1463,16 @@ class LeRobotUmiDataConfigPadded_V4_Inference(DataConfigFactory):
         config = super().create_base_config(assets_dirs, model_config)
         config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
         return config
+<<<<<<< HEAD
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+=======
+    
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Repack transform
+>>>>>>> b467a42 (update code)
         repack_transform = _transforms.Group(
             inputs=[
                 _transforms.RepackTransform(
@@ -1163,17 +1481,41 @@ class LeRobotUmiDataConfigPadded_V4_Inference(DataConfigFactory):
                         "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
                         "robot0_gripper_width": "robot0_gripper_width",
                         "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+<<<<<<< HEAD
                         "camera0_rgb": "camera0_rgb",
+=======
+                        "camera0_rgb": "camera0_rgb", 
+>>>>>>> b467a42 (update code)
                     }
                 )
             ]
         )
+<<<<<<< HEAD
 
         data_transforms = _transforms.Group(
             inputs=[umi_policy.UmiArxInputs(prompt=self.prompt)],
             outputs=[umi_policy.UmiArxOutputs()],
         )
 
+=======
+        
+        # Data transforms (UmiInputs + optional DeltaActions)
+        data_transforms = _transforms.Group(
+            inputs=[umi_policy.UmiArxInputs()],
+            outputs=[umi_policy.UmiArxOutputs()],
+        )
+
+        # if not self.training_mode:
+        #     # In inference mode, we need to transform the image to the desired resolution
+        #     print("In inference mode, transforming image to 224x224")
+        #     data_transforms = data_transforms.push(
+        #         inputs=[_transforms.UmiImageTransform(out_res=(224, 224))],
+        #     )
+        
+        # Model transforms - customized to pad AFTER normalization
+        # This ensures padding values stay as 0 instead of being normalized to -1.0
+        # Use PadActionsOnly since Pi0.5 with discrete_state_input=False doesn't use state
+>>>>>>> b467a42 (update code)
         model_transforms = _transforms.Group(
             inputs=[
                 _transforms.InjectDefaultPrompt(None),
@@ -1182,17 +1524,26 @@ class LeRobotUmiDataConfigPadded_V4_Inference(DataConfigFactory):
                     _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
                     discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
                 ),
+<<<<<<< HEAD
                 _transforms.PadActionsOnly(model_config.action_dim),
+=======
+                _transforms.PadActionsOnly(model_config.action_dim),  # Pad actions only to 32-dim (after normalization)
+>>>>>>> b467a42 (update code)
                 _transforms.FlattenState(),
             ],
             outputs=[_transforms.ChunkActions(target_dim=10)],
         )
+<<<<<<< HEAD
 
+=======
+        
+>>>>>>> b467a42 (update code)
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+<<<<<<< HEAD
         )
 
 
@@ -1259,6 +1610,25 @@ class LeRobotUmiDataConfigPadded_V4_Bimanual_Inference(DataConfigFactory):
     """
     UMI V4 bimanual inference data config.
     """
+=======
+            # action_sequence_keys=self.action_sequence_keys
+        )
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfigPadded_V4_Bimanual_Inference(DataConfigFactory):
+    """
+    UMI data config that pads 7-dim actions to 32-dim AFTER normalization.
+    This avoids the issue where padding values of 0 get normalized to -1.0.
+    
+    Key differences from LeRobotUmiDataConfig:
+    - Uses 7-dim norm_stats (cleaner, no padding pollution)
+    - Pads actions only (not state) to 32-dim after normalization (padding stays as 0)
+    - State remains 7-dim (not wasted, Pi0.5 with discrete_state_input=False doesn't use it anyway)
+    - Compatible with pi05_base pretrained weights (32-dim)
+    """
+    
+    # action_sequence_keys: Sequence[str] = ("actions",)
+>>>>>>> b467a42 (update code)
     normalize_masks = {
         "actions": make_bool_mask(3, -7, 3, -7),
         "state": make_bool_mask(3, -12, 3, 7, 3, -12, 3, 7),
@@ -1268,9 +1638,16 @@ class LeRobotUmiDataConfigPadded_V4_Bimanual_Inference(DataConfigFactory):
         config = super().create_base_config(assets_dirs, model_config)
         config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
         return config
+<<<<<<< HEAD
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+=======
+    
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Repack transform
+>>>>>>> b467a42 (update code)
         repack_transform = _transforms.Group(
             inputs=[
                 _transforms.RepackTransform(
@@ -1281,7 +1658,11 @@ class LeRobotUmiDataConfigPadded_V4_Bimanual_Inference(DataConfigFactory):
                         "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
                         "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
                         "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+<<<<<<< HEAD
                         "camera0_rgb": "camera0_rgb",
+=======
+                        "camera0_rgb": "camera0_rgb", 
+>>>>>>> b467a42 (update code)
                         "robot1_eef_pos": "robot1_eef_pos",
                         "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
                         "robot1_gripper_width": "robot1_gripper_width",
@@ -1293,12 +1674,30 @@ class LeRobotUmiDataConfigPadded_V4_Bimanual_Inference(DataConfigFactory):
                 )
             ]
         )
+<<<<<<< HEAD
 
+=======
+        
+        # Data transforms (UmiInputs + optional DeltaActions)
+>>>>>>> b467a42 (update code)
         data_transforms = _transforms.Group(
             inputs=[umi_policy.UmiArxInputs_Bimanual()],
             outputs=[umi_policy.UmiArxOutputs()],
         )
 
+<<<<<<< HEAD
+=======
+        # if not self.training_mode:
+        #     # In inference mode, we need to transform the image to the desired resolution
+        #     print("In inference mode, transforming image to 224x224")
+        #     data_transforms = data_transforms.push(
+        #         inputs=[_transforms.UmiImageTransform(out_res=(224, 224))],
+        #     )
+        
+        # Model transforms - customized to pad AFTER normalization
+        # This ensures padding values stay as 0 instead of being normalized to -1.0
+        # Use PadActionsOnly since Pi0.5 with discrete_state_input=False doesn't use state
+>>>>>>> b467a42 (update code)
         model_transforms = _transforms.Group(
             inputs=[
                 _transforms.InjectDefaultPrompt(None),
@@ -1307,17 +1706,26 @@ class LeRobotUmiDataConfigPadded_V4_Bimanual_Inference(DataConfigFactory):
                     _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
                     discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
                 ),
+<<<<<<< HEAD
                 _transforms.PadActionsOnly(model_config.action_dim),
+=======
+                _transforms.PadActionsOnly(model_config.action_dim),  # Pad actions only to 32-dim (after normalization)
+>>>>>>> b467a42 (update code)
                 _transforms.FlattenState(),
             ],
             outputs=[_transforms.ChunkActions(target_dim=20)],
         )
+<<<<<<< HEAD
 
+=======
+        
+>>>>>>> b467a42 (update code)
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+<<<<<<< HEAD
         )
 
 
@@ -1327,14 +1735,40 @@ class LeRobotUmiDataConfigPadded_V2(DataConfigFactory):
     UMI data config V2 (10d pose, relative state).
     """
 
+=======
+            # action_sequence_keys=self.action_sequence_keys
+        )
+
+    
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfigPadded_V2(DataConfigFactory):
+    """
+    UMI data config that pads 7-dim actions to 32-dim AFTER normalization.
+    This avoids the issue where padding values of 0 get normalized to -1.0.
+    
+    Key differences from LeRobotUmiDataConfig:
+    - Uses 7-dim norm_stats (cleaner, no padding pollution)
+    - Pads actions only (not state) to 32-dim after normalization (padding stays as 0)
+    - State remains 7-dim (not wasted, Pi0.5 with discrete_state_input=False doesn't use it anyway)
+    - Compatible with pi05_base pretrained weights (32-dim)
+    """
+    
+>>>>>>> b467a42 (update code)
     use_delta_actions: bool = True
     action_sequence_keys: Sequence[str] = ("actions",)
     training_mode: bool = True
     use_10d_pose: bool = True
     use_relative_state: bool = True
+<<<<<<< HEAD
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+=======
+    
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Repack transform
+>>>>>>> b467a42 (update code)
         repack_transform = _transforms.Group(
             inputs=[
                 _transforms.RepackTransform(
@@ -1351,12 +1785,21 @@ class LeRobotUmiDataConfigPadded_V2(DataConfigFactory):
                 )
             ]
         )
+<<<<<<< HEAD
 
+=======
+        
+        # Data transforms (UmiInputs + optional DeltaActions)
+>>>>>>> b467a42 (update code)
         data_transforms = _transforms.Group(
             inputs=[umi_policy.UmiInputs(model_type=model_config.model_type, use_10d_pose=self.use_10d_pose)],
             outputs=[umi_policy.UmiOutputs(use_10d_pose=self.use_10d_pose)],
         )
+<<<<<<< HEAD
 
+=======
+        
+>>>>>>> b467a42 (update code)
         if self.use_delta_actions:
             if self.use_10d_pose:
                 delta_action_mask = _transforms.make_bool_mask(9, -1)
@@ -1378,11 +1821,22 @@ class LeRobotUmiDataConfigPadded_V2(DataConfigFactory):
             )
 
         if not self.training_mode:
+<<<<<<< HEAD
+=======
+            # In inference mode, we need to transform the image to the desired resolution
+>>>>>>> b467a42 (update code)
             print("In inference mode, transforming image to 224x224")
             data_transforms = data_transforms.push(
                 inputs=[_transforms.UmiImageTransform(out_res=(224, 224))],
             )
+<<<<<<< HEAD
 
+=======
+        
+        # Model transforms - customized to pad AFTER normalization
+        # This ensures padding values stay as 0 instead of being normalized to -1.0
+        # Use PadActionsOnly since Pi0.5 with discrete_state_input=False doesn't use state
+>>>>>>> b467a42 (update code)
         model_transforms = _transforms.Group(
             inputs=[
                 _transforms.InjectDefaultPrompt(None),
@@ -1391,6 +1845,7 @@ class LeRobotUmiDataConfigPadded_V2(DataConfigFactory):
                     _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
                     discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
                 ),
+<<<<<<< HEAD
                 _transforms.PadActionsOnly(model_config.action_dim),
             ],
         )
@@ -1492,6 +1947,12 @@ class LeRobotUmiDataConfigPadded_MixedArm(DataConfigFactory):
                 _transforms.PadActionsOnly(model_config.action_dim),
             ],
         )
+=======
+                _transforms.PadActionsOnly(model_config.action_dim),  # Pad actions only to 32-dim (after normalization)
+            ],
+        )
+        
+>>>>>>> b467a42 (update code)
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=repack_transform,
@@ -2189,6 +2650,7 @@ _CONFIGS = [
         num_workers=0,  # Set to 0 to avoid /dev/shm space issues
         # fsdp_devices=4,  # Temporarily disabled - may be incompatible with Pi0.5
     ),
+<<<<<<< HEAD
     #
     # Online UMI configs (merged from config.py.online).
     #
@@ -2203,13 +2665,36 @@ _CONFIGS = [
         data=LeRobotUmiDataConfigPadded_V3(
             repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v6_train",
             assets=AssetsConfig(
+=======
+    TrainConfig(
+        name="pi05_umi_10d_80k_95_real_umi_v2",
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=10,  # Padded to match pretrained model
+            action_horizon=10,
+            discrete_state_input=False,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            # action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=LeRobotUmiDataConfigPadded_V3(
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v6_train",  # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+>>>>>>> b467a42 (update code)
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_v6_train",
             ),
             base_config=DataConfig(prompt_from_task=True),
             training_mode=True,
         ),
+<<<<<<< HEAD
         weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_10d_80k_95_real_umi_v2/my_experiment/79999/params"),
+=======
+        # Now we can load pretrained weights!
+        weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_10d_80k_95_real_umi_v2/my_experiment/79999/params"),
+        # weight_loader=weight_loaders.NoOpWeightLoader(),
+>>>>>>> b467a42 (update code)
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1_000,
             peak_lr=5e-5,
@@ -2225,6 +2710,7 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_v2",
+<<<<<<< HEAD
         model=pi0_config.Pi0Config(
             pi05=True,
             action_dim=32,
@@ -2234,12 +2720,30 @@ _CONFIGS = [
         data=LeRobotUmiDataConfigPadded_V3(
             repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v6_train",
             assets=AssetsConfig(
+=======
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=10,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=LeRobotUmiDataConfigPadded_V3(
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v6_train",  # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+>>>>>>> b467a42 (update code)
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_v6_train",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=False),
             training_mode=True,
         ),
+<<<<<<< HEAD
+=======
+        # Now we can load pretrained weights!
+>>>>>>> b467a42 (update code)
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
@@ -2258,6 +2762,7 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72_compute_norm_stats",
+<<<<<<< HEAD
         model=pi0_config.Pi0Config(
             pi05=True,
             action_dim=32,
@@ -2267,11 +2772,41 @@ _CONFIGS = [
         data=LeRobotUmiDataConfigPadded_V4(
             repo_id="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
             assets=AssetsConfig(
+=======
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=16,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=LeRobotUmiDataConfigPadded_V4(
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",  # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+>>>>>>> b467a42 (update code)
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+<<<<<<< HEAD
         ),
+=======
+            # training_mode=True,
+        ),
+        # Now we can load pretrained weights!
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        # lr_schedule=_optimizer.CosineDecaySchedule(
+        #     warmup_steps=2_000,
+        #     peak_lr=8e-5,
+        #     decay_steps=95_000,
+        #     decay_lr=1e-5,
+        # ),
+        # optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        # ema_decay=0.999,
+        # num_train_steps=100_000,
+>>>>>>> b467a42 (update code)
         batch_size=512,
         num_workers=8,
         fsdp_devices=8,
@@ -2280,6 +2815,7 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_compute_norm_stats",
+<<<<<<< HEAD
         model=pi0_config.Pi0Config(
             pi05=True,
             action_dim=32,
@@ -2289,10 +2825,25 @@ _CONFIGS = [
         data=LeRobotUmiDataConfigPadded_V4_Bimanual(
             repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_merge_mason_ray_cyrus_20251224_20260107_exclude_25_all_clean",
             assets=AssetsConfig(
+=======
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=16,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=LeRobotUmiDataConfigPadded_V4_Bimanual(
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_merge_mason_ray_cyrus_20251224_20260107_exclude_25_all_clean",  # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+>>>>>>> b467a42 (update code)
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_merge_mason_ray_cyrus_20251224_20260107_exclude_25_all_clean",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+<<<<<<< HEAD
         ),
         batch_size=512,
         num_workers=8,
@@ -2346,6 +2897,21 @@ _CONFIGS = [
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
+=======
+            # training_mode=True,
+        ),
+        # Now we can load pretrained weights!
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        # lr_schedule=_optimizer.CosineDecaySchedule(
+        #     warmup_steps=2_000,
+        #     peak_lr=8e-5,
+        #     decay_steps=95_000,
+        #     decay_lr=1e-5,
+        # ),
+        # optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        # ema_decay=0.999,
+        # num_train_steps=100_000,
+>>>>>>> b467a42 (update code)
         batch_size=512,
         num_workers=8,
         fsdp_devices=8,
@@ -2354,6 +2920,7 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72",
+<<<<<<< HEAD
         model=pi0_config.Pi0Config(
             pi05=True,
             action_dim=32,
@@ -2370,6 +2937,29 @@ _CONFIGS = [
             training_mode=True,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+=======
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=10,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=LeRobotUmiDataConfigPadded_V3(
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v7.1_test",  # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+                asset_id=".",
+                assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_v7.1_test",
+            ),
+            base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True,),
+            training_mode=True,
+        ),
+        # Now we can load pretrained weights!
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        #weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72/my_experiment_fix_norm/99999/"),
+>>>>>>> b467a42 (update code)
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
             peak_lr=8e-5,
@@ -2387,6 +2977,7 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72_v4",
+<<<<<<< HEAD
         model=pi0_config.Pi0Config(
             pi05=True,
             action_dim=32,
@@ -2396,12 +2987,39 @@ _CONFIGS = [
         data=LeRobotUmiDataConfigPadded_V4(
             repo_id="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
             assets=AssetsConfig(
+=======
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=16,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=LeRobotUmiDataConfigPadded_V4(
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",  # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+>>>>>>> b467a42 (update code)
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
+<<<<<<< HEAD
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+=======
+        # Now we can load pretrained weights!
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        # weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4/my_experiment_ray_cyrus/61000/params"),
+        #weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72/my_experiment_fix_norm/99999/"),
+        
+        # freeze_filter=nnx.filterlib.Not(
+        #     nnx.PathContains("action_expert", exact=False)
+        # ),
+        
+>>>>>>> b467a42 (update code)
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
             peak_lr=8e-5,
@@ -2419,25 +3037,56 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid",
+<<<<<<< HEAD
         model=pi0_discrete.Pi0DiscreteConfig(
             pi05=True,
             action_dim=32,
             action_horizon=16,
             action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
             enable_discrete_head=True,
+=======
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_discrete.Pi0DiscreteConfig(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=16,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+            enable_discrete_head=True,
+            # Local path for FAST tokenizer (offline mode)
+>>>>>>> b467a42 (update code)
             fast_model_tokenizer_kwargs={
                 "fast_tokenizer_path": "/root/fast_tokenizer"
             },
         ),
         data=LeRobotUmiDataConfigPadded_V4_Hybrid(
+<<<<<<< HEAD
             repo_id="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
             assets=AssetsConfig(
+=======
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",  # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+>>>>>>> b467a42 (update code)
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
+<<<<<<< HEAD
         weight_loader=CheckpointWeightLoaderWithDiscreteHead("gs://openpi-assets/checkpoints/pi05_base/params"),
+=======
+        # Now we can load pretrained weights!
+        weight_loader=CheckpointWeightLoaderWithDiscreteHead("gs://openpi-assets/checkpoints/pi05_base/params"),
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        # weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4/my_experiment_ray_cyrus/61000/params"),
+        #weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72/my_experiment_fix_norm/99999/"),
+        
+        # freeze_filter=nnx.filterlib.Not(
+        #     nnx.PathContains("action_expert", exact=False)
+        # ),
+        
+>>>>>>> b467a42 (update code)
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
             peak_lr=8e-5,
@@ -2454,6 +3103,7 @@ _CONFIGS = [
         keep_period=30000,
     ),
     TrainConfig(
+<<<<<<< HEAD
         name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_multi_task",
         model=pi0_discrete.Pi0DiscreteConfig(
             pi05=True,
@@ -2546,12 +3196,40 @@ _CONFIGS = [
         data=LeRobotUmiDataConfigPadded_V5(
             repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v7.3_merge_20251216",
             assets=AssetsConfig(
+=======
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v5",
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=16,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=LeRobotUmiDataConfigPadded_V5(
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v7.3_merge_20251216",  # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+>>>>>>> b467a42 (update code)
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_v7.3_merge_20251216",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
+<<<<<<< HEAD
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+=======
+        # Now we can load pretrained weights!
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        # weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4/my_experiment_ray_cyrus/61000/params"),
+        #weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72/my_experiment_fix_norm/99999/"),
+        
+        # freeze_filter=nnx.filterlib.Not(
+        #     nnx.PathContains("action_expert", exact=False)
+        # ),
+        
+>>>>>>> b467a42 (update code)
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
             peak_lr=8e-5,
@@ -2569,6 +3247,7 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_freeze_vlm_only",
+<<<<<<< HEAD
         model=pi0_config.Pi0Config(
             pi05=True,
             action_dim=32,
@@ -2578,11 +3257,26 @@ _CONFIGS = [
         data=LeRobotUmiDataConfigPadded_V4(
             repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v7.3_merge_20251216",
             assets=AssetsConfig(
+=======
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=16,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=LeRobotUmiDataConfigPadded_V4(
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v7.3_merge_20251216",  # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+>>>>>>> b467a42 (update code)
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_v7.3_merge_20251216",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
+<<<<<<< HEAD
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
@@ -2590,6 +3284,23 @@ _CONFIGS = [
             action_horizon=16,
             action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
         ).get_freeze_filter_freeze_vlm_only(),
+=======
+        # Now we can load pretrained weights!
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        # weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4/my_experiment_ray_cyrus/61000/params"),
+        #weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72/my_experiment_fix_norm/99999/"),
+        
+        # freeze VLM only
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=16,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ).get_freeze_filter_freeze_vlm_only(),
+        
+>>>>>>> b467a42 (update code)
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
             peak_lr=8e-5,
@@ -2607,22 +3318,45 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_bimanual",
+<<<<<<< HEAD
         model=pi0_config.Pi0Config(
             pi05=True,
             action_dim=32,
             action_horizon=16,
+=======
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=16,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+>>>>>>> b467a42 (update code)
             action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
             max_token_len=512,
         ),
         data=LeRobotUmiDataConfigPadded_V4_Bimanual(
+<<<<<<< HEAD
             repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_merge_mason_ray_cyrus_20251224_20260107_exclude_25_all_clean",
             assets=AssetsConfig(
+=======
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_merge_mason_ray_cyrus_20251224_20260107_exclude_25_all_clean",  # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+>>>>>>> b467a42 (update code)
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_merge_mason_ray_cyrus_20251224_20260107_exclude_25_all_clean",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
+<<<<<<< HEAD
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+=======
+        # Now we can load pretrained weights!
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        # weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4_bimanual/my_experiment_v2/39999/params"),
+        # weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4/my_experiment_ray_cyrus/61000/params"),
+        #weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72/my_experiment_fix_norm/99999/"),
+>>>>>>> b467a42 (update code)
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
             peak_lr=8e-5,
@@ -2640,6 +3374,7 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_10d_relative",
+<<<<<<< HEAD
         model=pi0_config.Pi0Config(
             pi05=True,
             action_dim=32,
@@ -2650,14 +3385,40 @@ _CONFIGS = [
         data=LeRobotUmiDataConfigPadded_V2(
             repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v4_train",
             assets=AssetsConfig(
+=======
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=10,
+            discrete_state_input=False,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=LeRobotUmiDataConfigPadded_V2(
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v4_train",  # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+>>>>>>> b467a42 (update code)
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_v4_train",
             ),
             base_config=DataConfig(prompt_from_task=True),
+<<<<<<< HEAD
             use_delta_actions=True,
             use_relative_state=True,
             use_10d_pose=True,
         ),
+=======
+            # 使用delta动作
+            use_delta_actions=True,
+            # 使用相对状态输入
+            use_relative_state=True,
+            # 使用10d位姿
+            use_10d_pose=True,
+        ),
+        # Now we can load pretrained weights!
+>>>>>>> b467a42 (update code)
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1_000,
@@ -2673,6 +3434,7 @@ _CONFIGS = [
         fsdp_devices=8,
     ),
     TrainConfig(
+<<<<<<< HEAD
         name="pi05_umi_32d_80k_95",
         model=pi0_config.Pi0Config(
             pi05=True,
@@ -2684,12 +3446,80 @@ _CONFIGS = [
         data=LeRobotUmiDataConfigPadded(
             repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v3_train",
             assets=AssetsConfig(
+=======
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_infer",
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=16,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=LeRobotUmiDataConfigPadded_V4_Inference(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/data/umi_lerobot_dataset_v7.3_merge_20251216",
+            # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+                asset_id=".",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/data/umi_lerobot_dataset_v7.3_merge_20251216",
+            ),
+            base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+        ),
+        # Now we can load pretrained weights!
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_merge_20251216/params"),
+        # weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72/my_experiment_fix_norm/99999/"),
+    ),
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_bimanual_infer",
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=16,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+        ),
+        data=LeRobotUmiDataConfigPadded_V4_Bimanual_Inference(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_bimanual_v1",  # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+                asset_id=".",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_bimanual_v1",
+            ),
+            base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=())
+        ),
+        # Now we can load pretrained weights!
+        weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_bimanual_v1/params"),
+    ),
+    TrainConfig(
+        name="pi05_umi_32d_80k_95",
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=10,
+            discrete_state_input=False,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 7 + (0.0,) * 25,
+        ),
+        data=LeRobotUmiDataConfigPadded(
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v3_train",  # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+>>>>>>> b467a42 (update code)
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_v3_train",
             ),
             base_config=DataConfig(prompt_from_task=True),
             use_delta_actions=True,
         ),
+<<<<<<< HEAD
+=======
+        # Now we can load pretrained weights!
+>>>>>>> b467a42 (update code)
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1_000,
@@ -2706,6 +3536,7 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_infer",
+<<<<<<< HEAD
         model=pi0_config.Pi0Config(
             pi05=True,
             action_dim=32,
@@ -2716,15 +3547,35 @@ _CONFIGS = [
         data=UmiArxInferenceDataConfig(
             repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v6_train",
             assets=AssetsConfig(
+=======
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=10,
+            discrete_state_input=False,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 7 + (0.0,) * 25,
+        ),
+        data=UmiArxInferenceDataConfig(
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v6_train",  # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+>>>>>>> b467a42 (update code)
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_v6_train",
             ),
             base_config=DataConfig(prompt_from_task=True),
         ),
+<<<<<<< HEAD
+=======
+        # Now we can load pretrained weights!
+>>>>>>> b467a42 (update code)
         weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_v2/my_experiment/79999/params"),
     ),
     TrainConfig(
         name="pi05_umi_32d_retrain",
+<<<<<<< HEAD
         model=pi0_config.Pi0Config(
             pi05=True,
             action_dim=32,
@@ -2854,6 +3705,8 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d",
+=======
+>>>>>>> b467a42 (update code)
         # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
         model=pi0_config.Pi0Config(
             pi05=True,
@@ -2874,7 +3727,11 @@ _CONFIGS = [
             use_delta_actions=True,
         ),
         # Now we can load pretrained weights!
+<<<<<<< HEAD
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+=======
+        weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_32d/my_experiment_v2/79999/params"),
+>>>>>>> b467a42 (update code)
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1_000,
             peak_lr=5e-5,
@@ -2883,11 +3740,16 @@ _CONFIGS = [
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=None,
+<<<<<<< HEAD
         num_train_steps=30_000,
+=======
+        num_train_steps=80_000,
+>>>>>>> b467a42 (update code)
         batch_size=32,
         num_workers=8,
         fsdp_devices=8,
     ),
+<<<<<<< HEAD
     TrainConfig(
         name="pi05_umi_32d_mp",
         # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
@@ -3111,6 +3973,8 @@ _CONFIGS = [
         num_workers=0,  # Set to 0 to avoid /dev/shm space issues
         fsdp_devices=4,  # Enable FSDP to shard model across 4 GPUs to reduce memory per GPU
     ),
+=======
+>>>>>>> b467a42 (update code)
     #
     # Debugging configs.
     #
@@ -3187,6 +4051,46 @@ _CONFIGS = [
         ).get_freeze_filter(),
     ),
     #
+<<<<<<< HEAD
+=======
+    # ============================================================================
+    # HYBRID TRAINING CONFIGS (Pi0.5 + FAST joint training)
+    # Use with: python scripts/train_hybrid.py --config pi05_umi_hybrid
+    # ============================================================================
+    #
+    # Note: Hybrid training requires the train_hybrid.py script which computes
+    # both Flow Matching and FAST losses: L_total = L_flow + lambda_fast * L_fast
+    # 
+    # To enable FAST loss, use: --use_fast_loss --lambda_fast 0.1
+    #
+    # TrainConfig(
+    #     name="pi05_umi_hybrid",
+    #     model=pi0_config.Pi0Config(
+    #         pi05=True,
+    #         action_dim=32,
+    #         action_horizon=16,
+    #         discrete_state_input=True,
+    #     ),
+    #     data=LeRobotUmiDataConfigPadded_V4(
+    #         repo_id="/path/to/your/dataset",
+    #         assets=AssetsConfig(assets_dir="/path/to/your/dataset"),
+    #     ),
+    #     weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+    #     lr_schedule=_optimizer.CosineDecaySchedule(
+    #         warmup_steps=2_000,
+    #         peak_lr=5e-5,
+    #         decay_steps=30_000,
+    #         decay_lr=1e-5,
+    #     ),
+    #     optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+    #     ema_decay=0.999,
+    #     num_train_steps=30_000,
+    #     batch_size=32,
+    #     # freeze_filter: Optionally freeze VLM to only train action expert
+    #     # freeze_filter=pi0_config.Pi0Config(pi05=True).get_freeze_filter_freeze_vlm_only(),
+    # ),
+    #
+>>>>>>> b467a42 (update code)
     # RoboArena configs.
     #
     *roboarena_config.get_roboarena_configs(),

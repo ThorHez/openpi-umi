@@ -70,6 +70,11 @@ class Pi0(_model.BaseModel):
         # Store action loss mask if provided (for masking out padded action dimensions)
         # Store as tuple to avoid issues with jax.eval_shape, convert to array when used
         self.action_loss_mask = config.action_loss_mask
+<<<<<<< HEAD
+=======
+        if self.action_loss_mask is not None:
+            print(f"action_loss_mask: {self.action_loss_mask}")
+>>>>>>> b467a42 (update code)
 
 
         paligemma_config = _gemma.get_config(config.paligemma_variant)
@@ -216,6 +221,7 @@ class Pi0(_model.BaseModel):
         )
         v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
+<<<<<<< HEAD
         # jax.debug.print("actions shape: {}", actions.shape)
         # jax.debug.print("actions: {}", actions[0])
 
@@ -238,6 +244,24 @@ class Pi0(_model.BaseModel):
         else:
             loss_per_timestep = jnp.mean(squared_error, axis=-1)
 
+=======
+        # Compute squared error per action dimension
+        squared_error = jnp.square(v_t - u_t)  # shape: (*batch, action_horizon, action_dim)
+        
+        # Average over action dimensions
+        # Apply action dimension mask if provided (e.g., to ignore padded dimensions)
+        if self.action_loss_mask is not None:
+            # Convert tuple to array (tuple is stored to work with jax.eval_shape)
+            # JAX's JIT compiler will optimize this constant array creation
+            mask = jnp.asarray(self.action_loss_mask)  # shape: (action_dim,)
+            # Apply mask and normalize by number of active dimensions
+            squared_error_masked = squared_error * mask  # broadcast across batch and time
+
+            loss_per_timestep = jnp.sum(squared_error_masked, axis=-1) / jnp.sum(mask)
+        else:
+            loss_per_timestep = jnp.mean(squared_error, axis=-1)
+        
+>>>>>>> b467a42 (update code)
         return loss_per_timestep
 
     @override

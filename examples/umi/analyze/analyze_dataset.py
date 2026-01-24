@@ -11,11 +11,16 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+<<<<<<< HEAD
 from typing import Dict, List, Tuple, Optional
 import pyarrow.parquet as pq
 from PIL import Image
 import io
 import random
+=======
+from typing import Dict, List, Tuple
+import pyarrow.parquet as pq
+>>>>>>> b467a42 (update code)
 
 # 设置绘图风格
 sns.set_style("whitegrid")
@@ -442,6 +447,7 @@ class DatasetAnalyzer:
         
         plt.close()
     
+<<<<<<< HEAD
     def visualize_sample_frame_images(self, episode_idx: Optional[int] = None, 
                                        frame_idx: Optional[int] = None,
                                        output_path: str = None):
@@ -550,6 +556,8 @@ class DatasetAnalyzer:
         
         return images
 
+=======
+>>>>>>> b467a42 (update code)
     def check_data_quality(self):
         """检查数据质量"""
         print("\n" + "="*60)
@@ -652,12 +660,15 @@ def main():
   
   # 只显示基本信息
   python analyze_dataset.py /data/umi_lerobot_dataset_v3 --info-only
+<<<<<<< HEAD
   
   # 随机采样一帧并展示所有图片
   python analyze_dataset.py /data/umi_lerobot_dataset_v3 --show-images
   
   # 指定episode和帧索引查看图片
   python analyze_dataset.py /data/umi_lerobot_dataset_v3 --show-images --episode 5 --frame 100
+=======
+>>>>>>> b467a42 (update code)
         """
     )
     
@@ -687,6 +698,7 @@ def main():
         help='加载用于可视化的样本episode数量 (默认: 10)'
     )
     
+<<<<<<< HEAD
     parser.add_argument(
         '--show-images',
         action='store_true',
@@ -707,11 +719,14 @@ def main():
         help='指定要查看的帧索引 (配合 --show-images 使用)'
     )
     
+=======
+>>>>>>> b467a42 (update code)
     args = parser.parse_args()
     
     # 创建分析器
     analyzer = DatasetAnalyzer(args.dataset_path, args.num_samples)
     
+<<<<<<< HEAD
     if args.show_images:
         # 采样并展示图片
         output_path = None
@@ -724,6 +739,9 @@ def main():
             output_path=output_path
         )
     elif args.info_only:
+=======
+    if args.info_only:
+>>>>>>> b467a42 (update code)
         # 只显示基本信息
         analyzer.print_basic_info()
         analyzer.print_features_info()

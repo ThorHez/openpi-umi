@@ -174,8 +174,11 @@ class UmiInputsV4(transforms.DataTransformFn):
         actions = data["actions"]
 
         assert left_wrist_0_rgb_1.shape == (3, 224, 224)
+<<<<<<< HEAD
 
         empty_base_flag = base_0_rgb_1 is None
+=======
+>>>>>>> b467a42 (update code)
         if base_0_rgb_1 is not None:
             assert base_0_rgb_1.shape == (3, 224, 224)
         else:
@@ -196,7 +199,11 @@ class UmiInputsV4(transforms.DataTransformFn):
             "right_wrist_0_rgb": _parse_image(np.zeros_like(left_wrist_0_rgb_1).astype(np.uint8)),
         }
         data["image_mask"] = {
+<<<<<<< HEAD
             "base_0_rgb": np.False_ if empty_base_flag  else np.True_,
+=======
+            "base_0_rgb": np.False_,
+>>>>>>> b467a42 (update code)
             "left_wrist_0_rgb": np.True_,
             "right_wrist_0_rgb": np.False_,
         }
@@ -279,15 +286,21 @@ class UmiInputsV4_Bimanual(transforms.DataTransformFn):
         robot1_eef_pos_wrt0 = data["robot1_eef_pos_wrt0"]
         robot1_eef_rot_axis_angle_wrt0 = data["robot1_eef_rot_axis_angle_wrt0"]
         left_wrist_0_rgb_1 = data["left_wrist_0_rgb_1"]
+<<<<<<< HEAD
         
         # base_0_rgb_1 = data["base_0_rgb_1"]
+=======
+>>>>>>> b467a42 (update code)
 
         # actions = data["actions"].reshape(16, 10)
         actions = data["actions"]
 
         assert left_wrist_0_rgb_1.shape == (3, 224, 224)
         assert right_wrist_0_rgb_1.shape == (3, 224, 224)
+<<<<<<< HEAD
         # assert base_0_rgb_1.shape == (3, 224, 224)
+=======
+>>>>>>> b467a42 (update code)
         assert robot0_eef_pos.shape == (2, 3)
         assert robot0_eef_rot_axis_angle.shape == (2, 6)
         assert robot0_gripper_width.shape == (2, 1)
@@ -332,6 +345,7 @@ class UmiInputsV4_Bimanual(transforms.DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+<<<<<<< HEAD
 class UmiInputsV4_Bimanual_HeadView_DeskHeight_Horizon1(transforms.DataTransformFn):
     """
     This class is used to convert inputs to the model to the expected format. It is used for both training and inference.
@@ -599,6 +613,8 @@ class UmiInputsV4_Bimanual_DeskHeight_Horizon1(transforms.DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+=======
+>>>>>>> b467a42 (update code)
 class UmiOutputsV4(transforms.DataTransformFn):
     """
     This class is used to convert outputs from the model back the the dataset specific format. It is

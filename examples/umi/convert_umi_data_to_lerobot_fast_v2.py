@@ -40,7 +40,11 @@ import imagecodecs  # 可选，不加也行
 from openpi.utils.pose_utils import pose_to_mat, mat_to_pose10d
 from openpi.utils.pose_repr_utils import convert_pose_mat_rep
 
+<<<<<<< HEAD
 from sampler_v2 import SequenceSampler
+=======
+from sampler import SequenceSampler
+>>>>>>> b467a42 (update code)
 from dataset_config_loader import (
     load_dataset_config,
     build_features_from_config,

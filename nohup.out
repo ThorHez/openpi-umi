@@ -95,6 +95,7 @@ Traceback (most recent call last):
   File "/root/openpi-umi/.venv/lib/python3.11/site-packages/pyarrow/parquet/core.py", line 1115, in write_table
     self.writer.write_table(table, row_group_size=row_group_size)
 KeyboardInterrupt
+<<<<<<< HEAD
 Traceback (most recent call last):
   File "/root/openpi-umi/scripts/compute_norm_stats.py", line 12, in <module>
     import openpi.models.model as _model
@@ -132,3 +133,5 @@ Traceback (most recent call last):
     @_tp_cache
 
 KeyboardInterrupt
+=======
+>>>>>>> b467a42 (update code)

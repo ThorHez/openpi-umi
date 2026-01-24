@@ -138,7 +138,11 @@ images:
     per_timestep: true
     description: "右手腕相机 RGB 图像(robot0)"
 
+<<<<<<< HEAD
   base_head_rgb:
+=======
+  observation.base_0_rgb:
+>>>>>>> b467a42 (update code)
     dtype: "image"
     shape: [224, 224, 3]
     source_key: "head_rgb"

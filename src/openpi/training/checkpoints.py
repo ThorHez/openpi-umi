@@ -69,6 +69,7 @@ def save_state(
     step: int,
 ):
     def save_assets(directory: epath.Path):
+<<<<<<< HEAD
         # Multi-dataset loader exposes data_configs(); save norm_stats for each dataset.
         if hasattr(data_loader, "data_configs"):
             configs = data_loader.data_configs()
@@ -81,6 +82,13 @@ def save_state(
             norm_stats = data_config.norm_stats
             if norm_stats is not None and data_config.asset_id is not None:
                 _normalize.save(directory / data_config.asset_id, norm_stats)
+=======
+        # Save the normalization stats.
+        data_config = data_loader.data_config()
+        norm_stats = data_config.norm_stats
+        if norm_stats is not None and data_config.asset_id is not None:
+            _normalize.save(directory / data_config.asset_id, norm_stats)
+>>>>>>> b467a42 (update code)
 
     # Split params that can be used for inference into a separate item.
     with at.disable_typechecking():
