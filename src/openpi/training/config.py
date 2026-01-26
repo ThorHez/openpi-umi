@@ -1006,6 +1006,8 @@ class LeRobotUmiDataConfigPadded_V4_Inference(DataConfigFactory):
     
     # action_sequence_keys: Sequence[str] = ("actions",)
 
+    prompt: str = "pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box"
+
     normalize_masks = {
         "actions": make_bool_mask(3, -7),
         "state": make_bool_mask(3, -13),
@@ -1035,7 +1037,7 @@ class LeRobotUmiDataConfigPadded_V4_Inference(DataConfigFactory):
         
         # Data transforms (UmiInputs + optional DeltaActions)
         data_transforms = _transforms.Group(
-            inputs=[umi_policy.UmiArxInputs()],
+            inputs=[umi_policy.UmiArxInputs(prompt=self.prompt)],
             outputs=[umi_policy.UmiArxOutputs()],
         )
 
@@ -2502,12 +2504,45 @@ _CONFIGS = [
                 assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_merge_20251216",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+            prompt="pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box",
         ),
         # Now we can load pretrained weights!
         # weight_loader=weight_loaders.CheckpointWeightLoader(
         #     "/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_pick_elec_20260118/params"),
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_merge_20251216/params"),
+        # weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72/my_experiment_fix_norm/99999/"),
+    ),
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_infer",
+        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Padded to match pretrained model
+            action_horizon=16,
+            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=LeRobotUmiDataConfigPadded_V4_Inference(
+            # repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_v4_pick_elec_20260111",
+            # repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_pick_elec_20260118",
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_pick_elec_hybrid_20260126",
+            # New dataset with 32-dim actions
+            assets=AssetsConfig(
+                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
+                asset_id=".",
+                # assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_v4_pick_elec_20260111",
+                # assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_pick_elec_20260118",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_pick_elec_hybrid_20260126",
+            ),
+            base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+            prompt="pick up electronic components and place them into the correct boxes",
+        ),
+        # Now we can load pretrained weights!
+        # weight_loader=weight_loaders.CheckpointWeightLoader(
+        #     "/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_pick_elec_20260118/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoaderIgnoreDiscreteHead(
+            "/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_pick_elec_hybrid_20260126/params"),
         # weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72/my_experiment_fix_norm/99999/"),
     ),
     TrainConfig(
