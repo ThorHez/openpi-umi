@@ -113,10 +113,76 @@ class CheckpointWeightLoaderIgnoreDiscreteHead(WeightLoader):
     """
     
     params_path: str
+    verbose: bool = True  # 是否显示详细的层名称
     
     def load(self, params: at.Params) -> at.Params:
+        print("=" * 60)
+        print("CheckpointWeightLoaderIgnoreDiscreteHead: Loading weights")
+        print(f"Checkpoint path: {self.params_path}")
+        print("=" * 60)
+        
         loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
+        
+        # 展示所有层名称
+        if self.verbose:
+            self._display_layer_names(loaded_params, params)
+        
         return _merge_params_ignore_extra(loaded_params, params)
+    
+    def _display_layer_names(self, loaded_params: at.Params, target_params: at.Params) -> None:
+        """展示所有层的名称，分类显示加载、忽略和缺失的层。"""
+        flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
+        flat_target = flax.traverse_util.flatten_dict(target_params, sep="/")
+        
+        # 分类层
+        loaded_keys = []  # 成功加载的层
+        ignored_keys = []  # 被忽略的层（checkpoint有但target没有）
+        missing_keys = []  # 缺失的层（target有但checkpoint没有）
+        
+        for k in flat_loaded:
+            if k in flat_target:
+                loaded_keys.append(k)
+            else:
+                ignored_keys.append(k)
+        
+        for k in flat_target:
+            if k not in flat_loaded:
+                missing_keys.append(k)
+        
+        # 显示统计摘要
+        print("-" * 60)
+        print("Layer Statistics:")
+        print(f"  Total layers in checkpoint: {len(flat_loaded)}")
+        print(f"  Total layers in target model: {len(flat_target)}")
+        print(f"  Layers to be loaded: {len(loaded_keys)}")
+        print(f"  Layers to be ignored: {len(ignored_keys)}")
+        print(f"  Missing layers (use random init): {len(missing_keys)}")
+        print("-" * 60)
+        
+        # 显示所有成功加载的层
+        print(f"\n[LOADED LAYERS] ({len(loaded_keys)} layers):")
+        for i, k in enumerate(sorted(loaded_keys)):
+            shape = flat_loaded[k].shape
+            dtype = flat_loaded[k].dtype
+            print(f"  [{i + 1:4d}] {k} | shape={shape}, dtype={dtype}")
+        
+        # 显示被忽略的层
+        if ignored_keys:
+            print(f"\n[IGNORED LAYERS] ({len(ignored_keys)} layers) - not needed for inference:")
+            for i, k in enumerate(sorted(ignored_keys)):
+                shape = flat_loaded[k].shape
+                dtype = flat_loaded[k].dtype
+                print(f"  [{i + 1:4d}] {k} | shape={shape}, dtype={dtype}")
+        
+        # 显示缺失的层
+        if missing_keys:
+            print(f"\n[MISSING LAYERS] ({len(missing_keys)} layers) - will use random init:")
+            for i, k in enumerate(sorted(missing_keys)):
+                shape = flat_target[k].shape
+                dtype = flat_target[k].dtype
+                print(f"  [{i + 1:4d}] {k} | shape={shape}, dtype={dtype}")
+        
+        print("=" * 60)
 
 
 def _merge_params_ignore_extra(loaded_params: at.Params, params: at.Params) -> at.Params:

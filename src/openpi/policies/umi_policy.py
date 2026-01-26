@@ -48,6 +48,8 @@ class UmiArxInputs(transforms.DataTransformFn):
     This class is used to convert inputs to the model to the expected format. It is used for both training and inference.
     """
 
+    prompt: str = "pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box"
+
     def __call__(self, data: dict) -> dict:
         robot0_eef_pos = data["robot0_eef_pos"]
         robot0_eef_rot_axis_angle = data["robot0_eef_rot_axis_angle"]
@@ -76,8 +78,7 @@ class UmiArxInputs(transforms.DataTransformFn):
             "left_wrist_0_rgb": np.True_,
             "right_wrist_0_rgb": np.False_,
         }
-        data[
-            "prompt"] = "pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box"
+        data["prompt"] = self.prompt
         return data
 
 
