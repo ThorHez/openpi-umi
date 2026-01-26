@@ -82,6 +82,102 @@ class UmiArxInputs(transforms.DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class UmiArxInputsV5(transforms.DataTransformFn):
+    """
+    This class is used to convert inputs to the model to the expected format. It is used for both training and inference.
+    """
+
+    def __call__(self, data: dict) -> dict:
+        robot0_eef_pos = data["robot0_eef_pos"]
+        robot0_eef_rot_axis_angle = data["robot0_eef_rot_axis_angle"]
+        robot0_gripper_width = data["robot0_gripper_width"]
+        # robot0_eef_rot_axis_angle_wrt_start = data["robot0_eef_rot_axis_angle_wrt_start"]
+        camera0_rgb = data["camera0_rgb"]
+        left_wrist_0_rgb_1 = data["camera0_rgb"][1]
+
+        assert camera0_rgb.shape == (2, 3, 224, 224)
+        assert robot0_eef_pos.shape == (2, 3)
+        assert robot0_eef_rot_axis_angle.shape == (2, 6)
+        # assert robot0_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        assert robot0_gripper_width.shape == (2, 1)
+
+        # state = np.concatenate(
+        #     [robot0_eef_pos, robot0_eef_rot_axis_angle, robot0_eef_rot_axis_angle_wrt_start, robot0_gripper_width],
+        #     axis=-1)
+        state = np.concatenate(
+            [robot0_eef_pos, robot0_eef_rot_axis_angle, robot0_gripper_width],
+            axis=-1)
+        data["state"] = state
+        data["image"] = {
+            "base_0_rgb": _parse_image(np.zeros_like(left_wrist_0_rgb_1).astype(np.uint8)),
+            "left_wrist_0_rgb": _parse_image(left_wrist_0_rgb_1),
+            "right_wrist_0_rgb": _parse_image(np.zeros_like(left_wrist_0_rgb_1).astype(np.uint8)),
+        }
+        data["image_mask"] = {
+            "base_0_rgb": np.False_,
+            "left_wrist_0_rgb": np.True_,
+            "right_wrist_0_rgb": np.False_,
+        }
+        # data[
+        #     "prompt"] = "pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box"
+        data[
+            "prompt"] = "pick up the cube and place it into the box of matching color"
+
+
+        # data[
+        #     "prompt"] = "pick up electronic components and place them into the correct boxes"
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
+class UmiArxInputsV5(transforms.DataTransformFn):
+    """
+    This class is used to convert inputs to the model to the expected format. It is used for both training and inference.
+    """
+
+    def __call__(self, data: dict) -> dict:
+        robot0_eef_pos = data["robot0_eef_pos"]
+        robot0_eef_rot_axis_angle = data["robot0_eef_rot_axis_angle"]
+        robot0_gripper_width = data["robot0_gripper_width"]
+        # robot0_eef_rot_axis_angle_wrt_start = data["robot0_eef_rot_axis_angle_wrt_start"]
+        camera0_rgb = data["camera0_rgb"]
+        left_wrist_0_rgb_1 = data["camera0_rgb"][1]
+
+        assert camera0_rgb.shape == (2, 3, 224, 224)
+        assert robot0_eef_pos.shape == (2, 3)
+        assert robot0_eef_rot_axis_angle.shape == (2, 6)
+        # assert robot0_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        assert robot0_gripper_width.shape == (2, 1)
+
+        # state = np.concatenate(
+        #     [robot0_eef_pos, robot0_eef_rot_axis_angle, robot0_eef_rot_axis_angle_wrt_start, robot0_gripper_width],
+        #     axis=-1)
+        state = np.concatenate(
+            [robot0_eef_pos, robot0_eef_rot_axis_angle, robot0_gripper_width],
+            axis=-1)
+        data["state"] = state
+        data["image"] = {
+            "base_0_rgb": _parse_image(np.zeros_like(left_wrist_0_rgb_1).astype(np.uint8)),
+            "left_wrist_0_rgb": _parse_image(left_wrist_0_rgb_1),
+            "right_wrist_0_rgb": _parse_image(np.zeros_like(left_wrist_0_rgb_1).astype(np.uint8)),
+        }
+        data["image_mask"] = {
+            "base_0_rgb": np.False_,
+            "left_wrist_0_rgb": np.True_,
+            "right_wrist_0_rgb": np.False_,
+        }
+        # data[
+        #     "prompt"] = "pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box"
+        data[
+            "prompt"] = "pick up the cube and place it into the box of matching color"
+
+
+        # data[
+        #     "prompt"] = "pick up electronic components and place them into the correct boxes"
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
 class UmiArxInputs_Bimanual(transforms.DataTransformFn):
     """
     This class is used to convert inputs to the model to the expected format. It is used for both training and inference.
