@@ -180,3 +180,9 @@ debug_output/
 
 # Logs
 *.log
+
+*.jpg
+
+policy_records/
+
+.idea/
