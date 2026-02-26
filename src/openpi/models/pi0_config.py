@@ -110,3 +110,61 @@ class Pi0Config(_model.BaseModelConfig):
         if not filters:
             return nnx.Nothing
         return nnx.All(*filters)
+
+    def get_freeze_filter_freeze_vlm_only(self) -> nnx.filterlib.Filter:
+        """Freeze only VLM (PaLI-Gemma backbone), keep action expert trainable."""
+        filters = []
+        has_lora = False
+
+        # All LLM params (includes VLM LLM + action expert LLM)
+        gemma_params_filter = nnx_utils.PathRegex(".*llm.*")
+        # Action expert LLM params (typically the second Gemma, marked with `_1`)
+        action_expert_params_filter = nnx_utils.PathRegex(".*llm.*_1.*")
+
+        # ---- Core: freeze VLM LLM params but NOT action expert ----
+        filters.append(gemma_params_filter)
+        filters.append(nnx.Not(action_expert_params_filter))
+
+        # ---- Optional: if any lora variant is used, keep lora params trainable ----
+        # (Exclude all lora params from the "frozen set".)
+        if ("lora" in self.paligemma_variant) or ("lora" in self.action_expert_variant):
+            has_lora = True
+
+        if has_lora:
+            filters.append(
+                nnx.Not(nnx_utils.PathRegex(".*lora.*")),
+            )
+
+        if not filters:
+            return nnx.Nothing
+        filters = nnx.All(*filters)
+        print(f"filters: {filters}")
+        return filters
+
+
+    def get_freeze_filter_train_action_expert_only(self) -> nnx.filterlib.Filter:
+        """Freeze everything except action expert (llm*_1*)."""
+        filters = []
+        has_lora = False
+
+        action_expert_params_filter = nnx_utils.PathRegex(".*llm.*_1.*")
+
+        # ---- Core: freeze all params NOT in action expert ----
+        # freeze_filter 命中的会被冻结，因此这里用 Not(action_expert) 表示“冻结非 action expert”
+        filters.append(
+            nnx.Not(action_expert_params_filter),
+        )
+
+        # ---- Optional: if any lora is used, keep lora params trainable ----
+        if ("lora" in self.paligemma_variant) or ("lora" in self.action_expert_variant):
+            has_lora = True
+
+        if has_lora:
+            # Exclude all lora params from the frozen set (so they remain trainable)
+            filters.append(
+                nnx.Not(nnx_utils.PathRegex(".*lora.*")),
+            )
+
+        if not filters:
+            return nnx.Nothing
+        return nnx.All(*filters)

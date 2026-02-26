@@ -100,6 +100,7 @@ def main(config_name: str, max_frames: int | None = None):
         )
 
     keys = ["state", "actions"]
+    # keys = ["actions", ""]
     stats = {key: normalize.RunningStats() for key in keys}
 
     for batch in tqdm.tqdm(data_loader, total=num_batches, desc="Computing stats"):
@@ -119,3 +120,4 @@ def main(config_name: str, max_frames: int | None = None):
 
 if __name__ == "__main__":
     tyro.cli(main)
+    # main(config_name="pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_compute_norm_stats")

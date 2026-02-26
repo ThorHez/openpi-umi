@@ -70,8 +70,6 @@ class Pi0(_model.BaseModel):
         # Store action loss mask if provided (for masking out padded action dimensions)
         # Store as tuple to avoid issues with jax.eval_shape, convert to array when used
         self.action_loss_mask = config.action_loss_mask
-        if self.action_loss_mask is not None:
-            print(f"action_loss_mask: {self.action_loss_mask}")
 
 
         paligemma_config = _gemma.get_config(config.paligemma_variant)
@@ -223,22 +221,23 @@ class Pi0(_model.BaseModel):
 
         # Compute squared error per action dimension
         squared_error = jnp.square(v_t - u_t)  # shape: (*batch, action_horizon, action_dim)
-        
-        # Average over action dimensions
-        # Apply action dimension mask if provided (e.g., to ignore padded dimensions)
-        if self.action_loss_mask is not None:
-            # Convert tuple to array (tuple is stored to work with jax.eval_shape)
-            # JAX's JIT compiler will optimize this constant array creation
-            mask = jnp.asarray(self.action_loss_mask)  # shape: (action_dim,)
-            # Apply mask and normalize by number of active dimensions
-            squared_error_masked = squared_error * mask  # broadcast across batch and time
 
-            # jax.debug.print("squared_error_masked: {}", squared_error_masked[0])
-
+        # Apply action dimension mask: per-sample (from data) for multi-dataset, or config-level for single-dataset
+        if observation.action_loss_mask is not None:
+            # Per-sample mask shape (*batch, ad) -> expand to (*batch, 1, ad) for broadcasting with (*batch, ah, ad)
+            mask = observation.action_loss_mask[..., None, :]  # (*batch, 1, ad)
+            squared_error_masked = squared_error * mask
+            mask_sum = jnp.sum(mask, axis=-1, keepdims=True)
+            mask_sum = jnp.maximum(mask_sum, 1e-8)
+            loss_per_timestep = jnp.sum(squared_error_masked, axis=-1) / jnp.squeeze(mask_sum, axis=-1)
+        elif self.action_loss_mask is not None:
+            # Config-level mask (single dataset)
+            mask = jnp.asarray(self.action_loss_mask)
+            squared_error_masked = squared_error * mask
             loss_per_timestep = jnp.sum(squared_error_masked, axis=-1) / jnp.sum(mask)
         else:
             loss_per_timestep = jnp.mean(squared_error, axis=-1)
-        
+
         return loss_per_timestep
 
     @override

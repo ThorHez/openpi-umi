@@ -106,6 +106,14 @@ class Observation(Generic[ArrayT]):
     # Token loss mask (for FAST autoregressive model).
     token_loss_mask: at.Bool[ArrayT, "*b l"] | None = None
 
+    fast_tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
+    fast_tokenized_prompt_mask: at.Bool[ArrayT, "*b l"] | None = None
+    fast_token_ar_mask: at.Int[ArrayT, "*b l"] | None = None
+    fast_token_loss_mask: at.Bool[ArrayT, "*b l"] | None = None
+
+    # Per-sample action loss mask for mixed-dataset training (e.g. single-arm / bimanual).
+    action_loss_mask: at.Float[ArrayT, "*b ad"] | None = None
+
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "Observation[ArrayT]":
         """This method defines the mapping between unstructured data (i.e., nested dict) to the structured Observation format."""
@@ -126,6 +134,12 @@ class Observation(Generic[ArrayT]):
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
             token_loss_mask=data.get("token_loss_mask"),
+            action_loss_mask=data.get("action_loss_mask"),
+            # Hybrid model (Pi0.5 + FAST) specific fields
+            fast_tokenized_prompt=data.get("fast_tokenized_prompt"),
+            fast_tokenized_prompt_mask=data.get("fast_tokenized_prompt_mask"),
+            fast_token_ar_mask=data.get("fast_token_ar_mask"),
+            fast_token_loss_mask=data.get("fast_token_loss_mask"),
         )
 
     def to_dict(self) -> at.PyTree[ArrayT]:
@@ -205,6 +219,11 @@ def preprocess_observation(
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
+        action_loss_mask=observation.action_loss_mask,
+        fast_tokenized_prompt=observation.fast_tokenized_prompt,
+        fast_tokenized_prompt_mask=observation.fast_tokenized_prompt_mask,
+        fast_token_ar_mask=observation.fast_token_ar_mask,
+        fast_token_loss_mask=observation.fast_token_loss_mask,
     )
 
 

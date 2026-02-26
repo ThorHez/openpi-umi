@@ -1,6 +1,9 @@
 import numpy as np
 import cv2
 import scipy.interpolate as si
+import math
+
+import os
 
 
 
@@ -103,7 +106,7 @@ def canonical_to_pixel_coords(coords, img_shape=(2028, 2704)):
     return pts
 
 
-def draw_predefined_mask(img, color=(0,0,0), mirror=True, gripper=True, finger=True, use_aa=False):
+def draw_predefined_mask(img, color=(0,0,0), mirror=False, gripper=True, finger=True, use_aa=False):
     all_coords = list()
     if mirror:
         all_coords.extend(get_mirror_canonical_polygon())
@@ -120,43 +123,81 @@ def draw_predefined_mask(img, color=(0,0,0), mirror=True, gripper=True, finger=T
     return img
 
 
-def get_image_transform(in_res, out_res=(224, 224), crop_ratio:float = 1.0, bgr_to_rgb: bool=False):
+def get_image_transform(in_res, out_res=(224, 224), bgr_to_rgb: bool=False):
     iw, ih = in_res
     ow, oh = out_res
-    ch = round(ih * crop_ratio)
-    cw = round(ih * crop_ratio / oh * ow)
+    rw, rh = None, None
     interp_method = cv2.INTER_AREA
+    if (iw / ih) >= (ow / oh):
+        rh = oh
+        rw = math.ceil(rh / ih * iw)
+        if oh > ih:
+            interp_method = cv2.INTER_LINEAR
+    else:
+        rw = ow
+        rh = math.ceil(rw / iw * ih)
+        if ow > iw:
+            interp_method = cv2.INTER_LINEAR
 
-    w_slice_start = (iw - cw) // 2
-    w_slice = slice(w_slice_start, w_slice_start + cw)
-    h_slice_start = (ih - ch) // 2
-    h_slice = slice(h_slice_start, h_slice_start + ch)
+    w_slice_start = (rw - ow) // 2
+    w_slice = slice(w_slice_start, w_slice_start + ow)
+    h_slice_start = (rh - oh) // 2
+    h_slice = slice(h_slice_start, h_slice_start + oh)
     c_slice = slice(None)
     if bgr_to_rgb:
         c_slice = slice(None, None, -1)
 
     def transform(img: np.ndarray):
-        assert img.shape == ((ih,iw,3))
+        assert img.shape == ((ih, iw, 3))
+        # resize
+        img = cv2.resize(img, (rw, rh), interpolation=interp_method)
         # crop
         img = img[h_slice, w_slice, c_slice]
-        # resize
-        img = cv2.resize(img, out_res, interpolation=interp_method)
         return img
-    
     return transform
 
 
 
+def save_debug_image(img, stage, frame_idx=None, buffer_idx=None):
+    save_dir = "debug_image"
+    os.makedirs(save_dir, exist_ok=True)
+
+    # 获取当前已有文件数量
+    existing = [f for f in os.listdir(save_dir) if f.endswith(".jpg")]
+    next_idx = len(existing) + 1
+
+    # 构造文件名：stage_000123.jpg
+    filename = f"{stage}_{next_idx:06d}.jpg"
+    save_path = os.path.join(save_dir, filename)
+
+    cv2.imwrite(save_path, img)
+    print(f"[Saved] {save_path}")
+
+
+
 def generate_image_pipeline(image, no_mirror=True, out_res=(224, 224)):
-    img = image.to_ndarray(format='rgb24')
+    #img = image.to_ndarray(format='rgb24')
+    if hasattr(image, "to_ndarray"):
+        img = image.to_ndarray(format="rgb24")
+    else:
+        img = np.array(image, copy=False)
+
+    # 2. 确保 dtype / 连续性 / 可写
+    if img.dtype != np.uint8:
+        img = img.astype(np.uint8, copy=True)
+    if (not img.flags['C_CONTIGUOUS']) or (not img.flags['WRITEABLE']):
+        img = np.ascontiguousarray(img.copy())
 
     # mask out gripper
-    img = draw_predefined_mask(img, color=(0,0,0), mirror=no_mirror, gripper=True, finger=False)
+    img = draw_predefined_mask(img, color=(0,0,0), gripper=True, finger=False)
 
-    iw, ih = img.shape[:2]
+    ih, iw = img.shape[:2]
     resize_tf = get_image_transform(
             in_res=(iw, ih),
             out_res=out_res
         )
     img = resize_tf(img)
+
+    # save_debug_image(img, "generate_image_pipeline")
+
     return img

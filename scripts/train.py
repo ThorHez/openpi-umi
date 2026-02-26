@@ -116,6 +116,82 @@ def init_train_state(
     train_state_shape = jax.eval_shape(init, init_rng)
     state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=True)
 
+    # === Debug: Log frozen vs trainable params using abstract shapes ===
+    def count_params_from_shape(params_dict):
+        """Count params from shape info (works with jax.ShapeDtypeStruct)."""
+        total = 0
+        for leaf in jax.tree.leaves(params_dict):
+            if hasattr(leaf, 'shape'):
+                total += int(np.prod(leaf.shape))
+            elif hasattr(leaf, 'value') and hasattr(leaf.value, 'shape'):
+                total += int(np.prod(leaf.value.shape))
+        return total
+    
+    all_params_shape = train_state_shape.params
+    frozen_params_shape = all_params_shape.filter(config.freeze_filter)
+    trainable_params_shape = all_params_shape.filter(config.trainable_filter)
+    
+    total_count = count_params_from_shape(all_params_shape)
+    frozen_count = count_params_from_shape(frozen_params_shape)
+    trainable_count = count_params_from_shape(trainable_params_shape)
+    
+    logging.info("=" * 60)
+    logging.info("FREEZE FILTER ANALYSIS:")
+    logging.info(f"  Total params:     {total_count:,} ({total_count/1e6:.2f}M)")
+    logging.info(f"  Frozen params:    {frozen_count:,} ({frozen_count/1e6:.2f}M) ({frozen_count/total_count*100:.1f}%)")
+    logging.info(f"  Trainable params: {trainable_count:,} ({trainable_count/1e6:.2f}M) ({trainable_count/total_count*100:.1f}%)")
+    logging.info("=" * 60)
+    
+    # Helper to get param size
+    def get_param_size(leaf):
+        if hasattr(leaf, 'shape'):
+            return int(np.prod(leaf.shape))
+        elif hasattr(leaf, 'value') and hasattr(leaf.value, 'shape'):
+            return int(np.prod(leaf.value.shape))
+        return 0
+    
+    # Log ALL frozen param names grouped by top-level module
+    frozen_flat = traverse_util.flatten_dict(frozen_params_shape.to_pure_dict())
+    if frozen_flat:
+        logging.info(f"ALL FROZEN param paths ({len(frozen_flat)} total):")
+        # Group by top-level module (first 2 path components)
+        from collections import defaultdict
+        frozen_by_module = defaultdict(list)
+        for key, value in frozen_flat.items():
+            module = '/'.join(key[:2]) if len(key) >= 2 else key[0]
+            size = get_param_size(value)
+            frozen_by_module[module].append((key, size))
+        
+        for module in sorted(frozen_by_module.keys()):
+            params = frozen_by_module[module]
+            module_size = sum(p[1] for p in params)
+            logging.info(f"  [{module}] ({len(params)} params, {module_size/1e6:.2f}M)")
+            for key, size in params:
+                logging.info(f"    - {'/'.join(key)} [{size:,}]")
+    
+    logging.info("-" * 60)
+    
+    # Log ALL trainable param names grouped by top-level module
+    trainable_flat = traverse_util.flatten_dict(trainable_params_shape.to_pure_dict())
+    if trainable_flat:
+        logging.info(f"ALL TRAINABLE param paths ({len(trainable_flat)} total):")
+        from collections import defaultdict
+        trainable_by_module = defaultdict(list)
+        for key, value in trainable_flat.items():
+            module = '/'.join(key[:2]) if len(key) >= 2 else key[0]
+            size = get_param_size(value)
+            trainable_by_module[module].append((key, size))
+        
+        for module in sorted(trainable_by_module.keys()):
+            params = trainable_by_module[module]
+            module_size = sum(p[1] for p in params)
+            logging.info(f"  [{module}] ({len(params)} params, {module_size/1e6:.2f}M)")
+            for key, size in params:
+                logging.info(f"    - {'/'.join(key)} [{size:,}]")
+    
+    logging.info("=" * 60)
+    # === End Debug ===
+
     if resume:
         return train_state_shape, state_sharding
 
@@ -256,10 +332,86 @@ def main(config: _config.TrainConfig):
     )
 
     infos = []
+    loss_history = []  # Track recent loss values for anomaly detection
+    anomaly_dir = config.checkpoint_dir / "anomalies"
+    anomaly_dir.mkdir(exist_ok=True)
+    
     for step in pbar:
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch)
         infos.append(info)
+        
+        # Anomaly detection
+        current_loss = float(info["loss"])
+        loss_history.append(current_loss)
+        if len(loss_history) > 100:  # Keep last 100 steps
+            loss_history.pop(0)
+        
+        # Detect anomalies: NaN, Inf, or sudden spike
+        is_anomaly = False
+        anomaly_reason = ""
+        loss_history_size = config.log_interval * 2
+
+        if jnp.isnan(current_loss) or jnp.isinf(current_loss):
+            is_anomaly = True
+            anomaly_reason = "NaN or Inf loss"
+        elif len(loss_history) > loss_history_size:
+            recent_mean = np.mean(loss_history[-loss_history_size:])
+            recent_std = np.std(loss_history[-loss_history_size:])
+            # If loss is more than 5 std deviations above recent mean
+            if current_loss > recent_mean + 3 * recent_std and recent_std > 1e-6:
+                is_anomaly = True
+                anomaly_reason = f"Spike: {current_loss:.4f} vs recent {recent_mean:.4f}±{recent_std:.4f}"
+        
+        if is_anomaly:
+            import pickle
+            anomaly_file = anomaly_dir / f"step_{step:06d}_{current_loss:.4f}.pkl"
+            pbar.write(f"⚠️  ANOMALY DETECTED at step {step}: {anomaly_reason}")
+            pbar.write(f"   Saving data to {anomaly_file}")
+            
+            # Get data to CPU and save
+            batch_cpu = jax.device_get(batch)
+            anomaly_data = {
+                "step": step,
+                "loss": current_loss,
+                "loss_history": loss_history[-20:],  # Save last 20 losses
+                "reason": anomaly_reason,
+                "observation": batch_cpu[0],
+                "actions": batch_cpu[1],
+                "info": jax.device_get(info),
+            }
+            
+            with open(anomaly_file, "wb") as f:
+                pickle.dump(anomaly_data, f)
+            pbar.write(f"   ✓ Anomaly data saved!")
+        
+        # Periodic statistics logging (every 1000 steps)
+        stats_interval = 1000
+        if step > 0 and step % stats_interval == 0 and len(loss_history) > 10:
+            import pickle
+            stats_dir = config.checkpoint_dir / "periodic_stats"
+            stats_dir.mkdir(exist_ok=True)
+            
+            batch_cpu = jax.device_get(batch)
+            stats_file = stats_dir / f"step_{step:06d}_{current_loss:.4f}.pkl"
+            
+            pbar.write(f"\n📊 Saving periodic statistics at step {step} to {stats_file}")
+            
+            # Save data in the same format as anomaly detection
+            stats_data = {
+                "step": step,
+                "loss": current_loss,
+                "loss_history": loss_history.copy(),
+                "reason": f"Periodic stats at step {step}",
+                "observation": batch_cpu[0],
+                "actions": batch_cpu[1],
+                "info": jax.device_get(info),
+            }
+            
+            with open(stats_file, "wb") as f:
+                pickle.dump(stats_data, f)
+            pbar.write(f"   ✓ Statistics data saved!")
+        
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))

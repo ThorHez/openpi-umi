@@ -177,3 +177,6 @@ wandb/
 
 # Debug
 debug_output/
+
+# Logs
+*.log
