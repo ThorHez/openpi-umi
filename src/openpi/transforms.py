@@ -1,8 +1,6 @@
 from collections.abc import Callable, Mapping, Sequence
 import dataclasses
 from functools import partial
-
-import random
 import re
 from typing import Protocol, TypeAlias, TypeVar, runtime_checkable
 
@@ -135,6 +133,86 @@ class InjectDefaultPrompt(DataTransformFn):
     def __call__(self, data: DataDict) -> DataDict:
         if self.prompt is not None and "prompt" not in data:
             data["prompt"] = np.asarray(self.prompt)
+        return data
+
+
+# ---------------------------------------------------------------------------
+# ACP (Advantage-Conditioned Policy) prompt tagging
+# ---------------------------------------------------------------------------
+
+ACP_TAG_KEY = "Advantage"
+ACP_POSITIVE_VALUE = "positive"
+ACP_NEGATIVE_VALUE = "negative"
+ACP_POSITIVE_TAG = f"{ACP_TAG_KEY}: {ACP_POSITIVE_VALUE}"
+ACP_NEGATIVE_TAG = f"{ACP_TAG_KEY}: {ACP_NEGATIVE_VALUE}"
+
+
+def build_acp_tagged_task(task: str | None, *, is_positive: bool) -> str:
+    tag = ACP_POSITIVE_TAG if is_positive else ACP_NEGATIVE_TAG
+    base_task = task or ""
+    if not base_task:
+        return tag
+    return f"{base_task}\n{tag}"
+
+
+@dataclasses.dataclass(frozen=True)
+class ACPConditionPrompt(DataTransformFn):
+    """Append ``Advantage: positive`` or ``Advantage: negative`` to the prompt
+    based on the ``is_positive`` field written by ``lerobot_value_infer.py``.
+
+    Must be placed **before** ``TokenizePrompt`` / ``TokenizeHybridInput`` in the
+    transform pipeline so the tag is included in the tokenized prompt.
+
+    Args:
+        indicator_key: Key in the data dict holding a scalar 0/1 indicator.
+        dropout: Probability of *not* appending the tag (keeps the original prompt).
+            0.0 = always tag, 1.0 = never tag. Acts as regularization.
+        default_positive: If ``indicator_key`` is missing, treat as positive (True)
+            or negative (False). Set to True for inference (always predict "positive").
+    """
+    indicator_key: str = "is_positive"
+    dropout: float = 0.5
+    default_positive: bool = True
+
+    def __call__(self, data: DataDict) -> DataDict:
+        prompt = data.get("prompt")
+        if prompt is not None and not isinstance(prompt, str):
+            prompt = prompt.item()
+
+        action_source = data.get("action_source", None)
+        if self.indicator_key not in data:
+            raise ValueError(f"Indicator key {self.indicator_key} not found in data")
+
+        indicator = data.pop(self.indicator_key, None)
+        if indicator is None:
+            raise ValueError(f"Indicator key {self.indicator_key} is None in data")
+
+        if self.dropout < 1.0 and random.random() >= self.dropout:
+            if action_source is not None:
+                action_source_arr = np.asarray(action_source).reshape(-1)
+                action_source_scalar = action_source_arr[0] if action_source_arr.size else None
+                if action_source_scalar is None:
+                    action_source_value = 0
+                elif np.issubdtype(action_source_arr.dtype, np.number):
+                    action_source_value = int(action_source_scalar)  # e.g. uint8(1)
+                else:
+                    raise ValueError(
+                        f"action_source must be numeric (e.g. uint8); got dtype={action_source_arr.dtype} "
+                        f"value={action_source_scalar!r}"
+                    )
+
+                if action_source_value == 1:
+                    is_positive = True
+                elif indicator is None:
+                    is_positive = self.default_positive
+                else:
+                    is_positive = bool(int(np.asarray(indicator).flat[0]))
+            elif indicator is None:
+                is_positive = self.default_positive
+            else:
+                is_positive = bool(int(np.asarray(indicator).flat[0]))
+            data["prompt"] = build_acp_tagged_task(prompt, is_positive=is_positive)
+        # print("acp prompt: ", data["prompt"])
         return data
 
 
@@ -796,7 +874,6 @@ MODEL_KEYS = frozenset({
     "terminal_reward",
     "episode_index",
     "frame_index",
-    "value_target",
     "index",
 })
 
@@ -1007,6 +1084,7 @@ class DropKeys(DataTransformFn):
                 del data[key]
         return data
 
+
 @dataclasses.dataclass(frozen=True)
 class InjectActionLossMask(DataTransformFn):
     """Inject per-sample action loss mask for multi-dataset training (e.g. single-arm vs bimanual).
@@ -1150,3 +1228,5 @@ def _assert_quantile_stats(norm_stats: at.PyTree[NormStats]) -> None:
             raise ValueError(
                 f"quantile stats must be provided if use_quantile_norm is True. Key {k} is missing q01 or q99."
             )
+
+

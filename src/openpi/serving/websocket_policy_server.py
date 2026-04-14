@@ -65,7 +65,6 @@ class WebsocketPolicyServer:
                     "infer_ms": infer_time * 1000,
                 }
                 print("infer_time: ", infer_time)
-
                 if prev_total_time is not None:
                     # We can only record the last total time since we also want to include the send time.
                     action["server_timing"]["prev_total_ms"] = prev_total_time * 1000

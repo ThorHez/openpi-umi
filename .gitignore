@@ -179,7 +179,6 @@ wandb/
 debug_output/
 
 # Logs
-logs/
 *.log
 
 *.jpg

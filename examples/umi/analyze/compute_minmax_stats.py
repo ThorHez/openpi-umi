@@ -1,406 +1,136 @@
-#!/usr/bin/env python3
-"""
-Compute min/max and percentile (q01, q99) statistics for all dimensions in a LeRobot dataset.
-Directly reads parquet files to avoid network dependency.
+"""Compute normalization statistics for a config.
 
-Usage:
-    python compute_minmax_stats.py --dataset /root/openpi-umi/data/umi_lerobot_dataset_v7.2
-"""
+This script is used to compute the normalization statistics for a given config. It
+will compute the mean and standard deviation of the data in the dataset and save it
+to the config assets directory.
 
-import argparse
-import json
-from pathlib import Path
-from collections import defaultdict
+Why it can be slow:
+  1. Main cause: For each sample we run the full pipeline (LeRobot load + repack +
+     data_transforms). data_transforms (e.g. UmiInputsV4_Bimanual) need camera images
+     to build the observation, so the loader loads and decodes images for every sample
+     even though we only use state and actions for norm stats. Image I/O and decode
+     dominate runtime.
+  2. We iterate over the full dataset (or max_frames). Large datasets → many batches.
+  3. RunningStats uses per-dimension histograms (5000 bins) for quantiles; when min/max
+     change, _adjust_histograms runs. Minor compared to (1).
+
+Mitigations: Use --max-frames to cap samples (e.g. 50000); ensure config has a large
+batch_size (e.g. 512) and num_workers (e.g. 8).
+"""
 
 import numpy as np
-import pyarrow.parquet as pq
-from tqdm import tqdm
+import tqdm
+import tyro
+
+import openpi.models.model as _model
+import openpi.shared.normalize as normalize
+import openpi.training.config as _config
+import openpi.training.data_loader as _data_loader
+import openpi.transforms as transforms
 
 
-def nested_to_numpy(value):
-    """
-    Recursively convert nested lists/arrays to a proper numpy array.
-    Handles parquet's nested list storage format.
-    """
-    if isinstance(value, np.ndarray):
-        if value.dtype == object:
-            # Object array - need to convert elements
-            try:
-                return np.array([nested_to_numpy(v) for v in value])
-            except Exception:
-                return None
-        return value
-    elif isinstance(value, (list, tuple)):
-        try:
-            # Try direct conversion first
-            arr = np.array(value)
-            if arr.dtype == object:
-                # Need recursive conversion
-                converted = [nested_to_numpy(v) for v in value]
-                if any(v is None for v in converted):
-                    return None
-                return np.array(converted)
-            return arr
-        except Exception:
-            return None
+class RemoveStrings(transforms.DataTransformFn):
+    def __call__(self, x: dict) -> dict:
+        return {k: v for k, v in x.items() if not np.issubdtype(np.asarray(v).dtype, np.str_)}
+
+
+def create_torch_dataloader(
+    data_config: _config.DataConfig,
+    action_horizon: int,
+    batch_size: int,
+    model_config: _model.BaseModelConfig,
+    num_workers: int,
+    max_frames: int | None = None,
+) -> tuple[_data_loader.Dataset, int]:
+    if data_config.repo_id is None:
+        raise ValueError("Data config must have a repo_id")
+    dataset = _data_loader.create_torch_dataset(data_config, action_horizon, model_config)
+    dataset = _data_loader.TransformedDataset(
+        dataset,
+        [
+            *data_config.repack_transforms.inputs,
+            *data_config.data_transforms.inputs,
+            # Remove strings since they are not supported by JAX and are not needed to compute norm stats.
+            RemoveStrings(),
+        ],
+    )
+    if max_frames is not None and max_frames < len(dataset):
+        num_batches = max_frames // batch_size
+        shuffle = True
     else:
-        return np.array(value)
+        num_batches = len(dataset) // batch_size
+        shuffle = False
+    data_loader = _data_loader.TorchDataLoader(
+        dataset,
+        local_batch_size=batch_size,
+        num_workers=num_workers,
+        shuffle=shuffle,
+        num_batches=num_batches,
+    )
+    return data_loader, num_batches
 
 
-def compute_minmax_stats(dataset_path: str, max_episodes: int = None, verbose: bool = False):
-    """
-    Compute min/max statistics for all features in a LeRobot dataset.
-    Directly reads parquet files.
-    
-    Args:
-        dataset_path: Path to the dataset directory
-        max_episodes: Maximum number of episodes to process (for faster debugging)
-        verbose: Print verbose debug information
-    """
-    dataset_path = Path(dataset_path)
-    
-    print(f"Loading dataset from: {dataset_path}")
-    
-    # Load info.json for metadata
-    info_path = dataset_path / "meta" / "info.json"
-    feature_shapes = {}
-    if info_path.exists():
-        with open(info_path, encoding="utf-8") as f:
-            info = json.load(f)
-        print("\nDataset info:")
-        print(f"  Total episodes: {info.get('total_episodes', 'N/A')}")
-        print(f"  Total frames: {info.get('total_frames', 'N/A')}")
-        print(f"  FPS: {info.get('fps', 'N/A')}")
-        
-        features = info.get('features', {})
-        print(f"  Features: {list(features.keys())}")
-        
-<<<<<<< HEAD
-        # Extract expected shapes
-=======
-        # Extract expected shapes and identify columns to skip (images / depth)
-        skip_columns = {'episode_index', 'frame_index', 'timestamp', 'index', 'task_index'}
->>>>>>> origin/recap
-        for fname, finfo in features.items():
-            if 'shape' in finfo:
-                feature_shapes[fname] = tuple(finfo['shape'])
-                if verbose:
-                    print(f"    {fname}: shape={finfo['shape']}, dtype={finfo.get('dtype', 'N/A')}")
-<<<<<<< HEAD
-    
-=======
-            fdtype = finfo.get('dtype', '')
-            fshape = tuple(finfo.get('shape', []))
-            if fdtype == 'image' or (len(fshape) >= 2 and fshape[0] >= 64 and fshape[1] >= 64):
-                skip_columns.add(fname)
-                if verbose:
-                    print(f"    (skipping {fname}: large spatial data)")
-    
-    if not info_path.exists():
-        skip_columns = {'episode_index', 'frame_index', 'timestamp', 'index', 'task_index'}
-
-    print(f"  Columns to skip: {sorted(skip_columns)}")
-
->>>>>>> origin/recap
-    # Find all parquet files
-    data_dir = dataset_path / "data"
-    parquet_files = sorted(data_dir.glob("**/*.parquet"))
-    
-    if not parquet_files:
-        print(f"❌ No parquet files found in {data_dir}")
-        return None
-    
-    print(f"\nFound {len(parquet_files)} parquet files")
-    
-    # Limit episodes if specified
-    if max_episodes is not None and max_episodes < len(parquet_files):
-        parquet_files = parquet_files[:max_episodes]
-        print(f"⚠️  DEBUG MODE: Only processing first {max_episodes} episodes")
-    
-    # Initialize statistics containers
-    # 使用列表收集所有值，以便计算分位数
-    stats = defaultdict(lambda: {"min": None, "max": None, "q01": None, "q99": None, "shape": None, "dtype": None, "count": 0, "all_values": []})
-    
-    print("\nComputing min/max and percentile statistics...")
-    
-    # Process all parquet files
-    for parquet_file in tqdm(parquet_files, desc="Processing episodes"):
-        table = pq.read_table(parquet_file)
-        
-        for column_name in table.column_names:
-<<<<<<< HEAD
-            # Skip metadata columns
-            if column_name in ['episode_index', 'frame_index', 'timestamp', 'index', 'task_index', 
-            'observation.left_wrist_0_rgb_0', 'observation.left_wrist_0_rgb_1']:
-=======
-            if column_name in skip_columns:
->>>>>>> origin/recap
-                continue
-            
-            column = table.column(column_name)
-            
-            # Convert column to python/numpy
-            try:
-                # Use to_pylist() for nested arrays, then convert to numpy
-                py_values = column.to_pylist()
-                
-                if len(py_values) == 0:
-                    continue
-                
-                first_val = py_values[0]
-                
-                # Skip string columns
-                if isinstance(first_val, str):
-                    continue
-                
-                # Handle nested arrays (lists of lists)
-                if isinstance(first_val, (list, np.ndarray)):
-                    # Convert all values to numpy arrays
-                    arrays = []
-                    for v in py_values:
-                        arr = nested_to_numpy(v)
-                        if arr is None:
-                            break
-                        arrays.append(arr)
-                    
-                    if len(arrays) != len(py_values):
-                        if verbose:
-                            print(f"  ⚠️  Column '{column_name}': failed to convert all values")
-                        continue
-                    
-                    # Stack into single array
-                    try:
-                        stacked = np.stack(arrays)
-                    except ValueError as e:
-                        if verbose:
-                            print(f"  ⚠️  Column '{column_name}': cannot stack - {e}")
-                            print(f"      Shapes: {[a.shape for a in arrays[:3]]}...")
-                        continue
-                    
-                    # Skip image data (uint8 with 3+ dimensions, or large arrays)
-                    if stacked.dtype == np.uint8 and stacked.ndim >= 3 and stacked.shape[-1] == 3:
-                        if stats[column_name]["shape"] is None:
-                            stats[column_name]["shape"] = stacked.shape[1:]
-                            stats[column_name]["dtype"] = str(stacked.dtype)
-                            stats[column_name]["min"] = "N/A (image)"
-                            stats[column_name]["max"] = "N/A (image)"
-                        continue
-                    
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> origin/recap
-                    # Actions: shape (N, horizon, action_dim) -> aggregate over horizon, stats per action_dim only
-                    if column_name == "actions" and stacked.ndim == 3:
-                        # stacked: (num_frames, horizon, action_dim)
-                        action_dim = stacked.shape[-1]
-                        flat = stacked.reshape(-1, action_dim).astype(np.float64)  # (N*horizon, action_dim)
-                        sample_shape = (action_dim,)  # output shape is per action_dim
-                    else:
-                        # Other columns: keep original per-element stats
-                        sample_shape = stacked.shape[1:]
-                        flat = stacked.reshape(len(stacked), -1).astype(np.float64)
-                    
-<<<<<<< HEAD
-=======
-                    # Compute per-dimension min/max
-                    sample_shape = stacked.shape[1:]
-                    
-                    # Flatten for min/max computation
-                    flat = stacked.reshape(len(stacked), -1).astype(np.float64)
->>>>>>> b467a42 (update code)
-=======
->>>>>>> origin/recap
-                    current_min = flat.min(axis=0)
-                    current_max = flat.max(axis=0)
-                    
-                    if stats[column_name]["min"] is None:
-                        stats[column_name]["min"] = current_min
-                        stats[column_name]["max"] = current_max
-                        stats[column_name]["shape"] = sample_shape
-                        stats[column_name]["dtype"] = str(stacked.dtype)
-                    else:
-                        stats[column_name]["min"] = np.minimum(stats[column_name]["min"], current_min)
-                        stats[column_name]["max"] = np.maximum(stats[column_name]["max"], current_max)
-                    
-                    # 收集所有值用于计算分位数
-                    stats[column_name]["all_values"].append(flat)
-<<<<<<< HEAD
-<<<<<<< HEAD
-                    stats[column_name]["count"] += len(flat)
-=======
-                    stats[column_name]["count"] += len(stacked)
->>>>>>> b467a42 (update code)
-=======
-                    stats[column_name]["count"] += len(flat)
->>>>>>> origin/recap
-                
-                # Scalar columns
-                elif isinstance(first_val, (int, float, np.number)):
-                    arr = np.array(py_values, dtype=np.float64)
-                    current_min = arr.min()
-                    current_max = arr.max()
-                    
-                    if stats[column_name]["min"] is None:
-                        stats[column_name]["min"] = current_min
-                        stats[column_name]["max"] = current_max
-                        stats[column_name]["shape"] = ()
-                        stats[column_name]["dtype"] = str(arr.dtype)
-                    else:
-                        stats[column_name]["min"] = min(stats[column_name]["min"], current_min)
-                        stats[column_name]["max"] = max(stats[column_name]["max"], current_max)
-                    
-                    # 收集所有值用于计算分位数
-                    stats[column_name]["all_values"].append(arr.reshape(-1, 1))
-                    stats[column_name]["count"] += len(arr)
-                    
-            except Exception as e:
-                if verbose:
-                    print(f"  ⚠️  Column '{column_name}': error - {type(e).__name__}: {e}")
-                continue
-    
-    # 计算分位数
-    print("\nComputing percentiles (q01, q99)...")
-    for key in tqdm(stats.keys(), desc="Computing percentiles"):
-        stat = stats[key]
-        if stat["all_values"] and not isinstance(stat["min"], str):
-            # 合并所有值
-            all_values = np.vstack(stat["all_values"])
-            # 计算 q01 和 q99
-            stat["q01"] = np.percentile(all_values, 1, axis=0)
-            stat["q99"] = np.percentile(all_values, 99, axis=0)
-            # 清理内存
-            del stat["all_values"]
-        else:
-            del stat["all_values"]
-    
-    # Print results
-    print("\n" + "=" * 80)
-    print("MIN/MAX AND PERCENTILE STATISTICS")
-    print("=" * 80)
-    
-    results = {}
-    for key in sorted(stats.keys()):
-        stat = stats[key]
-        if stat["shape"] is None:
-            continue
-            
-        print(f"\n📊 {key}")
-        print(f"   Shape: {stat['shape']}")
-        print(f"   Dtype: {stat['dtype']}")
-        print(f"   Samples: {stat['count']}")
-        
-        if isinstance(stat["min"], str):
-            print(f"   Min: {stat['min']}")
-            print(f"   Max: {stat['max']}")
-            results[key] = {
-                "shape": list(stat["shape"]) if isinstance(stat["shape"], tuple) else stat["shape"],
-                "dtype": stat["dtype"],
-                "min": stat["min"],
-                "max": stat["max"],
-            }
-        else:
-            min_val = stat["min"]
-            max_val = stat["max"]
-            q01_val = stat["q01"]
-            q99_val = stat["q99"]
-            
-            if isinstance(min_val, (int, float, np.floating)) or (isinstance(min_val, np.ndarray) and min_val.ndim == 0):
-                print(f"   Min: {float(min_val):.6f}")
-                print(f"   Q01: {float(q01_val):.6f}")
-                print(f"   Q99: {float(q99_val):.6f}")
-                print(f"   Max: {float(max_val):.6f}")
-                results[key] = {
-                    "shape": list(stat["shape"]) if isinstance(stat["shape"], tuple) else stat["shape"],
-                    "dtype": stat["dtype"],
-                    "min": float(min_val),
-                    "q01": float(q01_val),
-                    "q99": float(q99_val),
-                    "max": float(max_val),
-                }
-            else:
-                # Reshape back to original shape for display
-                shape = stat["shape"]
-                min_reshaped = min_val.reshape(shape) if shape else min_val
-                max_reshaped = max_val.reshape(shape) if shape else max_val
-                q01_reshaped = q01_val.reshape(shape) if shape else q01_val
-                q99_reshaped = q99_val.reshape(shape) if shape else q99_val
-                
-                print("   Min (per dim):")
-                _print_nested(min_reshaped, indent=6)
-                print("   Q01 (per dim):")
-                _print_nested(q01_reshaped, indent=6)
-                print("   Q99 (per dim):")
-                _print_nested(q99_reshaped, indent=6)
-                print("   Max (per dim):")
-                _print_nested(max_reshaped, indent=6)
-                print(f"   Global Min: {float(min_val.min()):.6f}")
-                print(f"   Global Q01: {float(q01_val.min()):.6f}")
-                print(f"   Global Q99: {float(q99_val.max()):.6f}")
-                print(f"   Global Max: {float(max_val.max()):.6f}")
-                results[key] = {
-                    "shape": list(shape) if isinstance(shape, tuple) else shape,
-                    "dtype": stat["dtype"],
-                    "min_per_dim": min_reshaped.tolist(),
-                    "q01_per_dim": q01_reshaped.tolist(),
-                    "q99_per_dim": q99_reshaped.tolist(),
-                    "max_per_dim": max_reshaped.tolist(),
-                    "global_min": float(min_val.min()),
-                    "global_q01": float(q01_val.min()),
-                    "global_q99": float(q99_val.max()),
-                    "global_max": float(max_val.max()),
-                }
-    
-    # Save results to JSON
-    output_file = dataset_path / "minmax_stats.json"
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2)
-    print(f"\n✅ Statistics saved to: {output_file}")
-    
-    return results
-
-
-def _print_nested(arr, indent=0):
-    """Pretty print nested array with indentation."""
-    prefix = " " * indent
-    if arr.ndim == 1:
-        formatted = [f"{v:.4f}" for v in arr]
-        print(f"{prefix}[{', '.join(formatted)}]")
+def create_rlds_dataloader(
+    data_config: _config.DataConfig,
+    action_horizon: int,
+    batch_size: int,
+    max_frames: int | None = None,
+) -> tuple[_data_loader.Dataset, int]:
+    dataset = _data_loader.create_rlds_dataset(data_config, action_horizon, batch_size, shuffle=False)
+    dataset = _data_loader.IterableTransformedDataset(
+        dataset,
+        [
+            *data_config.repack_transforms.inputs,
+            *data_config.data_transforms.inputs,
+            # Remove strings since they are not supported by JAX and are not needed to compute norm stats.
+            RemoveStrings(),
+        ],
+        is_batched=True,
+    )
+    if max_frames is not None and max_frames < len(dataset):
+        num_batches = max_frames // batch_size
     else:
-        print(f"{prefix}[")
-        for row in arr:
-            _print_nested(row, indent + 2)
-        print(f"{prefix}]")
+        # NOTE: this length is currently hard-coded for DROID.
+        num_batches = len(dataset) // batch_size
+    data_loader = _data_loader.RLDSDataLoader(
+        dataset,
+        num_batches=num_batches,
+    )
+    return data_loader, num_batches
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Compute min/max statistics for LeRobot dataset")
-    parser.add_argument(
-        "--dataset",
-        type=str,
-        default="/root/openpi-umi/data/umi_lerobot_dataset_v7.2",
-        help="Path to the dataset directory",
-    )
-    parser.add_argument(
-        "--max-episodes",
-        type=int,
-        default=None,
-        help="Maximum number of episodes to process (for faster debugging)",
-    )
-    parser.add_argument(
-        "--verbose", "-v",
-        action="store_true",
-        help="Print verbose debug information",
-    )
-    
-    args = parser.parse_args()
-    
-    compute_minmax_stats(
-        dataset_path=args.dataset,
-        max_episodes=args.max_episodes,
-        verbose=args.verbose,
-    )
+def main(config_name: str, max_frames: int | None = None):
+    config = _config.get_config(config_name)
+    data_config = config.data.create(config.assets_dirs, config.model)
+
+    if data_config.rlds_data_dir is not None:
+        data_loader, num_batches = create_rlds_dataloader(
+            data_config, config.model.action_horizon, config.batch_size, max_frames
+        )
+    else:
+        data_loader, num_batches = create_torch_dataloader(
+            data_config, config.model.action_horizon, config.batch_size, config.model, config.num_workers, max_frames
+        )
+
+    keys = ["state", "actions"]
+    # keys = ["actions", ""]
+    stats = {key: normalize.RunningStats() for key in keys}
+
+    for batch in tqdm.tqdm(data_loader, total=num_batches, desc="Computing stats"):
+        for key in keys:
+            stats[key].update(np.asarray(batch[key]))
+            # if key == "state":
+            #     print(f"******************")
+            #     print(f"state_shape: {batch[key].shape}, state: {np.asarray(batch[key])[0]}")
+            #     print(f"******************")
+
+    norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
+
+    output_path = config.assets_dirs / data_config.repo_id
+    print(f"Writing stats to: {output_path}")
+    normalize.save(output_path, norm_stats)
 
 
 if __name__ == "__main__":
-    main()
+    tyro.cli(main)
+    # main(config_name="pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_compute_norm_stats")

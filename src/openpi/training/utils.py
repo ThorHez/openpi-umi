@@ -5,6 +5,8 @@ from flax import nnx
 from flax import struct
 import jax
 import jax.numpy as jnp
+import jax.numpy as jnp
+
 import optax
 
 from openpi.models import model as _model
