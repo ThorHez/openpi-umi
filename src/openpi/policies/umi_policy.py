@@ -136,6 +136,8 @@ class UmiArxInputs_Bimanual(transforms.DataTransformFn):
     This class is used to convert inputs to the model to the expected format. It is used for both training and inference.
     """
 
+    prompt: str = "fold the clothes"
+
     def __call__(self, data: dict) -> dict:
         robot0_eef_pos = data["robot0_eef_pos"]
         robot0_eef_rot_axis_angle = data["robot0_eef_rot_axis_angle"]
@@ -195,7 +197,493 @@ class UmiArxInputs_Bimanual(transforms.DataTransformFn):
             "left_wrist_0_rgb": np.True_,
             "right_wrist_0_rgb": np.True_,
         }
-        data["prompt"] = "fold the clothes"
+        data["prompt"] = self.prompt
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
+class UmiArxInputs_Bimanual_v2(transforms.DataTransformFn):
+    """
+    This class is used to convert inputs to the model to the expected format. It is used for both training and inference.
+    """
+
+    prompt: str = "fold the clothes"
+
+    def __call__(self, data: dict) -> dict:
+        robot0_eef_pos = data["robot0_eef_pos"]
+        robot0_eef_rot_axis_angle = data["robot0_eef_rot_axis_angle"]
+        robot0_gripper_width = data["robot0_gripper_width"]
+        robot0_eef_pos_wrt_start = data["robot0_eef_pos_wrt_start"]
+        robot0_eef_rot_axis_angle_wrt_start = data["robot0_eef_rot_axis_angle_wrt_start"]
+        robot0_eef_pos_wrt1 = data["robot0_eef_pos_wrt1"]
+        robot0_eef_rot_axis_angle_wrt1 = data["robot0_eef_rot_axis_angle_wrt1"]
+        camera0_rgb = data["camera0_rgb"]
+
+        # left hand data
+        robot1_eef_pos = data["robot1_eef_pos"]
+        robot1_eef_rot_axis_angle = data["robot1_eef_rot_axis_angle"]
+        robot1_gripper_width = data["robot1_gripper_width"]
+        robot1_eef_pos_wrt_start = data["robot1_eef_pos_wrt_start"]
+        robot1_eef_rot_axis_angle_wrt_start = data["robot1_eef_rot_axis_angle_wrt_start"]
+        robot1_eef_pos_wrt0 = data["robot1_eef_pos_wrt0"]
+        robot1_eef_rot_axis_angle_wrt0 = data["robot1_eef_rot_axis_angle_wrt0"]
+        camera1_rgb = data["camera1_rgb"]
+
+        assert camera0_rgb.shape == (2, 3, 224, 224)
+        assert robot0_eef_pos.shape == (2, 3)
+        assert robot0_eef_pos_wrt_start.shape == (2, 3)
+        assert robot0_eef_rot_axis_angle.shape == (2, 6)
+        assert robot0_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        assert robot0_eef_pos_wrt1.shape == (2, 3)
+        assert robot0_eef_rot_axis_angle_wrt1.shape == (2, 6)
+        assert robot0_gripper_width.shape == (2, 1)
+        assert robot1_eef_pos.shape == (2, 3)
+        assert robot1_eef_pos_wrt_start.shape == (2, 3)
+        assert robot1_eef_rot_axis_angle.shape == (2, 6)
+        assert robot1_gripper_width.shape == (2, 1)
+        assert robot1_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        assert robot1_eef_pos_wrt0.shape == (2, 3)
+        assert robot1_eef_rot_axis_angle_wrt0.shape == (2, 6)
+        assert camera1_rgb.shape == (2, 3, 224, 224)
+
+        assert camera0_rgb.max() > 0
+
+        state = np.concatenate([robot0_eef_pos,
+                                robot0_eef_pos_wrt_start,
+                                robot0_eef_rot_axis_angle,
+                                robot0_eef_rot_axis_angle_wrt_start,
+                                robot0_eef_pos_wrt1,
+                                robot0_eef_rot_axis_angle_wrt1,
+                                robot0_gripper_width,
+                                robot1_eef_pos,
+                                robot1_eef_pos_wrt_start,
+                                robot1_eef_rot_axis_angle,
+                                robot1_eef_rot_axis_angle_wrt_start,
+                                robot1_eef_pos_wrt0,
+                                robot1_eef_rot_axis_angle_wrt0,
+                                robot1_gripper_width,
+                                ], axis=-1)
+        data["state"] = state
+        data["image"] = {
+            "base_0_rgb": _parse_image(np.zeros_like(camera0_rgb[1]).astype(np.uint8)),
+            "left_wrist_0_rgb": _parse_image(camera1_rgb[1]),
+            "right_wrist_0_rgb": _parse_image(camera0_rgb[1]),
+        }
+        data["image_mask"] = {
+            "base_0_rgb": np.False_,
+            "left_wrist_0_rgb": np.True_,
+            "right_wrist_0_rgb": np.True_,
+        }
+        data["prompt"] = self.prompt
+        return data
+
+@dataclasses.dataclass(frozen=True)
+class UmiArxInputs_Bimanual_With_Depth(transforms.DataTransformFn):
+    """
+    This class is used to convert inputs to the model to the expected format. It is used for both training and inference.
+    """
+
+    prompt: str = "fold the clothes"
+
+    def __call__(self, data: dict) -> dict:
+        robot0_eef_pos = data["robot0_eef_pos"]
+        robot0_eef_rot_axis_angle = data["robot0_eef_rot_axis_angle"]
+        robot0_gripper_width = data["robot0_gripper_width"]
+        robot0_eef_pos_wrt_start = data["robot0_eef_pos_wrt_start"]
+        robot0_eef_rot_axis_angle_wrt_start = data["robot0_eef_rot_axis_angle_wrt_start"]
+        robot0_eef_pos_wrt1 = data["robot0_eef_pos_wrt1"]
+        robot0_eef_rot_axis_angle_wrt1 = data["robot0_eef_rot_axis_angle_wrt1"]
+        camera0_rgb = data["camera0_rgb"]
+
+        # left hand data
+        robot1_eef_pos = data["robot1_eef_pos"]
+        robot1_eef_rot_axis_angle = data["robot1_eef_rot_axis_angle"]
+        robot1_gripper_width = data["robot1_gripper_width"]
+        robot1_eef_pos_wrt_start = data["robot1_eef_pos_wrt_start"]
+        robot1_eef_rot_axis_angle_wrt_start = data["robot1_eef_rot_axis_angle_wrt_start"]
+        robot1_eef_pos_wrt0 = data["robot1_eef_pos_wrt0"]
+        robot1_eef_rot_axis_angle_wrt0 = data["robot1_eef_rot_axis_angle_wrt0"]
+        camera1_rgb = data["camera1_rgb"]
+
+        base_0_rgb = data["base_0_rgb"]
+        base_0_depth = data["base_0_depth"]
+
+        # print(f"base_0_depth: {base_0_depth.shape}")
+
+        assert camera0_rgb.shape == (3, 224, 224)
+        assert robot0_eef_pos.shape == (2, 3)
+        assert robot0_eef_pos_wrt_start.shape == (2, 3)
+        assert robot0_eef_rot_axis_angle.shape == (2, 6)
+        assert robot0_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        assert robot0_eef_pos_wrt1.shape == (2, 3)
+        assert robot0_eef_rot_axis_angle_wrt1.shape == (2, 6)
+        assert robot0_gripper_width.shape == (2, 1)
+        assert robot1_eef_pos.shape == (2, 3)
+        assert robot1_eef_pos_wrt_start.shape == (2, 3)
+        assert robot1_eef_rot_axis_angle.shape == (2, 6)
+        assert robot1_gripper_width.shape == (2, 1)
+        assert robot1_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        assert robot1_eef_pos_wrt0.shape == (2, 3)
+        assert robot1_eef_rot_axis_angle_wrt0.shape == (2, 6)
+        assert camera1_rgb.shape == (3, 224, 224)
+
+        assert base_0_rgb.shape == (3, 224, 224)
+        assert base_0_depth.shape == (3, 224, 224)
+
+        assert camera0_rgb.max() > 0
+
+        state = np.concatenate([robot0_eef_pos,
+                                robot0_eef_pos_wrt_start,
+                                robot0_eef_rot_axis_angle,
+                                robot0_eef_rot_axis_angle_wrt_start,
+                                robot0_eef_pos_wrt1,
+                                robot0_eef_rot_axis_angle_wrt1,
+                                robot0_gripper_width,
+                                robot1_eef_pos,
+                                robot1_eef_pos_wrt_start,
+                                robot1_eef_rot_axis_angle,
+                                robot1_eef_rot_axis_angle_wrt_start,
+                                robot1_eef_pos_wrt0,
+                                robot1_eef_rot_axis_angle_wrt0,
+                                robot1_gripper_width,
+                                ], axis=-1)
+        data["state"] = state
+        data["image"] = {
+            "base_0_rgb": _parse_image(base_0_rgb),
+            "base_0_depth": _parse_image(base_0_depth),
+            "left_wrist_0_rgb": _parse_image(camera1_rgb),
+            "right_wrist_0_rgb": _parse_image(camera0_rgb),
+        }
+        data["image_mask"] = {
+            "base_0_rgb": np.True_,
+            "base_0_depth": np.True_,
+            "left_wrist_0_rgb": np.True_,
+            "right_wrist_0_rgb": np.True_,
+        }
+        data["prompt"] = self.prompt
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
+class UmiArxInputs_Bimanual_With_Depth_Ray(transforms.DataTransformFn):
+    """
+    This class is used to convert inputs to the model to the expected format. It is used for both training and inference.
+    """
+
+    prompt: str = "fold the clothes"
+
+    def __call__(self, data: dict) -> dict:
+        robot0_eef_pos = data["robot0_eef_pos"]
+        robot0_eef_rot_axis_angle = data["robot0_eef_rot_axis_angle"]
+        robot0_gripper_width = data["robot0_gripper_width"]
+        robot0_eef_pos_wrt_start = data["robot0_eef_pos_wrt_start"]
+        robot0_eef_rot_axis_angle_wrt_start = data["robot0_eef_rot_axis_angle_wrt_start"]
+        robot0_eef_pos_wrt1 = data["robot0_eef_pos_wrt1"]
+        robot0_eef_rot_axis_angle_wrt1 = data["robot0_eef_rot_axis_angle_wrt1"]
+        camera0_rgb = data["camera0_rgb"]
+
+        # left hand data
+        robot1_eef_pos = data["robot1_eef_pos"]
+        robot1_eef_rot_axis_angle = data["robot1_eef_rot_axis_angle"]
+        robot1_gripper_width = data["robot1_gripper_width"]
+        robot1_eef_pos_wrt_start = data["robot1_eef_pos_wrt_start"]
+        robot1_eef_rot_axis_angle_wrt_start = data["robot1_eef_rot_axis_angle_wrt_start"]
+        robot1_eef_pos_wrt0 = data["robot1_eef_pos_wrt0"]
+        robot1_eef_rot_axis_angle_wrt0 = data["robot1_eef_rot_axis_angle_wrt0"]
+        camera1_rgb = data["camera1_rgb"]
+
+        base_0_rgb = data["head_rgb"]
+        base_0_depth = np.zeros((3, 224, 224)).astype(np.uint8)
+
+        # print(f"base_0_depth: {base_0_depth.shape}")
+
+        assert camera0_rgb.shape == (3, 224, 224)
+        assert robot0_eef_pos.shape == (2, 3)
+        assert robot0_eef_pos_wrt_start.shape == (2, 3)
+        assert robot0_eef_rot_axis_angle.shape == (2, 6)
+        assert robot0_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        assert robot0_eef_pos_wrt1.shape == (2, 3)
+        assert robot0_eef_rot_axis_angle_wrt1.shape == (2, 6)
+        assert robot0_gripper_width.shape == (2, 1)
+        assert robot1_eef_pos.shape == (2, 3)
+        assert robot1_eef_pos_wrt_start.shape == (2, 3)
+        assert robot1_eef_rot_axis_angle.shape == (2, 6)
+        assert robot1_gripper_width.shape == (2, 1)
+        assert robot1_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        assert robot1_eef_pos_wrt0.shape == (2, 3)
+        assert robot1_eef_rot_axis_angle_wrt0.shape == (2, 6)
+        assert camera1_rgb.shape == (3, 224, 224)
+
+        assert base_0_rgb.shape == (3, 224, 224)
+        assert base_0_depth.shape == (3, 224, 224)
+
+        assert camera0_rgb.max() > 0
+
+        state = np.concatenate([robot0_eef_pos,
+                                robot0_eef_pos_wrt_start,
+                                robot0_eef_rot_axis_angle,
+                                robot0_eef_rot_axis_angle_wrt_start,
+                                robot0_eef_pos_wrt1,
+                                robot0_eef_rot_axis_angle_wrt1,
+                                robot0_gripper_width,
+                                robot1_eef_pos,
+                                robot1_eef_pos_wrt_start,
+                                robot1_eef_rot_axis_angle,
+                                robot1_eef_rot_axis_angle_wrt_start,
+                                robot1_eef_pos_wrt0,
+                                robot1_eef_rot_axis_angle_wrt0,
+                                robot1_gripper_width,
+                                ], axis=-1)
+        data["state"] = state
+        data["image"] = {
+            "base_0_rgb": _parse_image(base_0_rgb),
+            "base_0_depth": _parse_image(base_0_depth),
+            "left_wrist_0_rgb": _parse_image(camera1_rgb),
+            "right_wrist_0_rgb": _parse_image(camera0_rgb),
+        }
+        data["image_mask"] = {
+            "base_0_rgb": np.True_,
+            "base_0_depth": np.True_,
+            "left_wrist_0_rgb": np.True_,
+            "right_wrist_0_rgb": np.True_,
+        }
+        data["prompt"] = self.prompt
+        return data
+
+
+
+@dataclasses.dataclass(frozen=True)
+class UmiArxInputs_DeskHeight_Bimanual(transforms.DataTransformFn):
+    """
+    This class is used to convert inputs to the model to the expected format. It is used for both training and inference.
+    """
+
+    prompt: str = "fold the clothes"
+
+    def __call__(self, data: dict) -> dict:
+        robot0_eef_pos = data["robot0_eef_pos"]
+        robot0_eef_desk_height = data["robot0_eef_desk_height"]
+        robot0_eef_rot_axis_angle = data["robot0_eef_rot_axis_angle"]
+        robot0_gripper_width = data["robot0_gripper_width"]
+        robot0_eef_rot_axis_angle_wrt_start = data["robot0_eef_rot_axis_angle_wrt_start"]
+        robot0_eef_pos_wrt1 = data["robot0_eef_pos_wrt1"]
+        robot0_eef_rot_axis_angle_wrt1 = data["robot0_eef_rot_axis_angle_wrt1"]
+        camera0_rgb = data["camera0_rgb"]
+
+        # left hand data
+        robot1_eef_pos = data["robot1_eef_pos"]
+        robot1_eef_desk_height = data["robot1_eef_desk_height"]
+        robot1_eef_rot_axis_angle = data["robot1_eef_rot_axis_angle"]
+        robot1_gripper_width = data["robot1_gripper_width"]
+        robot1_eef_rot_axis_angle_wrt_start = data["robot1_eef_rot_axis_angle_wrt_start"]
+        robot1_eef_pos_wrt0 = data["robot1_eef_pos_wrt0"]
+        robot1_eef_rot_axis_angle_wrt0 = data["robot1_eef_rot_axis_angle_wrt0"]
+        camera1_rgb = data["camera1_rgb"]
+
+        assert camera0_rgb.shape == (2, 3, 224, 224)
+        assert robot0_eef_pos.shape == (2, 3)
+        assert robot0_eef_desk_height.shape == (2, 1)
+        assert robot0_eef_rot_axis_angle.shape == (2, 6)
+        assert robot0_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        assert robot0_eef_pos_wrt1.shape == (2, 3)
+        assert robot0_eef_rot_axis_angle_wrt1.shape == (2, 6)
+        assert robot0_gripper_width.shape == (2, 1)
+        assert robot1_eef_pos.shape == (2, 3)
+        assert robot1_eef_desk_height.shape == (2, 1)
+        assert robot1_eef_rot_axis_angle.shape == (2, 6)
+        assert robot1_gripper_width.shape == (2, 1)
+        assert robot1_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        assert robot1_eef_pos_wrt0.shape == (2, 3)
+        assert robot1_eef_rot_axis_angle_wrt0.shape == (2, 6)
+        assert camera1_rgb.shape == (2, 3, 224, 224)
+
+        assert camera0_rgb.max() > 0
+
+        state = np.concatenate([robot0_eef_pos,
+                                robot0_eef_desk_height,
+                                robot0_eef_rot_axis_angle,
+                                robot0_eef_rot_axis_angle_wrt_start,
+                                robot0_eef_pos_wrt1,
+                                robot0_eef_rot_axis_angle_wrt1,
+                                robot0_gripper_width,
+                                robot1_eef_pos,
+                                robot1_eef_desk_height,
+                                robot1_eef_rot_axis_angle,
+                                robot1_eef_rot_axis_angle_wrt_start,
+                                robot1_eef_pos_wrt0,
+                                robot1_eef_rot_axis_angle_wrt0,
+                                robot1_gripper_width,
+                                ], axis=-1)
+        data["state"] = state
+        data["image"] = {
+            "base_0_rgb": _parse_image(np.zeros_like(camera0_rgb[1]).astype(np.uint8)),
+            "left_wrist_0_rgb": _parse_image(camera1_rgb[1]),
+            "right_wrist_0_rgb": _parse_image(camera0_rgb[1]),
+        }
+        data["image_mask"] = {
+            "base_0_rgb": np.False_,
+            "left_wrist_0_rgb": np.True_,
+            "right_wrist_0_rgb": np.True_,
+        }
+        data["prompt"] = self.prompt
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
+class UmiArxInputs_Headview_Bimanual(transforms.DataTransformFn):
+    """
+    This class is used to convert inputs to the model to the expected format. It is used for both training and inference.
+    """
+
+    prompt: str = "fold the clothes"
+
+    def __call__(self, data: dict) -> dict:
+        robot0_eef_pos = data["robot0_eef_pos"]
+        robot0_eef_rot_axis_angle = data["robot0_eef_rot_axis_angle"]
+        robot0_gripper_width = data["robot0_gripper_width"]
+        robot0_eef_rot_axis_angle_wrt_start = data["robot0_eef_rot_axis_angle_wrt_start"]
+        robot0_eef_pos_wrt1 = data["robot0_eef_pos_wrt1"]
+        robot0_eef_rot_axis_angle_wrt1 = data["robot0_eef_rot_axis_angle_wrt1"]
+        camera0_rgb = data["camera0_rgb"]
+
+        # left hand data
+        robot1_eef_pos = data["robot1_eef_pos"]
+        robot1_eef_rot_axis_angle = data["robot1_eef_rot_axis_angle"]
+        robot1_gripper_width = data["robot1_gripper_width"]
+        robot1_eef_rot_axis_angle_wrt_start = data["robot1_eef_rot_axis_angle_wrt_start"]
+        robot1_eef_pos_wrt0 = data["robot1_eef_pos_wrt0"]
+        robot1_eef_rot_axis_angle_wrt0 = data["robot1_eef_rot_axis_angle_wrt0"]
+        camera1_rgb = data["camera1_rgb"]
+
+        # head view data
+        camera2_rgb = data["camera2_rgb"]
+
+        assert camera0_rgb.shape == (2, 3, 224, 224)
+        assert robot0_eef_pos.shape == (2, 3)
+        assert robot0_eef_rot_axis_angle.shape == (2, 6)
+        assert robot0_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        assert robot0_eef_pos_wrt1.shape == (2, 3)
+        assert robot0_eef_rot_axis_angle_wrt1.shape == (2, 6)
+        assert robot0_gripper_width.shape == (2, 1)
+        assert robot1_eef_pos.shape == (2, 3)
+        assert robot1_eef_rot_axis_angle.shape == (2, 6)
+        assert robot1_gripper_width.shape == (2, 1)
+        assert robot1_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        assert robot1_eef_pos_wrt0.shape == (2, 3)
+        assert robot1_eef_rot_axis_angle_wrt0.shape == (2, 6)
+        assert camera1_rgb.shape == (2, 3, 224, 224)
+
+        assert camera2_rgb.shape == (2, 3, 224, 224)
+
+        assert camera0_rgb.max() > 0
+
+        state = np.concatenate([robot0_eef_pos,
+                                robot0_eef_rot_axis_angle,
+                                robot0_eef_rot_axis_angle_wrt_start,
+                                robot0_eef_pos_wrt1,
+                                robot0_eef_rot_axis_angle_wrt1,
+                                robot0_gripper_width,
+                                robot1_eef_pos,
+                                robot1_eef_rot_axis_angle,
+                                robot1_eef_rot_axis_angle_wrt_start,
+                                robot1_eef_pos_wrt0,
+                                robot1_eef_rot_axis_angle_wrt0,
+                                robot1_gripper_width,
+                                ], axis=-1)
+        data["state"] = state
+        data["image"] = {
+            "base_0_rgb": _parse_image(camera2_rgb[1]),
+            "left_wrist_0_rgb": _parse_image(camera1_rgb[1]),
+            "right_wrist_0_rgb": _parse_image(camera0_rgb[1]),
+        }
+        data["image_mask"] = {
+            "base_0_rgb": np.True_,
+            "left_wrist_0_rgb": np.True_,
+            "right_wrist_0_rgb": np.True_,
+        }
+        data["prompt"] = self.prompt
+        return data
+        
+
+@dataclasses.dataclass(frozen=True)
+class UmiArxInputs_Headview_DeskHeight_Bimanual(transforms.DataTransformFn):
+    """
+    This class is used to convert inputs to the model to the expected format. It is used for both training and inference.
+    """
+
+    prompt: str = "fold the clothes"
+
+    def __call__(self, data: dict) -> dict:
+        robot0_eef_pos = data["robot0_eef_pos"]
+        robot0_eef_rot_axis_angle = data["robot0_eef_rot_axis_angle"]
+        robot0_eef_desk_height = data["robot0_eef_desk_height"]
+        robot0_gripper_width = data["robot0_gripper_width"]
+        robot0_eef_rot_axis_angle_wrt_start = data["robot0_eef_rot_axis_angle_wrt_start"]
+        robot0_eef_pos_wrt1 = data["robot0_eef_pos_wrt1"]
+        robot0_eef_rot_axis_angle_wrt1 = data["robot0_eef_rot_axis_angle_wrt1"]
+        camera0_rgb = data["camera0_rgb"]
+
+        # left hand data
+        robot1_eef_pos = data["robot1_eef_pos"]
+        robot1_eef_desk_height = data["robot1_eef_desk_height"]
+        robot1_eef_rot_axis_angle = data["robot1_eef_rot_axis_angle"]
+        robot1_gripper_width = data["robot1_gripper_width"]
+        robot1_eef_rot_axis_angle_wrt_start = data["robot1_eef_rot_axis_angle_wrt_start"]
+        robot1_eef_pos_wrt0 = data["robot1_eef_pos_wrt0"]
+        robot1_eef_rot_axis_angle_wrt0 = data["robot1_eef_rot_axis_angle_wrt0"]
+        camera1_rgb = data["camera1_rgb"]
+
+        # head view data
+        camera2_rgb = data["camera2_rgb"]
+
+        assert camera0_rgb.shape == (2, 3, 224, 224)
+        assert robot0_eef_pos.shape == (2, 3)
+        assert robot0_eef_desk_height.shape == (2, 1)
+        assert robot0_eef_rot_axis_angle.shape == (2, 6)
+        assert robot0_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        assert robot0_eef_pos_wrt1.shape == (2, 3)
+        assert robot0_eef_rot_axis_angle_wrt1.shape == (2, 6)
+        assert robot0_gripper_width.shape == (2, 1)
+        assert robot1_eef_pos.shape == (2, 3)
+        assert robot1_eef_desk_height.shape == (2, 1)
+        assert robot1_eef_rot_axis_angle.shape == (2, 6)
+        assert robot1_gripper_width.shape == (2, 1)
+        assert robot1_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        assert robot1_eef_pos_wrt0.shape == (2, 3)
+        assert robot1_eef_rot_axis_angle_wrt0.shape == (2, 6)
+        assert camera1_rgb.shape == (2, 3, 224, 224)
+
+        assert camera2_rgb.shape == (2, 3, 224, 224)
+
+        assert camera0_rgb.max() > 0
+
+        state = np.concatenate([robot0_eef_pos,
+                                robot0_eef_desk_height,
+                                robot0_eef_rot_axis_angle,
+                                robot0_eef_rot_axis_angle_wrt_start,
+                                robot0_eef_pos_wrt1,
+                                robot0_eef_rot_axis_angle_wrt1,
+                                robot0_gripper_width,
+                                robot1_eef_pos,
+                                robot1_eef_desk_height,
+                                robot1_eef_rot_axis_angle,
+                                robot1_eef_rot_axis_angle_wrt_start,
+                                robot1_eef_pos_wrt0,
+                                robot1_eef_rot_axis_angle_wrt0,
+                                robot1_gripper_width,
+                                ], axis=-1)
+        data["state"] = state
+        data["image"] = {
+            "base_0_rgb": _parse_image(camera2_rgb[1]),
+            "left_wrist_0_rgb": _parse_image(camera1_rgb[1]),
+            "right_wrist_0_rgb": _parse_image(camera0_rgb[1]),
+        }
+        data["image_mask"] = {
+            "base_0_rgb": np.True_,
+            "left_wrist_0_rgb": np.True_,
+            "right_wrist_0_rgb": np.True_,
+        }
+        data["prompt"] = self.prompt
         return data
 
 
@@ -223,11 +711,8 @@ class UmiInputsV4(transforms.DataTransformFn):
         actions = data["actions"]
 
         assert left_wrist_0_rgb_1.shape == (3, 224, 224)
-<<<<<<< HEAD
 
         empty_base_flag = base_0_rgb_1 is None
-=======
->>>>>>> b467a42 (update code)
         if base_0_rgb_1 is not None:
             assert base_0_rgb_1.shape == (3, 224, 224)
         else:
@@ -248,11 +733,7 @@ class UmiInputsV4(transforms.DataTransformFn):
             "right_wrist_0_rgb": _parse_image(np.zeros_like(left_wrist_0_rgb_1).astype(np.uint8)),
         }
         data["image_mask"] = {
-<<<<<<< HEAD
             "base_0_rgb": np.False_ if empty_base_flag  else np.True_,
-=======
-            "base_0_rgb": np.False_,
->>>>>>> b467a42 (update code)
             "left_wrist_0_rgb": np.True_,
             "right_wrist_0_rgb": np.False_,
         }
@@ -335,21 +816,15 @@ class UmiInputsV4_Bimanual(transforms.DataTransformFn):
         robot1_eef_pos_wrt0 = data["robot1_eef_pos_wrt0"]
         robot1_eef_rot_axis_angle_wrt0 = data["robot1_eef_rot_axis_angle_wrt0"]
         left_wrist_0_rgb_1 = data["left_wrist_0_rgb_1"]
-<<<<<<< HEAD
         
         # base_0_rgb_1 = data["base_0_rgb_1"]
-=======
->>>>>>> b467a42 (update code)
 
         # actions = data["actions"].reshape(16, 10)
         actions = data["actions"]
 
         assert left_wrist_0_rgb_1.shape == (3, 224, 224)
         assert right_wrist_0_rgb_1.shape == (3, 224, 224)
-<<<<<<< HEAD
         # assert base_0_rgb_1.shape == (3, 224, 224)
-=======
->>>>>>> b467a42 (update code)
         assert robot0_eef_pos.shape == (2, 3)
         assert robot0_eef_rot_axis_angle.shape == (2, 6)
         assert robot0_gripper_width.shape == (2, 1)
@@ -394,7 +869,6 @@ class UmiInputsV4_Bimanual(transforms.DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
-<<<<<<< HEAD
 class UmiInputsV4_Bimanual_HeadView_DeskHeight_Horizon1(transforms.DataTransformFn):
     """
     This class is used to convert inputs to the model to the expected format. It is used for both training and inference.
@@ -662,8 +1136,6 @@ class UmiInputsV4_Bimanual_DeskHeight_Horizon1(transforms.DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
-=======
->>>>>>> b467a42 (update code)
 class UmiOutputsV4(transforms.DataTransformFn):
     """
     This class is used to convert outputs from the model back the the dataset specific format. It is

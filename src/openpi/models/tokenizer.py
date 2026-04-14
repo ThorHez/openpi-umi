@@ -19,7 +19,6 @@ class PaligemmaTokenizer:
         with path.open("rb") as f:
             self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
 
-<<<<<<< HEAD
     def tokenize(self, prompt: str, state: np.ndarray | None = None, robot_type: str | None = None) -> tuple[np.ndarray, np.ndarray]:
         cleaned_text = prompt.strip().replace("_", " ").replace("\n", " ")
         robot_tag = f", Robot: {robot_type}" if robot_type else ""
@@ -31,20 +30,6 @@ class PaligemmaTokenizer:
         else:
             text = f"{cleaned_text}{robot_tag}" if robot_type else cleaned_text
             tokens = self._tokenizer.encode(text, add_bos=True) + self._tokenizer.encode("\n")
-=======
-    def tokenize(self, prompt: str, state: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
-        cleaned_text = prompt.strip().replace("_", " ").replace("\n", " ")
-        if state is not None:
-            # This is the Pi05 format, where the state is part of the discrete language input.
-            discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
-            state_str = " ".join(map(str, discretized_state))
-            full_prompt = f"Task: {cleaned_text}, State: {state_str};\nAction: "
-            tokens = self._tokenizer.encode(full_prompt, add_bos=True)
-        else:
-            # This is the Pi0 format, where the state is part of the continuous action expert input.
-            # tokenize "\n" separately as the "start of answer" token
-            tokens = self._tokenizer.encode(cleaned_text, add_bos=True) + self._tokenizer.encode("\n")
->>>>>>> b467a42 (update code)
         tokens_len = len(tokens)
         if tokens_len < self._max_len:
             padding = [False] * (self._max_len - tokens_len)
@@ -76,7 +61,6 @@ class FASTTokenizer:
         self._fast_skip_tokens = 128  # Skip last 128 tokens in PaliGemma vocab since they are special tokens
 
     def tokenize(
-<<<<<<< HEAD
         self, prompt: str, state: np.ndarray, actions: np.ndarray | None, robot_type: str | None = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         cleaned_text = prompt.lower().strip().replace("_", " ")
@@ -86,18 +70,6 @@ class FASTTokenizer:
 
         state_str = " ".join(map(str, discretized_state))
         prefix = f"Task: {cleaned_text}, State: {state_str}{robot_tag};\n"
-=======
-        self, prompt: str, state: np.ndarray, actions: np.ndarray | None
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        cleaned_text = prompt.lower().strip().replace("_", " ")
-
-        # Convention: state gets discretized into 256 discrete bins (assumed range after normalization: [-1, 1])
-        discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
-
-        # Convention: prefix includes prompt and string-representation of state, followed by ';'
-        state_str = " ".join(map(str, discretized_state))
-        prefix = f"Task: {cleaned_text}, State: {state_str};\n"
->>>>>>> b467a42 (update code)
         prefix_tokens = self._paligemma_tokenizer.encode(prefix, add_bos=True)
 
         if actions is not None:
@@ -188,7 +160,6 @@ class BinningTokenizer:
         self._fast_skip_tokens = 128  # Skip last 128 tokens in PaliGemma vocab since they are special tokens
 
     def tokenize(
-<<<<<<< HEAD
         self, prompt: str, state: np.ndarray, actions: np.ndarray | None, robot_type: str | None = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         cleaned_text = prompt.lower().strip().replace("_", " ")
@@ -198,31 +169,6 @@ class BinningTokenizer:
 
         state_str = " ".join(map(str, discretized_state))
         prefix = f"Task: {cleaned_text}, State: {state_str}{robot_tag};\n"
-=======
-        self, prompt: str, state: np.ndarray, actions: np.ndarray | None
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Tokenize a prompt and state into a sequence of tokens.
-
-        Args:
-            prompt: The text prompt to tokenize.
-            state: The state array to discretize and tokenize.
-            actions: Must be None. Action encoding is not currently supported.
-
-        Returns:
-            A tuple of (tokens, token_mask, ar_mask, targets).
-
-        Raises:
-            NotImplementedError: If actions is not None.
-        """
-        cleaned_text = prompt.lower().strip().replace("_", " ")
-
-        # Convention: state gets discretized into 256 discrete bins (assumed range after normalization: [-1, 1])
-        discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
-
-        # Convention: prefix includes prompt and string-representation of state, followed by ';'
-        state_str = " ".join(map(str, discretized_state))
-        prefix = f"Task: {cleaned_text}, State: {state_str};\n"
->>>>>>> b467a42 (update code)
         prefix_tokens = self._paligemma_tokenizer.encode(prefix, add_bos=True)
 
         if actions is not None:
@@ -336,7 +282,6 @@ class FSQTokenizer:
         self._fast_skip_tokens = 128  # Skip last 128 tokens in PaliGemma vocab since they are special tokens
 
     def tokenize(
-<<<<<<< HEAD
         self, prompt: str, state: np.ndarray, actions: np.ndarray | None, robot_type: str | None = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         cleaned_text = prompt.lower().strip().replace("_", " ")
@@ -346,18 +291,6 @@ class FSQTokenizer:
 
         state_str = " ".join(map(str, discretized_state))
         prefix = f"Task: {cleaned_text}, State: {state_str}{robot_tag};\n"
-=======
-        self, prompt: str, state: np.ndarray, actions: np.ndarray | None
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        cleaned_text = prompt.lower().strip().replace("_", " ")
-
-        # Convention: state gets discretized into 256 discrete bins (assumed range after normalization: [-1, 1])
-        discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
-
-        # Convention: prefix includes prompt and string-representation of state, followed by ';'
-        state_str = " ".join(map(str, discretized_state))
-        prefix = f"Task: {cleaned_text}, State: {state_str};\n"
->>>>>>> b467a42 (update code)
         prefix_tokens = self._paligemma_tokenizer.encode(prefix, add_bos=True)
 
         if actions is not None:

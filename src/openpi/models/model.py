@@ -41,15 +41,11 @@ IMAGE_KEYS = (
     "left_wrist_0_rgb",
     "right_wrist_0_rgb",
 )
-<<<<<<< HEAD
-=======
-# IMAGE_KEYS = (
-#     # "base_0_rgb",
-#     "left_wrist_0_rgb",
-#     "left_wrist_1_rgb",
-# )
->>>>>>> b467a42 (update code)
 
+
+DEPTH_KEYS = (
+    "base_0_depth",
+)
 
 # This may need change if we release a small model.
 IMAGE_RESOLUTION = (224, 224)
@@ -114,21 +110,23 @@ class Observation(Generic[ArrayT]):
     # Token loss mask (for FAST autoregressive model).
     token_loss_mask: at.Bool[ArrayT, "*b l"] | None = None
 
-<<<<<<< HEAD
-=======
-
->>>>>>> b467a42 (update code)
     fast_tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
     fast_tokenized_prompt_mask: at.Bool[ArrayT, "*b l"] | None = None
     fast_token_ar_mask: at.Int[ArrayT, "*b l"] | None = None
     fast_token_loss_mask: at.Bool[ArrayT, "*b l"] | None = None
 
-<<<<<<< HEAD
     # Per-sample action loss mask for mixed-dataset training (e.g. single-arm / bimanual).
     action_loss_mask: at.Float[ArrayT, "*b ad"] | None = None
 
-=======
->>>>>>> b467a42 (update code)
+    # Value model fields (for Pi0Advantage / advantage estimation).
+    step_index: at.Float[ArrayT, "*b"] | None = None
+    episode_T: at.Float[ArrayT, "*b"] | None = None
+    terminal_reward: at.Float[ArrayT, "*b"] | None = None
+
+    # For value training with compute_normalized_value_targets (Option B).
+    episode_index: at.Float[ArrayT, "*b"] | at.Int[ArrayT, "*b"] | None = None
+    frame_index: at.Float[ArrayT, "*b"] | at.Int[ArrayT, "*b"] | None = None
+
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "Observation[ArrayT]":
         """This method defines the mapping between unstructured data (i.e., nested dict) to the structured Observation format."""
@@ -149,15 +147,19 @@ class Observation(Generic[ArrayT]):
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
             token_loss_mask=data.get("token_loss_mask"),
-<<<<<<< HEAD
             action_loss_mask=data.get("action_loss_mask"),
-=======
->>>>>>> b467a42 (update code)
             # Hybrid model (Pi0.5 + FAST) specific fields
             fast_tokenized_prompt=data.get("fast_tokenized_prompt"),
             fast_tokenized_prompt_mask=data.get("fast_tokenized_prompt_mask"),
             fast_token_ar_mask=data.get("fast_token_ar_mask"),
             fast_token_loss_mask=data.get("fast_token_loss_mask"),
+
+            # Value model fields
+            step_index=data.get("step_index"),
+            episode_T=data.get("episode_T"),
+            terminal_reward=data.get("terminal_reward"),
+            episode_index=data.get("episode_index"),
+            frame_index=data.get("frame_index"),
         )
 
     def to_dict(self) -> at.PyTree[ArrayT]:
@@ -179,6 +181,7 @@ def preprocess_observation(
     *,
     train: bool = False,
     image_keys: Sequence[str] = IMAGE_KEYS,
+    depth_keys: Sequence[str] = DEPTH_KEYS,
     image_resolution: tuple[int, int] = IMAGE_RESOLUTION,
 ) -> Observation:
     """Preprocess the observations by performing image augmentations (if train=True), resizing (if necessary), and
@@ -197,11 +200,6 @@ def preprocess_observation(
             logger.info(f"Resizing image {key} from {image.shape[1:3]} to {image_resolution}")
             image = image_tools.resize_with_pad(image, *image_resolution)
 
-<<<<<<< HEAD
-=======
-        # jax.debug.print("image {} max: {}, min: {}", key, image.max(), image.min())
-
->>>>>>> b467a42 (update code)
         if train:
             # Convert from [-1, 1] to [0, 1] for augmax.
             image = image / 2.0 + 0.5
@@ -225,6 +223,15 @@ def preprocess_observation(
 
         out_images[key] = image
 
+    for depth_key in depth_keys:
+        depth = observation.images[depth_key]
+        if depth.shape[1:3] != image_resolution:
+            logger.info(f"Resizing depth {depth_key} from {depth.shape[1:3]} to {image_resolution}")
+            depth = image_tools.resize_with_pad(depth, *image_resolution)
+        # do not apply augmentations to depth
+        out_images[depth_key] = depth
+
+
     # obtain mask
     out_masks = {}
     for key in out_images:
@@ -242,14 +249,16 @@ def preprocess_observation(
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
-<<<<<<< HEAD
         action_loss_mask=observation.action_loss_mask,
-=======
->>>>>>> b467a42 (update code)
         fast_tokenized_prompt=observation.fast_tokenized_prompt,
         fast_tokenized_prompt_mask=observation.fast_tokenized_prompt_mask,
         fast_token_ar_mask=observation.fast_token_ar_mask,
         fast_token_loss_mask=observation.fast_token_loss_mask,
+        step_index=observation.step_index,
+        episode_T=observation.episode_T,
+        terminal_reward=observation.terminal_reward,
+        episode_index=observation.episode_index,
+        frame_index=observation.frame_index,
     )
 
 

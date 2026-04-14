@@ -12,11 +12,7 @@ temp_dir = "/root/openpi-umi/temp_test"
 
 if not os.path.exists(temp_dir):
     os.makedirs(temp_dir)
-<<<<<<< HEAD
     with zipfile.ZipFile("/root/openpi-umi/data/fold_clothes/dataset_no_filter_1_with_desk_height_new.zarr.zip", 'r') as zip_ref:
-=======
-    with zipfile.ZipFile("/root/openpi-umi/data/merge_fold_clothes_cyrus_20251229.zarr.zip", 'r') as zip_ref:
->>>>>>> b467a42 (update code)
             zip_ref.extractall(temp_dir)
     
     # Open zarr store

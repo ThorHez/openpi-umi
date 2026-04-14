@@ -186,3 +186,7 @@ debug_output/
 policy_records/
 
 .idea/
+
+*.png
+
+data_collection/

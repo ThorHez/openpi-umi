@@ -69,7 +69,6 @@ PALIGEMMA_VOCAB_SIZE = _gemma.PALIGEMMA_VOCAB_SIZE
 @dataclasses.dataclass(frozen=True)
 class Pi0DiscreteConfig(pi0_config.Pi0Config):
     """Configuration for Pi0.5 model with discrete action head.
-<<<<<<< HEAD
 
     Extends Pi0Config with options for the discrete action head used in hybrid training.
 
@@ -80,12 +79,6 @@ class Pi0DiscreteConfig(pi0_config.Pi0Config):
       is supported in compute_hybrid_loss and takes precedence over this config-level mask.
     """
 
-=======
-    
-    Extends Pi0Config with options for the discrete action head used in hybrid training.
-    """
-    
->>>>>>> b467a42 (update code)
     # Whether to enable discrete action head (for FAST-style token prediction)
     enable_discrete_head: bool = True
     
@@ -519,7 +512,6 @@ class Pi0Discrete(_pi0.Pi0):
         )
         v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
-<<<<<<< HEAD
         # Compute squared error per action dimension
         squared_error = jnp.square(v_t - u_t)  # (*batch, action_horizon, action_dim)
 
@@ -533,21 +525,11 @@ class Pi0Discrete(_pi0.Pi0):
             loss_per_timestep = jnp.sum(squared_error_masked, axis=-1) / jnp.squeeze(mask_sum, axis=-1)
         elif self.action_loss_mask is not None:
             # Config-level mask (single dataset)
-=======
-        # Compute loss
-        squared_error = jnp.square(v_t - u_t)
-        if self.action_loss_mask is not None:
->>>>>>> b467a42 (update code)
             mask = jnp.asarray(self.action_loss_mask)
             squared_error_masked = squared_error * mask
             loss_per_timestep = jnp.sum(squared_error_masked, axis=-1) / jnp.sum(mask)
         else:
             loss_per_timestep = jnp.mean(squared_error, axis=-1)
-<<<<<<< HEAD
-
-=======
-        
->>>>>>> b467a42 (update code)
         return loss_per_timestep
 
     def _compute_discrete_loss_with_cached_images(
@@ -627,8 +609,4 @@ from openpi.training import weight_loaders
 CheckpointWeightLoaderWithDiscreteHead = weight_loaders.CheckpointWeightLoaderWithDiscreteHead
 
 # Inference: Load hybrid-trained checkpoint into standard Pi0 model (ignores discrete_head)
-<<<<<<< HEAD
 CheckpointWeightLoaderIgnoreDiscreteHead = weight_loaders.CheckpointWeightLoaderIgnoreDiscreteHead
-=======
-CheckpointWeightLoaderIgnoreDiscreteHead = weight_loaders.CheckpointWeightLoaderIgnoreDiscreteHead
->>>>>>> b467a42 (update code)

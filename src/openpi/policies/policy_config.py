@@ -64,19 +64,21 @@ def create_trained_policy(
             and not isinstance(weight_loader, _weight_loaders.NoOpWeightLoader)
         )
         
-        if should_use_weight_loader:
-            logging.info("Using custom weight_loader from config: %s", type(weight_loader).__name__)
-            # 先创建模型获取参数结构（使用 eval_shape 避免实际分配内存）
-            model_shape = nnx.eval_shape(train_config.model.create, jax.random.key(0))
-            _, state = nnx.split(model_shape)
-            init_params = state.to_pure_dict()
-            # 使用 weight_loader 加载和合并权重
-            loaded_params = weight_loader.load(init_params)
-            model = train_config.model.load(loaded_params)
-        else:
-            # 默认行为：直接从 checkpoint 加载
-            model = _model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16)
-            model = train_config.model.load(model)
+        # if should_use_weight_loader:
+        #     logging.info("Using custom weight_loader from config: %s", type(weight_loader).__name__)
+        #     # 先创建模型获取参数结构（使用 eval_shape 避免实际分配内存）
+        #     model_shape = nnx.eval_shape(train_config.model.create, jax.random.key(0))
+        #     _, state = nnx.split(model_shape)
+        #     init_params = state.to_pure_dict()
+        #     # 使用 weight_loader 加载和合并权重
+        #     loaded_params = weight_loader.load(init_params)
+        #     model = train_config.model.load(loaded_params)
+        # else:
+        #     # 默认行为：直接从 checkpoint 加载
+        #     model = _model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16)
+        #     model = train_config.model.load(model)
+        model = _model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16)
+        model = train_config.model.load(model)
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
     if norm_stats is None:
         # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure
