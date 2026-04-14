@@ -126,6 +126,10 @@ class Observation(Generic[ArrayT]):
     # For value training with compute_normalized_value_targets (Option B).
     episode_index: at.Float[ArrayT, "*b"] | at.Int[ArrayT, "*b"] | None = None
     frame_index: at.Float[ArrayT, "*b"] | at.Int[ArrayT, "*b"] | None = None
+    # Precomputed scalar value target from dataset (optional; shape [B] or [B, 1]).
+    value_target: at.Float[ArrayT, "*b"] | at.Float[ArrayT, "*b 1"] | None = None
+    # LeRobot global row index (optional; kept by KeepModelKeys for some pipelines).
+    index: at.Float[ArrayT, "*b"] | at.Int[ArrayT, "*b"] | None = None
 
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "Observation[ArrayT]":
@@ -160,6 +164,8 @@ class Observation(Generic[ArrayT]):
             terminal_reward=data.get("terminal_reward"),
             episode_index=data.get("episode_index"),
             frame_index=data.get("frame_index"),
+            value_target=data.get("value_target"),
+            index=data.get("index"),
         )
 
     def to_dict(self) -> at.PyTree[ArrayT]:
@@ -201,6 +207,11 @@ def preprocess_observation(
             image = image_tools.resize_with_pad(image, *image_resolution)
 
         if train:
+            if rng is None:
+                # Stochastic augmax requires a key; skip augmentation if none (caller should pass rng).
+                out_images[key] = image
+                continue
+
             # Convert from [-1, 1] to [0, 1] for augmax.
             image = image / 2.0 + 0.5
 
@@ -259,6 +270,8 @@ def preprocess_observation(
         terminal_reward=observation.terminal_reward,
         episode_index=observation.episode_index,
         frame_index=observation.frame_index,
+        value_target=observation.value_target,
+        index=observation.index,
     )
 
 
@@ -368,13 +381,20 @@ def restore_params(
         metadata = ckptr.metadata(params_path)
         item = {"params": metadata["params"]}
 
+        def _restore_arg(meta):
+            target_dtype = None
+            if dtype is not None:
+                leaf_dtype = getattr(meta, "dtype", None)
+                # Only cast floating-point leaves; keep PRNG keys and integer metadata dtypes unchanged.
+                if leaf_dtype is not None and np.issubdtype(np.dtype(leaf_dtype), np.floating):
+                    target_dtype = dtype
+            return ocp.ArrayRestoreArgs(sharding=sharding, restore_type=restore_type, dtype=target_dtype)
+
         params = ckptr.restore(
             params_path,
             ocp.args.PyTreeRestore(
                 item=item,
-                restore_args=jax.tree.map(
-                    lambda _: ocp.ArrayRestoreArgs(sharding=sharding, restore_type=restore_type, dtype=dtype), item
-                ),
+                restore_args=jax.tree.map(_restore_arg, item),
             ),
         )["params"]
 

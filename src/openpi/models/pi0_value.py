@@ -1,319 +1,177 @@
-import logging
-import dataclasses
+"""Pi0 value model: value-only head on top of Pi0 backbone (pi0.py only, no Pi0Advantage).
 
-import einops
+Architecture follows Pistar06Model: pooled prefix from Pi0 -> LayerNorm (final_norm)
+-> value_head (Linear -> GELU -> Dropout -> Linear) -> logits over num_bins.
+"""
+
+import dataclasses
+import logging
+
 import flax.nnx as nnx
-import flax.nnx.bridge as nnx_bridge
 import jax
 import jax.numpy as jnp
 from typing_extensions import override
 
 from openpi.models import model as _model
 from openpi.models import pi0_config
+from openpi.models.pi0 import Pi0, make_attn_mask
 import openpi.models.gemma as _gemma
-import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
+import openpi.shared.nnx_utils as nnx_utils
 
 logger = logging.getLogger("openpi")
-
-# pi0.6-style distributional value: normalize to (-1, 0], discretize into 201 bins
-VALUE_BINS = 201
-VALUE_MIN = -1.0
-VALUE_MAX = 0.0
-
-
-def make_attn_mask(input_mask, mask_ar):
-    mask_ar = jnp.broadcast_to(mask_ar, input_mask.shape)
-    cumsum = jnp.cumsum(mask_ar, axis=1)
-    attn_mask = cumsum[:, None, :] <= cumsum[:, :, None]
-    valid_mask = input_mask[:, None, :] * input_mask[:, :, None]
-    return jnp.logical_and(attn_mask, valid_mask)
 
 
 @dataclasses.dataclass(frozen=True)
 class Pi0ValueConfig(pi0_config.Pi0Config):
-    """Prefix-only distributional value config.
+    """Config for Pi0Value: Pi0 backbone + value head. No action branch training."""
 
-    The model outputs per-sample value distribution [B, VALUE_BINS].
-    Target follows pi0.6 shaped reward and per-task normalization.
-    """
+    num_value_bins: int = 201
+    value_min: float = -1.0
+    value_max: float = 0.0
+    value_head_dropout: float = 0.1
+    soft_value_targets: bool = True
 
-    gamma: float = 1.0
-    c_fail_mult: float = 1.0  # C_fail = c_fail_mult * task_max_steps
-    task_max_steps: int = 1500  # Maximum steps for the task (used for normalization)
+    def get_freeze_filter_value_head_only(self) -> nnx.filterlib.Filter:
+        """Freeze Pi0 backbone; only value branch (final_norm, value_fc1, value_fc2, value_dropout) trainable."""
+        value_branch_regex = nnx_utils.PathRegex(
+            ".*(final_norm|value_fc1|value_fc2|value_dropout).*"
+        )
+        return nnx.Not(value_branch_regex)
 
     @override
     def create(self, rng: at.KeyArrayLike) -> "Pi0Value":
         return Pi0Value(self, rngs=nnx.Rngs(rng))
 
 
-class Pi0Value(_model.BaseModel):
-    """Prefix-only distributional value model (no action expert suffix).
+class Pi0Value(Pi0):
+    """Pi0 backbone + distributional value head only (no action branch training).
 
-    Output: logits [B, 201] for value/return in [VALUE_MIN, VALUE_MAX]=[-1,0].
-    Target: normalized Monte-Carlo return R_t0_norm for the current step t0.
-
-    Shaped reward (pi0.6):
-      r_t = -1 for t < T
-      r_T = 0 if success else -C_fail
-
-    Return:
-      R_t = sum_{t'=t}^T r_{t'} = -(T - t) + r_T
-
-    Normalization (per-task):
-      R_norm = clip(R / task_max_steps, -1, 0)
+    Based solely on pi0.py (Pi0). Encodes observation via prefix + dummy suffix,
+    pools prefix tokens, then final_norm -> value_head -> logits over value bins.
     """
 
     def __init__(self, config: Pi0ValueConfig, rngs: nnx.Rngs):
-        super().__init__(config.action_dim, config.action_horizon, config.max_token_len)
+        super().__init__(config, rngs)
+        self.num_value_bins = config.num_value_bins
+        self.value_min = config.value_min
+        self.value_max = config.value_max
+        self.value_head_dropout = config.value_head_dropout
+        self.soft_value_targets = config.soft_value_targets
 
-        self.gamma = float(getattr(config, "gamma", 1.0))
-        self.c_fail_mult = float(getattr(config, "c_fail_mult", 1.0))
-        self.task_max_steps = int(getattr(config, "task_max_steps", 100))
-
+        # Pooled prefix tokens are outputs of the first LLM (paligemma / VLM), not the action expert.
         paligemma_config = _gemma.get_config(config.paligemma_variant)
+        prefix_width = paligemma_config.width
 
-        # Backbone: we still instantiate as in repo; but we only feed prefix stream.
-        llm = nnx_bridge.ToNNX(
-            _gemma.Module(
-                configs=[paligemma_config],
-                embed_dtype=config.dtype,
-                adarms=False,
-            )
+        self.final_norm = nnx.LayerNorm(prefix_width, rngs=rngs)
+        self.value_fc1 = nnx.Linear(prefix_width, prefix_width, rngs=rngs)
+        self.value_dropout = nnx.Dropout(rate=config.value_head_dropout, rngs=rngs)
+        self.value_fc2 = nnx.Linear(prefix_width, config.num_value_bins, rngs=rngs)
+
+    # -------------------------------------------------------------------------
+    # Pooled prefix encoding (same idea as Pi0 forward, observation-only)
+    # -------------------------------------------------------------------------
+
+    def _encode_value_features(self, obs: _model.Observation) -> jnp.ndarray:
+        """Run prefix only through LLM (no action/suffix) and return masked mean-pooled prefix."""
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(obs)
+        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+        positions = jnp.cumsum(prefix_mask, axis=1) - 1
+
+        (prefix_out, _), _ = self.PaliGemma.llm(
+            [prefix_tokens, None],
+            mask=prefix_attn_mask,
+            positions=positions,
         )
-        llm.lazy_init(rngs=rngs, method="init", use_adarms=[False])
 
-        img = nnx_bridge.ToNNX(
-            _siglip.Module(
-                num_classes=paligemma_config.width,
-                variant="So400m/14",
-                pool_type="none",
-                scan=True,
-                dtype_mm=config.dtype,
-            )
-        )
-        img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
+        prefix_out = prefix_out.astype(jnp.float32)
+        prefix_mask_f = prefix_mask.astype(jnp.float32)
+        denom = jnp.maximum(jnp.sum(prefix_mask_f, axis=1, keepdims=True), 1.0)
+        pooled = jnp.sum(prefix_out * prefix_mask_f[..., None], axis=1) / denom
+        return pooled  # [B, paligemma width]
 
-        self.PaliGemma = nnx.Dict(llm=llm, img=img)
+    def _value_head_logits(self, x: jnp.ndarray) -> jnp.ndarray:
+        """Pistar06-style: Linear -> GELU -> Dropout -> Linear -> logits."""
+        x = self.value_fc1(x)
+        x = jax.nn.gelu(x)
+        x = self.value_dropout(x, deterministic=not self.deterministic)
+        x = self.value_fc2(x)
+        return x  # [B, num_value_bins]
 
-        width = paligemma_config.width
-        self.value_token = nnx.Param(jax.random.normal(rngs(), (1, width)) * 0.02)
-        self.value_head = nnx.Linear(width, VALUE_BINS, rngs=rngs)
+    def _value_targets_to_probs(self, values: jnp.ndarray) -> jnp.ndarray:
+        """Scalar targets -> two-hot bin probs. Matches project_values_to_bins (uniform bin_centers).
 
-        self.deterministic = True
-
-    # ---------- bins ----------
-    def _value_to_bins(self, values: at.Float[at.Array, "*b"]) -> at.Int[at.Array, "*b"]:
-        clipped = jnp.clip(values, VALUE_MIN, VALUE_MAX)
-        normalized = (clipped - VALUE_MIN) / (VALUE_MAX - VALUE_MIN + 1e-8)
-        bins = jnp.rint(normalized * (VALUE_BINS - 1)).astype(jnp.int32)
-        return jnp.clip(bins, 0, VALUE_BINS - 1)
-
-    def _bins_to_value(self, bins: at.Int[at.Array, "*b"]) -> at.Float[at.Array, "*b"]:
-        normalized = bins.astype(jnp.float32) / (VALUE_BINS - 1)
-        return normalized * (VALUE_MAX - VALUE_MIN) + VALUE_MIN
-
-    # ---------- prefix embedding ----------
-    @at.typecheck
-    def embed_prefix(
-        self, obs: _model.Observation
-    ) -> tuple[at.Float[at.Array, "b s emb"], at.Bool[at.Array, "b s"], at.Bool[at.Array, " s"]]:
-        input_mask = []
-        ar_mask = []
-        tokens = []
-
-        # images
-        for name in obs.images:
-            image_tokens, _ = self.PaliGemma.img(obs.images[name], train=False)
-            tokens.append(image_tokens)
-            input_mask.append(einops.repeat(obs.image_masks[name], "b -> b s", s=image_tokens.shape[1]))
-            ar_mask += [False] * image_tokens.shape[1]
-
-        # language
-        if obs.tokenized_prompt is not None:
-            tokenized_inputs = self.PaliGemma.llm(obs.tokenized_prompt, method="embed")
-            tokens.append(tokenized_inputs)
-            input_mask.append(obs.tokenized_prompt_mask)
-            ar_mask += [False] * tokenized_inputs.shape[1]
-
-        tokens = jnp.concatenate(tokens, axis=1)
-        input_mask = jnp.concatenate(input_mask, axis=1)
-        ar_mask = jnp.array(ar_mask)
-        return tokens, input_mask, ar_mask
-
-    # ---------- pi0.6 target ----------
-    def _extract_episode_info(self, obs: _model.Observation):
-        """Adapt these field names to your dataset."""
-        # terminal reward or success label at end of episode
-        if hasattr(obs, "terminal_reward"):
-            terminal_reward = obs.terminal_reward  # [B]
-        elif hasattr(obs, "reward"):
-            terminal_reward = obs.reward  # [B] (your dataset: only last frame has reward)
-        else:
-            raise AttributeError("Observation must have `terminal_reward` or `reward`.")
-
-        if not hasattr(obs, "step_index"):
-            raise AttributeError("Observation must have `step_index` (current timestep in episode).")
-        if not hasattr(obs, "episode_T"):
-            raise AttributeError("Observation must have `episode_T` (terminal timestep index).")
-
-        task_max_steps = self.task_max_steps
-
-        return terminal_reward, obs.step_index, obs.episode_T, task_max_steps
-
-    def _paper_return_target_scalar(self, obs: _model.Observation) -> at.Float[at.Array, "b"]:
-        """Return normalized scalar target R_norm(t0) in [-1,0] for current step t0."""
-        terminal_reward, step_index, episode_T, task_max_steps = self._extract_episode_info(obs)
-
-        # success criterion: >0 => success else failure (adjust if your labels differ)
-        success = terminal_reward > 0
-
-        t0 = step_index.astype(jnp.int32)            # [B]
-        T = episode_T.astype(jnp.int32)              # [B]
-        task_max = float(task_max_steps)             # scalar
-
-        # C_fail per-task (paper: constant; using proportional to max steps is robust)
-        C_fail = self.c_fail_mult * task_max
-        r_T = jnp.where(success, 0.0, -C_fail)       # [B]
-
-        remaining = (T - t0).astype(jnp.float32)     # [B]
-        remaining = jnp.maximum(remaining, 0.0)
-
-        R = -remaining + r_T                         # [B]
-
-        # normalize to [-1,0]
-        R_norm = R / (task_max + 1e-8)
-        R_norm = jnp.clip(R_norm, -1.0, 0.0)
-        return R_norm
-
-    # ---------- pooling ----------
-    def _pool_prefix(self, seq: jnp.ndarray, mask: jnp.ndarray) -> jnp.ndarray:
-        """Pool prefix sequence -> single embedding [B, emb].
-
-        Default: take the last valid token (works well for prefix-only).
+        values: [B], in [value_min, value_max].
+        Returns: [B, num_value_bins], two-hot with weights summing to 1.
         """
-        # mask: [B, S] bool
-        lengths = jnp.sum(mask, axis=1).astype(jnp.int32)           # [B]
-        last_idx = jnp.maximum(lengths - 1, 0)                      # [B]
-        return seq[jnp.arange(seq.shape[0]), last_idx, :]           # [B, emb]
+        v = jnp.clip(values, self.value_min, self.value_max)
+        # Uniform bins: step = (max - min) / (num_bins - 1), scaled = (v - min) / step
+        step = (self.value_max - self.value_min) / jnp.maximum(
+            float(self.num_value_bins - 1), 1.0
+        )
+        scaled = (v - self.value_min) / (step + 1e-8)
 
-    @override
-    def compute_loss(
-        self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
-    ) -> at.Float[at.Array, "*b"]:
-        preprocess_rng, _ = jax.random.split(rng, 2)
-        observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
+        if not self.soft_value_targets:
+            idx = jnp.rint(scaled).astype(jnp.int32)
+            idx = jnp.clip(idx, 0, self.num_value_bins - 1)
+            return jax.nn.one_hot(idx, self.num_value_bins, dtype=jnp.float32)
 
-        # prefix forward only
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        lo = jnp.floor(scaled).astype(jnp.int32)
+        lo = jnp.clip(lo, 0, self.num_value_bins - 1)
+        hi = jnp.clip(lo + 1, 0, self.num_value_bins - 1)
+        hi_w = jnp.clip(scaled - lo.astype(jnp.float32), 0.0, 1.0)
+        lo_w = 1.0 - hi_w
+        lo_oh = jax.nn.one_hot(lo, self.num_value_bins, dtype=jnp.float32)
+        hi_oh = jax.nn.one_hot(hi, self.num_value_bins, dtype=jnp.float32)
+        return lo_w[:, None] * lo_oh + hi_w[:, None] * hi_oh
 
-
-        B = prefix_tokens.shape[0]
-        v = jnp.broadcast_to(self.value_token.value[None, :, :], (B, 1, self.value_token.value.shape[-1]))
-        v_mask = jnp.ones((B, 1), dtype=jnp.bool_)
-
-        # 让 value token 在一个新 block（可以 attend 到 prefix）
-        v_ar = jnp.array([True])  # 新 block，能看之前所有 token
-
-        tokens = jnp.concatenate([prefix_tokens, v], axis=1)      # [B, S+1, emb]
-        mask = jnp.concatenate([prefix_mask, v_mask], axis=1)   # [B, S+1]
-        ar_mask = jnp.concatenate([prefix_ar_mask, v_ar], axis=0)  # [S+1]
-
-        # full attention within prefix
-        attn_mask = make_attn_mask(mask, ar_mask)
-        positions = jnp.cumsum(mask, axis=1) - 1
-
-        prefix_out, _ = self.PaliGemma.llm([tokens], mask=attn_mask, positions=positions, adarms_cond=[None])
-
-        v_out = prefix_out[:, -1, :]
-        value_logits = self.value_head(v_out)                      # [B, 201]
-
-        # scalar return target from pi0.6 shaped reward
-        R_norm = self._paper_return_target_scalar(observation)      # [B] in [-1,0]
-        target_bins = self._value_to_bins(R_norm)                   # [B]
-
-        log_probs = jax.nn.log_softmax(value_logits, axis=-1)       # [B, 201]
-        target_log_probs = jnp.take_along_axis(log_probs, target_bins[..., None], axis=-1)[..., 0]  # [B]
-        loss = -target_log_probs                                    # [B]
+    def _distribution_ce_loss(
+        self, logits: jnp.ndarray, target_probs: jnp.ndarray
+    ) -> jnp.ndarray:
+        """Cross-entropy between target probs and predicted logits. Shape [B, 1]."""
+        log_probs = jax.nn.log_softmax(logits, axis=-1)
+        loss = -jnp.sum(target_probs * log_probs, axis=-1, keepdims=True)
         return loss
 
-    @override
-    def sample_actions(
+    # -------------------------------------------------------------------------
+    # Public API for value training
+    # -------------------------------------------------------------------------
+
+    def forward_value_logits(self, obs: _model.Observation) -> jnp.ndarray:
+        """Observation -> pooled prefix -> final_norm -> value_head -> logits [B, num_bins]."""
+        obs = _model.preprocess_observation(None, obs, train=False)
+        feat = self._encode_value_features(obs)
+        feat = self.final_norm(feat)
+        return self._value_head_logits(feat)
+
+    def compute_value_loss_from_targets(
         self,
-        rng: at.KeyArrayLike,
-        observation: _model.Observation,
-        *,
-        num_steps: int | at.Int[at.Array, ""] = 10,
-        noise: at.Float[at.Array, "b ah ad"] | None = None,
-    ) -> _model.Actions:
-        raise NotImplementedError("Pi0Value predicts values/returns, not actions.")
-
-
-    # Add these methods inside your Pi0Value class (the prefix-only [B, 201] value model).
-
-    def _value_from_logits_expectation(
-        self, value_logits: at.Float[at.Array, "b vb"]
-    ) -> at.Float[at.Array, "b"]:
-        """Convert distributional logits [B, 201] -> scalar V_norm [B] via expectation."""
-        probs = jax.nn.softmax(value_logits, axis=-1)  # [B, 201]
-        bin_centers = jnp.linspace(VALUE_MIN, VALUE_MAX, VALUE_BINS, dtype=probs.dtype)  # [-1, 0]
-        return jnp.sum(probs * bin_centers[None, :], axis=-1)  # [B]
-
-
-    def _value_from_logits_map(
-        self, value_logits: at.Float[at.Array, "b vb"]
-    ) -> at.Float[at.Array, "b"]:
-        """Convert logits [B, 201] -> scalar V_norm [B] via MAP bin (argmax)."""
-        bins = jnp.argmax(value_logits, axis=-1).astype(jnp.float32)  # [B]
-        normalized = bins / (VALUE_BINS - 1.0)
-        return normalized * (VALUE_MAX - VALUE_MIN) + VALUE_MIN       # [B]
-
-
-    def compute_advantage(
-        self,
-        rng: at.KeyArrayLike,
-        observation: _model.Observation,
+        obs: _model.Observation,
+        value_targets_scalar: at.Float[at.Array, " b"],
         *,
         train: bool = False,
-        value_reduce: str = "expectation",  # "expectation" | "map"
-        stopgrad_value: bool = True,
-    ) -> tuple[at.Float[at.Array, "b"], at.Float[at.Array, "b"], at.Float[at.Array, "b"]]:
-        preprocess_rng, _ = jax.random.split(rng, 2)
-        obs = _model.preprocess_observation(preprocess_rng, observation, train=train)
+        rng: at.KeyArrayLike | None = None,
+    ) -> at.Float[at.Array, "b 1"]:
+        """Compute distributional CE loss from precomputed scalar value targets.
 
-        # 1) Return target (normalized)
-        R_norm = self._paper_return_target_scalar(obs)  # [B] in [-1, 0]
+        value_targets_scalar: shape [B], in [value_min, value_max] (e.g. from
+        compute_normalized_value_targets).
+        """
+        obs = _model.preprocess_observation(rng, obs, train=train)
+        feat = self._encode_value_features(obs)
+        feat = self.final_norm(feat)
+        logits = self._value_head_logits(feat)
+        target_probs = self._value_targets_to_probs(value_targets_scalar)
+        return self._distribution_ce_loss(logits, target_probs)
 
-        # 2) Forward exactly like compute_loss (prefix + value token)
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(obs)
-
-        B = prefix_tokens.shape[0]
-        v = jnp.broadcast_to(self.value_token.value[None, :, :], (B, 1, self.value_token.value.shape[-1]))
-        v_mask = jnp.ones((B, 1), dtype=jnp.bool_)
-        v_ar = jnp.array([True])
-
-        tokens = jnp.concatenate([prefix_tokens, v], axis=1)
-        mask = jnp.concatenate([prefix_mask, v_mask], axis=1)
-        ar_mask = jnp.concatenate([prefix_ar_mask, v_ar], axis=0)
-
-        attn_mask = make_attn_mask(mask, ar_mask)
-        positions = jnp.cumsum(mask, axis=1) - 1
-
-        (out_list, _kv) = self.PaliGemma.llm([tokens], mask=attn_mask, positions=positions, adarms_cond=[None])
-        prefix_out = out_list[0]
-        v_out = prefix_out[:, -1, :]
-        value_logits = self.value_head(v_out)  # [B, 201]
-
-        # 3) logits -> scalar V_norm
-        if value_reduce == "map":
-            V_norm = self._value_from_logits_map(value_logits)
-        else:
-            V_norm = self._value_from_logits_expectation(value_logits)
-
-        if stopgrad_value:
-            V_norm = jax.lax.stop_gradient(V_norm)
-
-        # 4) Advantage (MC): A = R - V
-        A_norm = R_norm - V_norm
-        return A_norm, R_norm, V_norm
-
+    def expected_value_from_logits(self, logits: jnp.ndarray) -> jnp.ndarray:
+        """E[V] from categorical logits. Returns shape [B, 1]."""
+        centers = jnp.linspace(
+            float(self.value_min),
+            float(self.value_max),
+            int(self.num_value_bins),
+            dtype=jnp.float32,
+        )
+        probs = jax.nn.softmax(logits, axis=-1)
+        value = jnp.sum(probs * centers[None, :], axis=-1, keepdims=True)
+        return value

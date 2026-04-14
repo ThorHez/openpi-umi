@@ -8,6 +8,37 @@ from typing import Dict, Any, List, Tuple, Set
 import yaml
 import re
 
+# pyarrow / HF datasets dtype aliases that need normalization.
+# "str" is a NumPy alias, but pyarrow expects "string".
+_DTYPE_ALIASES = {
+    "str": "string",
+    "str_": "string",
+    "unicode": "string",
+    "unicode_": "string",
+}
+
+# dtypes that pyarrow Array2D/3D/4D/5D extension types cannot store.
+# For these we fall back to a compatible numeric type.
+_ARRAY_ND_INCOMPATIBLE = {
+    "bool": "int8",
+}
+
+
+def normalize_dtype(dtype: str, ndim: int = 0) -> str:
+    """Normalize a config dtype to one that HF datasets / pyarrow accepts.
+
+    Args:
+        dtype: Raw dtype string from the YAML config.
+        ndim: Number of dimensions of the feature shape.  When >= 2 the
+              feature will be stored as Array2D+ which has extra restrictions.
+    """
+    if not isinstance(dtype, str):
+        return dtype
+    dtype = _DTYPE_ALIASES.get(dtype, dtype)
+    if ndim >= 2:
+        dtype = _ARRAY_ND_INCOMPATIBLE.get(dtype, dtype)
+    return dtype
+
 
 def load_dataset_config(config_path: str) -> Dict[str, Any]:
     """
@@ -138,18 +169,21 @@ def build_features_from_config(
     
     features = {}
     
-    # 处理普通特征
-    for feature_name, feature_def in config.get("features", {}).items():
+    # 处理普通特征 + 单帧特征
+    feature_sections = [config.get("features", {}), config.get("single_frame_features", {})]
+    for section in feature_sections:
+        for feature_name, feature_def in section.items():
         # 根据启用的机器人自动判断特征是否启用
-        if not is_feature_enabled(feature_name, enabled_robot_ids):
-            continue
-            
-        shape = parse_shape(feature_def["shape"], variables)
-        features[feature_name] = {
-            "dtype": feature_def["dtype"],
-            "shape": shape,
-            "names": feature_def.get("names", [feature_name]),
-        }
+            if not is_feature_enabled(feature_name, enabled_robot_ids):
+                continue
+
+            shape = parse_shape(feature_def["shape"], variables)
+            dtype = normalize_dtype(feature_def["dtype"], ndim=len(shape))
+            features[feature_name] = {
+                "dtype": dtype,
+                "shape": shape,
+                "names": feature_def.get("names", [feature_name]),
+            }
     
     # 处理图像特征
     for image_name, image_def in config.get("images", {}).items():
@@ -159,17 +193,18 @@ def build_features_from_config(
             
         shape = tuple(image_def["shape"])
         
+        img_dtype = normalize_dtype(image_def["dtype"], ndim=len(shape))
+
         if image_def.get("per_timestep", False):
-            # 为每个时间步生成独立的图像特征
             for i in range(img_obs_horizon):
                 features[f"{image_name}_{i}"] = {
-                    "dtype": image_def["dtype"],
+                    "dtype": img_dtype,
                     "shape": shape,
                     "names": ["height", "width", "channel"],
                 }
         else:
             features[image_name] = {
-                "dtype": image_def["dtype"],
+                "dtype": img_dtype,
                 "shape": shape,
                 "names": ["height", "width", "channel"],
             }
@@ -193,9 +228,10 @@ def get_enabled_features(config: Dict[str, Any]) -> List[str]:
     img_obs_horizon = config.get("dataset", {}).get("img_obs_horizon", 2)
     enabled = []
     
-    for feature_name in config.get("features", {}).keys():
-        if is_feature_enabled(feature_name, enabled_robot_ids):
-            enabled.append(feature_name)
+    for section_name in ("features", "single_frame_features"):
+        for feature_name in config.get(section_name, {}).keys():
+            if is_feature_enabled(feature_name, enabled_robot_ids):
+                enabled.append(feature_name)
             
     for image_name, image_def in config.get("images", {}).items():
         if is_feature_enabled(image_name, enabled_robot_ids):

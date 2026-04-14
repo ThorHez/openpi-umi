@@ -8,7 +8,7 @@ dataset:
   action_horizon: 16        # 动作预测长度
   action_dim: 10            # 动作维度 (每个机器人)
   low_dim_obs_horizon: 2    # 低维观测长度
-  img_obs_horizon: 2        # 图像观测长度
+  img_obs_horizon: 1        # 图像观测长度
   obs_down_sample_steps: 3  # 观测下采样步长
 
 # 从原始数据集加载的字段
@@ -60,6 +60,11 @@ features:
     dtype: "float32"
     shape: ["{low_dim_obs_horizon}", 6]
     description: "Robot0 末端执行器旋转 (6D表示)"
+
+  robot0_eef_pos_wrt_start:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 3]
+    description: "Robot0 相对起始的位置"
     
   robot0_eef_rot_axis_angle_wrt_start:
     dtype: "float32"
@@ -81,6 +86,11 @@ features:
     dtype: "float32"
     shape: ["{low_dim_obs_horizon}", 6]
     description: "Robot1 末端执行器旋转 (6D表示)"
+
+  robot1_eef_pos_wrt_start:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 3]
+    description: "Robot1 相对起始的位置"
     
   robot1_eef_rot_axis_angle_wrt_start:
     dtype: "float32"

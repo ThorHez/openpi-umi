@@ -1,3 +1,12 @@
+import os
+from pathlib import Path
+
+# Avoid / or overlay filling up: use $HOME/tmp for temp files if TMPDIR not set.
+if "TMPDIR" not in os.environ:
+    _tmp = Path(os.environ.get("HOME", "/root")) / "tmp"
+    _tmp.mkdir(parents=True, exist_ok=True)
+    os.environ["TMPDIR"] = os.environ["TEMP"] = os.environ["TMP"] = str(_tmp)
+
 import dataclasses
 import functools
 import logging
@@ -245,9 +254,7 @@ def train_step(
     if state.ema_decay is not None:
         new_state = dataclasses.replace(
             new_state,
-            ema_params=jax.tree.map(
-                lambda old, new: state.ema_decay * old + (1 - state.ema_decay) * new, state.ema_params, new_params
-            ),
+            ema_params=training_utils.ema_merge_trees(state.ema_decay, state.ema_params, new_params),
         )
 
     # Filter out params that aren't kernels.

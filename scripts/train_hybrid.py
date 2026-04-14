@@ -13,8 +13,19 @@ where:
 Usage:
     python scripts/train_hybrid.py --config pi05_umi_hybrid --exp_name my_experiment
 
-Author: OpenPI Team (Extended for hybrid training)
+To avoid / or overlay filling up (e.g. in containers): set TMPDIR to a path on a disk with space
+before running, e.g.  export TMPDIR=/root/tmp  (and mkdir -p /root/tmp). This script also sets
+TMPDIR to $HOME/tmp if unset, so temp and JAX PTX writes go there instead of /tmp.
 """
+
+import os
+from pathlib import Path
+
+# Set TMPDIR/TEMP/TMP to a path under home before any lib (e.g. JAX) uses /tmp; avoids filling root.
+if "TMPDIR" not in os.environ:
+    _tmp = Path(os.environ.get("HOME", "/root")) / "tmp"
+    _tmp.mkdir(parents=True, exist_ok=True)
+    os.environ["TMPDIR"] = os.environ["TEMP"] = os.environ["TMP"] = str(_tmp)
 
 import dataclasses
 import functools

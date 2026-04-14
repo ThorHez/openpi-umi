@@ -530,6 +530,7 @@ class Pi0Discrete(_pi0.Pi0):
             loss_per_timestep = jnp.sum(squared_error_masked, axis=-1) / jnp.sum(mask)
         else:
             loss_per_timestep = jnp.mean(squared_error, axis=-1)
+
         return loss_per_timestep
 
     def _compute_discrete_loss_with_cached_images(

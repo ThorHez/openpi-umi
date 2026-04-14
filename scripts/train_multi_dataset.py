@@ -14,6 +14,15 @@ For single-dataset configs this script behaves identically to train.py.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
+# Avoid / or overlay filling up: use $HOME/tmp for temp files if TMPDIR not set.
+if "TMPDIR" not in os.environ:
+    _tmp = Path(os.environ.get("HOME", "/root")) / "tmp"
+    _tmp.mkdir(parents=True, exist_ok=True)
+    os.environ["TMPDIR"] = os.environ["TEMP"] = os.environ["TMP"] = str(_tmp)
+
 import dataclasses
 import functools
 import logging
@@ -169,26 +178,26 @@ def main(config: _config.TrainConfig, *, data_loader=None):
 
         if is_anomaly:
             import pickle
-            anomaly_file = anomaly_dir / f"step_{step:06d}_{current_loss:.4f}.pkl"
+            # anomaly_file = anomaly_dir / f"step_{step:06d}_{current_loss:.4f}.pkl"
             pbar.write(f"⚠️  ANOMALY DETECTED at step {step}: {anomaly_reason}")
-            pbar.write(f"   Saving data to {anomaly_file}")
+            # pbar.write(f"   Saving data to {anomaly_file}")
 
-            batch_cpu = jax.device_get(batch)
-            anomaly_data = {
-                "step": step,
-                "loss": current_loss,
-                "loss_history": loss_history[-20:],
-                "reason": anomaly_reason,
-                "observation": batch_cpu[0],
-                "actions": batch_cpu[1],
-                "info": jax.device_get(info),
-            }
+            # batch_cpu = jax.device_get(batch)
+            # anomaly_data = {
+            #     "step": step,
+            #     "loss": current_loss,
+            #     "loss_history": loss_history[-20:],
+            #     "reason": anomaly_reason,
+            #     "observation": batch_cpu[0],
+            #     "actions": batch_cpu[1],
+            #     "info": jax.device_get(info),
+            # }
 
-            with open(anomaly_file, "wb") as f:
-                pickle.dump(anomaly_data, f)
-            pbar.write(f"   ✓ Anomaly data saved!")
+            # with open(anomaly_file, "wb") as f:
+            #     pickle.dump(anomaly_data, f)
+            # pbar.write(f"   ✓ Anomaly data saved!")
 
-        stats_interval = 1000
+        stats_interval = 10000
         if step > 0 and step % stats_interval == 0 and len(loss_history) > 10:
             import pickle
             stats_dir = config.checkpoint_dir / "periodic_stats"

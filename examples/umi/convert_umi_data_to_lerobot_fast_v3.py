@@ -92,15 +92,28 @@ except ImportError:
     exit(1)
 
 
-def load_zarr_dataset(zarr_zip_path: str) -> Tuple[zarr.Group, str]:
-    """Extract and open UMI zarr dataset from zip. Returns (root, temp_dir)."""
-    print(f"Loading zarr dataset from: {zarr_zip_path}")
+def load_zarr_dataset(zarr_path: str) -> Tuple[zarr.Group, str, bool]:
+    """
+    Open UMI zarr dataset from a .zip file or an uncompressed .zarr directory.
+    Returns (root, path_for_workers, is_temp_dir).
+    - If zarr_path is a directory: open it directly, path_for_workers=zarr_path, is_temp_dir=False.
+    - If zarr_path is a zip: extract to temp, path_for_workers=temp_dir, is_temp_dir=True (caller should rmtree).
+    """
+    zarr_path = str(zarr_path)
+    path = Path(zarr_path)
+    print(f"Loading zarr dataset from: {zarr_path}")
+    if path.is_dir():
+        root = zarr.open(zarr_path, mode="r")
+        print("Using uncompressed zarr directory.")
+        return root, zarr_path, False
+    if not path.exists():
+        raise FileNotFoundError(f"Zarr path not found: {zarr_path}")
     temp_dir = tempfile.mkdtemp(dir="/root")
-    print(f"Extracting to temporary directory: {temp_dir}")
-    with zipfile.ZipFile(zarr_zip_path, 'r') as zip_ref:
+    print(f"Extracting zip to temporary directory: {temp_dir}")
+    with zipfile.ZipFile(zarr_path, "r") as zip_ref:
         zip_ref.extractall(temp_dir)
-    root = zarr.open(temp_dir, mode='r')
-    return root, temp_dir
+    root = zarr.open(temp_dir, mode="r")
+    return root, temp_dir, True
 
 
 def preload_episode_data(root, episode_start: int, episode_end: int, dataset_config: Dict = None) -> Dict[str, np.ndarray]:
@@ -138,7 +151,10 @@ def _build_output_frame_dict_batch(
     """Build list of per-frame output dicts from batched data. data_batch has arrays with shape (T, ...)."""
     T = data_batch['robot0_eef_pos'].shape[0]
     img_obs_horizon = (dataset_config or {}).get("dataset", {}).get("img_obs_horizon", 2)
-    features_config = (dataset_config or {}).get("features", {})
+    features_config = {
+        **(dataset_config or {}).get("features", {}),
+        **(dataset_config or {}).get("single_frame_features", {}),
+    }
     images_config = (dataset_config or {}).get("images", {})
 
     frames = []
@@ -155,13 +171,20 @@ def _build_output_frame_dict_batch(
                 if source_key is None or source_key not in data_batch:
                     continue
                 source_data = data_batch[source_key][t]
-                if source_data.dtype != np.uint8:
+                feat_dtype = image_def.get("dtype", "image")
+                if feat_dtype == "image" and source_data.dtype != np.uint8:
                     source_data = (source_data * 255).astype(np.uint8) if source_data.max() <= 1.0 else source_data.astype(np.uint8)
+                expected_ndim = len(image_def.get("shape", []))
                 per_timestep = image_def.get("per_timestep", False)
                 if per_timestep:
                     for i in range(img_obs_horizon):
-                        output_data[f"{feature_name}_{i}"] = source_data[i] if i < len(source_data) else source_data[-1]
+                        frame = source_data[i] if i < len(source_data) else source_data[-1]
+                        if expected_ndim > 0 and frame.ndim < expected_ndim:
+                            frame = np.expand_dims(frame, axis=-1)
+                        output_data[f"{feature_name}_{i}"] = frame
                 else:
+                    if expected_ndim > 0 and source_data.ndim < expected_ndim:
+                        source_data = np.expand_dims(source_data, axis=-1)
                     output_data[feature_name] = source_data
         else:
             output_data = {
@@ -247,6 +270,7 @@ def generate_robot_data_frame_batch(
         base = start_pose_mat
         rel_mat = np.linalg.inv(base)[:, np.newaxis, :, :] @ pose_mat
         rel_pose = mat_to_pose10d(rel_mat)
+        batch[f'robot{robot_id}_eef_pos_wrt_start'] = rel_pose[:, :, :3].astype(np.float32)
         batch[f'robot{robot_id}_eef_rot_axis_angle_wrt_start'] = rel_pose[:, :, 3:].astype(np.float32)
 
     # actions and obs relative to current
@@ -306,6 +330,7 @@ def _write_one_episode_parquet(
             continue
         ft = features.get(key, {})
         if ft.get("dtype") in ["image", "video"]:
+            # Write to images/ so embed_images() can read paths; images/ is removed at end to avoid 2x storage.
             paths = []
             for i, frame_data in enumerate(frames):
                 if key not in frame_data:
@@ -324,11 +349,22 @@ def _write_one_episode_parquet(
         elif ft.get("dtype") not in ("string",):
             arrs = [np.asarray(f[key]) for f in frames if key in f]
             if arrs:
-                episode_buffer[key] = np.stack(arrs)
+                stacked = np.stack(arrs)
+                expected_dtype = ft.get("dtype")
+                if stacked.dtype == np.bool_ and expected_dtype and expected_dtype != "bool":
+                    stacked = stacked.astype(np.dtype(expected_dtype))
+                expected_shape = tuple(ft.get("shape", ()))
+                if expected_shape and stacked.shape[1:] != expected_shape:
+                    try:
+                        stacked = stacked.reshape((-1,) + expected_shape)
+                    except ValueError:
+                        pass
+                episode_buffer[key] = stacked
 
     episode_dict = {k: episode_buffer[k] for k in hf_features if k in episode_buffer}
+    ep_hf_features = datasets.Features({k: v for k, v in hf_features.items() if k in episode_dict})
     ep_dataset = datasets.Dataset.from_dict(
-        episode_dict, features=hf_features, split="train"
+        episode_dict, features=ep_hf_features, split="train"
     )
     ep_dataset = embed_images(ep_dataset)
     chunk = ep_idx // 1000
@@ -418,7 +454,7 @@ def convert_to_lerobot(
     if num_workers is None:
         num_workers = min(cpu_count(), 16)
     print(f"Using {num_workers} worker processes (each loads from zarr, no large data transfer)")
-    root, temp_dir = load_zarr_dataset(zarr_path)
+    root, zarr_root_path, is_temp_zarr = load_zarr_dataset(zarr_path)
     try:
         data = root['data']
         meta = root['meta']
@@ -474,7 +510,7 @@ def convert_to_lerobot(
             if chunk:
                 chunks.append(chunk)
         worker_args = [
-            (temp_dir, config_path, chunk, episode_ranges, task)
+            (zarr_root_path, config_path, chunk, episode_ranges, task)
             for chunk in chunks
         ]
 
@@ -535,6 +571,12 @@ def convert_to_lerobot(
                 futures.append((ep_idx, fut))
             for _ep_idx, fut in tqdm(futures, desc="Writing", unit="episode"):
                 fut.result()
+        # Remove images/ to avoid duplicate storage: embed_images() already embedded
+        # image bytes into parquet, so images/ is redundant and doubles disk usage.
+        images_dir = root_path / "images"
+        if images_dir.exists():
+            shutil.rmtree(images_dir)
+            print("Removed images/ (images are stored in parquet only, no duplicate).")
         # Update meta info (total_episodes, total_frames, etc.)
         info = load_info(root_path)
         info["total_episodes"] = num_episodes
@@ -562,16 +604,18 @@ def convert_to_lerobot(
         else:
             print("\nTo push later: LeRobotDataset(..., root=...).push_to_hub(repo_id)")
     finally:
-        print("Cleaning up temporary files...")
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        if is_temp_zarr:
+            print("Cleaning up temporary files...")
+            shutil.rmtree(zarr_root_path, ignore_errors=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Convert UMI zarr to LeRobot (fast v3)")
-    parser.add_argument("--input", type=str, required=True, help="Path to input zarr zip")
+    parser.add_argument("--input", type=str, required=True,
+                        help="Path to input zarr: .zip file or uncompressed .zarr directory")
     parser.add_argument("--output", type=str, required=True, help="Output directory for LeRobot dataset")
     parser.add_argument("--repo-id", type=str, required=True, help="HuggingFace repo ID")
-    parser.add_argument("--fps", type=int, default=20)
+    parser.add_argument("--fps", type=int, default=60)
     parser.add_argument("--task", type=str, required=True)
     parser.add_argument("--push-to-hub", action="store_true")
     parser.add_argument("--workers", type=int, default=None)

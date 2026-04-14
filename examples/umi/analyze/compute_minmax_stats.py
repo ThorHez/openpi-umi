@@ -75,13 +75,33 @@ def compute_minmax_stats(dataset_path: str, max_episodes: int = None, verbose: b
         features = info.get('features', {})
         print(f"  Features: {list(features.keys())}")
         
+<<<<<<< HEAD
         # Extract expected shapes
+=======
+        # Extract expected shapes and identify columns to skip (images / depth)
+        skip_columns = {'episode_index', 'frame_index', 'timestamp', 'index', 'task_index'}
+>>>>>>> origin/recap
         for fname, finfo in features.items():
             if 'shape' in finfo:
                 feature_shapes[fname] = tuple(finfo['shape'])
                 if verbose:
                     print(f"    {fname}: shape={finfo['shape']}, dtype={finfo.get('dtype', 'N/A')}")
+<<<<<<< HEAD
     
+=======
+            fdtype = finfo.get('dtype', '')
+            fshape = tuple(finfo.get('shape', []))
+            if fdtype == 'image' or (len(fshape) >= 2 and fshape[0] >= 64 and fshape[1] >= 64):
+                skip_columns.add(fname)
+                if verbose:
+                    print(f"    (skipping {fname}: large spatial data)")
+    
+    if not info_path.exists():
+        skip_columns = {'episode_index', 'frame_index', 'timestamp', 'index', 'task_index'}
+
+    print(f"  Columns to skip: {sorted(skip_columns)}")
+
+>>>>>>> origin/recap
     # Find all parquet files
     data_dir = dataset_path / "data"
     parquet_files = sorted(data_dir.glob("**/*.parquet"))
@@ -108,9 +128,13 @@ def compute_minmax_stats(dataset_path: str, max_episodes: int = None, verbose: b
         table = pq.read_table(parquet_file)
         
         for column_name in table.column_names:
+<<<<<<< HEAD
             # Skip metadata columns
             if column_name in ['episode_index', 'frame_index', 'timestamp', 'index', 'task_index', 
             'observation.left_wrist_0_rgb_0', 'observation.left_wrist_0_rgb_1']:
+=======
+            if column_name in skip_columns:
+>>>>>>> origin/recap
                 continue
             
             column = table.column(column_name)
@@ -163,6 +187,9 @@ def compute_minmax_stats(dataset_path: str, max_episodes: int = None, verbose: b
                         continue
                     
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> origin/recap
                     # Actions: shape (N, horizon, action_dim) -> aggregate over horizon, stats per action_dim only
                     if column_name == "actions" and stacked.ndim == 3:
                         # stacked: (num_frames, horizon, action_dim)
@@ -174,6 +201,7 @@ def compute_minmax_stats(dataset_path: str, max_episodes: int = None, verbose: b
                         sample_shape = stacked.shape[1:]
                         flat = stacked.reshape(len(stacked), -1).astype(np.float64)
                     
+<<<<<<< HEAD
 =======
                     # Compute per-dimension min/max
                     sample_shape = stacked.shape[1:]
@@ -181,6 +209,8 @@ def compute_minmax_stats(dataset_path: str, max_episodes: int = None, verbose: b
                     # Flatten for min/max computation
                     flat = stacked.reshape(len(stacked), -1).astype(np.float64)
 >>>>>>> b467a42 (update code)
+=======
+>>>>>>> origin/recap
                     current_min = flat.min(axis=0)
                     current_max = flat.max(axis=0)
                     
@@ -196,10 +226,14 @@ def compute_minmax_stats(dataset_path: str, max_episodes: int = None, verbose: b
                     # 收集所有值用于计算分位数
                     stats[column_name]["all_values"].append(flat)
 <<<<<<< HEAD
+<<<<<<< HEAD
                     stats[column_name]["count"] += len(flat)
 =======
                     stats[column_name]["count"] += len(stacked)
 >>>>>>> b467a42 (update code)
+=======
+                    stats[column_name]["count"] += len(flat)
+>>>>>>> origin/recap
                 
                 # Scalar columns
                 elif isinstance(first_val, (int, float, np.number)):

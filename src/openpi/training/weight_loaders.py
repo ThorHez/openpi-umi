@@ -113,76 +113,48 @@ class CheckpointWeightLoaderIgnoreDiscreteHead(WeightLoader):
     """
     
     params_path: str
-    verbose: bool = True  # 是否显示详细的层名称
     
     def load(self, params: at.Params) -> at.Params:
-        print("=" * 60)
-        print("CheckpointWeightLoaderIgnoreDiscreteHead: Loading weights")
-        print(f"Checkpoint path: {self.params_path}")
-        print("=" * 60)
-        
         loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
-        
-        # 展示所有层名称
-        if self.verbose:
-            self._display_layer_names(loaded_params, params)
-        
         return _merge_params_ignore_extra(loaded_params, params)
-    
-    def _display_layer_names(self, loaded_params: at.Params, target_params: at.Params) -> None:
-        """展示所有层的名称，分类显示加载、忽略和缺失的层。"""
-        flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
-        flat_target = flax.traverse_util.flatten_dict(target_params, sep="/")
-        
-        # 分类层
-        loaded_keys = []  # 成功加载的层
-        ignored_keys = []  # 被忽略的层（checkpoint有但target没有）
-        missing_keys = []  # 缺失的层（target有但checkpoint没有）
-        
-        for k in flat_loaded:
-            if k in flat_target:
-                loaded_keys.append(k)
-            else:
-                ignored_keys.append(k)
-        
-        for k in flat_target:
-            if k not in flat_loaded:
-                missing_keys.append(k)
-        
-        # 显示统计摘要
-        print("-" * 60)
-        print("Layer Statistics:")
-        print(f"  Total layers in checkpoint: {len(flat_loaded)}")
-        print(f"  Total layers in target model: {len(flat_target)}")
-        print(f"  Layers to be loaded: {len(loaded_keys)}")
-        print(f"  Layers to be ignored: {len(ignored_keys)}")
-        print(f"  Missing layers (use random init): {len(missing_keys)}")
-        print("-" * 60)
-        
-        # 显示所有成功加载的层
-        print(f"\n[LOADED LAYERS] ({len(loaded_keys)} layers):")
-        for i, k in enumerate(sorted(loaded_keys)):
-            shape = flat_loaded[k].shape
-            dtype = flat_loaded[k].dtype
-            print(f"  [{i + 1:4d}] {k} | shape={shape}, dtype={dtype}")
-        
-        # 显示被忽略的层
-        if ignored_keys:
-            print(f"\n[IGNORED LAYERS] ({len(ignored_keys)} layers) - not needed for inference:")
-            for i, k in enumerate(sorted(ignored_keys)):
-                shape = flat_loaded[k].shape
-                dtype = flat_loaded[k].dtype
-                print(f"  [{i + 1:4d}] {k} | shape={shape}, dtype={dtype}")
-        
-        # 显示缺失的层
-        if missing_keys:
-            print(f"\n[MISSING LAYERS] ({len(missing_keys)} layers) - will use random init:")
-            for i, k in enumerate(sorted(missing_keys)):
-                shape = flat_target[k].shape
-                dtype = flat_target[k].dtype
-                print(f"  [{i + 1:4d}] {k} | shape={shape}, dtype={dtype}")
-        
-        print("=" * 60)
+
+
+@dataclasses.dataclass(frozen=True)
+class CheckpointWeightLoaderWithValueHead(WeightLoader):
+    """Loads weights from a checkpoint, gracefully handling missing value head weights.
+
+    When loading from a pretrained Pi0/Pi0.5 checkpoint into a Pi0Value model,
+    the value head weights (final_norm, value_fc1, value_fc2, value_dropout)
+    will be kept as randomly initialized.
+    """
+
+    params_path: str
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
+        return _merge_params(loaded_params, params, missing_regex=r".*(lora|final_norm|value_fc1|value_fc2|value_dropout).*")
+
+
+@dataclasses.dataclass(frozen=True)
+class CheckpointWeightLoaderWithGripperHead(WeightLoader):
+    """Loads weights from a checkpoint, gracefully handling missing binary gripper head weights."""
+
+    params_path: str
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
+        return _merge_params(loaded_params, params, missing_regex=r".*(lora|gripper_binary_head).*")
+
+
+@dataclasses.dataclass(frozen=True)
+class CheckpointWeightLoaderIgnoreGripperHead(WeightLoader):
+    """Loads a gripper-head checkpoint into a standard Pi0/Pi0.5 model, ignoring the extra head."""
+
+    params_path: str
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
+        return _merge_params_ignore_extra(loaded_params, params)
 
 
 def _merge_params_ignore_extra(loaded_params: at.Params, params: at.Params) -> at.Params:
@@ -223,11 +195,14 @@ def _merge_params_ignore_extra(loaded_params: at.Params, params: at.Params) -> a
     if ignored_keys:
         logger.info("Ignored %d weights from checkpoint (not needed for inference):", len(ignored_keys))
         discrete_head_keys = [k for k in ignored_keys if "discrete_head" in k]
+        gripper_head_keys = [k for k in ignored_keys if "gripper_binary_head" in k]
         lora_keys = [k for k in ignored_keys if "lora" in k]
-        other_keys = [k for k in ignored_keys if k not in discrete_head_keys and k not in lora_keys]
+        other_keys = [k for k in ignored_keys if k not in discrete_head_keys and k not in gripper_head_keys and k not in lora_keys]
         
         if discrete_head_keys:
             logger.info("  - discrete_head weights: %d", len(discrete_head_keys))
+        if gripper_head_keys:
+            logger.info("  - gripper_binary_head weights: %d", len(gripper_head_keys))
         if lora_keys:
             logger.info("  - lora weights: %d", len(lora_keys))
         if other_keys:

@@ -5,6 +5,10 @@ Same as train_hybrid.py but creates a multi-dataset data loader when config.data
 is MultiDataConfigFactory (multiple LeRobot datasets with optional per-dataset weights).
 Checkpoint saving stores norm_stats for each dataset under its asset_id.
 
+Norm stats: When use_merged_norm_stats=True (default on MultiDataConfigFactory), each
+dataset's norm_stats are merged (weighted by config.weights) and applied to all
+datasets so state/actions are normalized consistently.
+
 Usage:
     python scripts/train_multi_dataset.py --config pi05_umi_multi_dataset --exp_name multi_task_v1
 
@@ -12,6 +16,15 @@ For single-dataset configs this script behaves identically to train_hybrid.py.
 """
 
 from __future__ import annotations
+
+import os
+from pathlib import Path
+
+# Avoid / or overlay filling up: use $HOME/tmp for temp files if TMPDIR not set.
+if "TMPDIR" not in os.environ:
+    _tmp = Path(os.environ.get("HOME", "/root")) / "tmp"
+    _tmp.mkdir(parents=True, exist_ok=True)
+    os.environ["TMPDIR"] = os.environ["TEMP"] = os.environ["TMP"] = str(_tmp)
 
 import argparse
 import importlib.util

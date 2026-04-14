@@ -124,6 +124,12 @@ def build_sampler_config_from_dataset_config(dataset_config: Dict[str, Any]) -> 
         if key not in key_down_sample_steps:
             key_down_sample_steps[key] = obs_down_sample_steps
 
+    # 单帧特征：不做多帧堆叠
+    for key in dataset_config.get("single_frame_features", {}).keys():
+        key_horizon[key] = 1
+        key_latency_steps[key] = 0
+        key_down_sample_steps[key] = 1
+
     for image_name, image_def in dataset_config.get("images", {}).items():
         source_key = image_def.get("source_key")
         if source_key:
@@ -282,7 +288,12 @@ class SequenceSampler:
                 interpolation_start = max(int(idx_with_latency[0]) - 5, start_idx)
                 interpolation_end = min(int(idx_with_latency[-1]) + 2 + 5, end_idx)
 
-                if 'rot' in key and key.endswith('axis_angle'):
+                # Non-numeric features (e.g. string action_source) are sampled by index.
+                if not np.issubdtype(input_arr.dtype, np.number):
+                    output = input_arr[idx_with_latency.astype(np.int64)]
+                elif this_horizon == 1:
+                    output = input_arr[idx_with_latency.astype(np.int64)]
+                elif 'rot' in key and key.endswith('axis_angle'):
                     output = self._interp_lowdim(
                         input_arr, idx_with_latency, interpolation_start, interpolation_end, is_rot_axis_angle=True
                     )
@@ -298,7 +309,11 @@ class SequenceSampler:
                         input_arr, idx_with_latency, interpolation_start, interpolation_end, is_rot_axis_angle=False
                     )
 
-            result[key] = np.array(output).astype(np.float32)
+            arr = np.array(output)
+            # Keep non-numeric single-frame features (e.g. string action_source) as-is.
+            if np.issubdtype(arr.dtype, np.number):
+                arr = arr.astype(np.float32)
+            result[key] = arr
 
         # repeat frame before first grasp
         if self.repeat_frame_prob != 0.0:

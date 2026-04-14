@@ -3,8 +3,6 @@ import os
 import pathlib
 from typing import Any
 
-from flax import nnx
-import jax
 import jax.numpy as jnp
 
 import openpi.models.model as _model
@@ -12,7 +10,6 @@ import openpi.policies.policy as _policy
 import openpi.shared.download as download
 from openpi.training import checkpoints as _checkpoints
 from openpi.training import config as _config
-from openpi.training import weight_loaders as _weight_loaders
 import openpi.transforms as transforms
 
 
@@ -57,28 +54,7 @@ def create_trained_policy(
         model = train_config.model.load_pytorch(train_config, weight_path)
         model.paligemma_with_expert.to_bfloat16_for_selected_params("bfloat16")
     else:
-        # 检查是否使用配置中的自定义 weight_loader
-        weight_loader = train_config.weight_loader
-        should_use_weight_loader = (
-            weight_loader is not None 
-            and not isinstance(weight_loader, _weight_loaders.NoOpWeightLoader)
-        )
-        
-        # if should_use_weight_loader:
-        #     logging.info("Using custom weight_loader from config: %s", type(weight_loader).__name__)
-        #     # 先创建模型获取参数结构（使用 eval_shape 避免实际分配内存）
-        #     model_shape = nnx.eval_shape(train_config.model.create, jax.random.key(0))
-        #     _, state = nnx.split(model_shape)
-        #     init_params = state.to_pure_dict()
-        #     # 使用 weight_loader 加载和合并权重
-        #     loaded_params = weight_loader.load(init_params)
-        #     model = train_config.model.load(loaded_params)
-        # else:
-        #     # 默认行为：直接从 checkpoint 加载
-        #     model = _model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16)
-        #     model = train_config.model.load(model)
-        model = _model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16)
-        model = train_config.model.load(model)
+        model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
     if norm_stats is None:
         # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure

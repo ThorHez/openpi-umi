@@ -40,11 +40,7 @@ import imagecodecs  # 可选，不加也行
 from openpi.utils.pose_utils import pose_to_mat, mat_to_pose10d
 from openpi.utils.pose_repr_utils import convert_pose_mat_rep
 
-<<<<<<< HEAD
 from sampler_v2 import SequenceSampler
-=======
-from sampler import SequenceSampler
->>>>>>> b467a42 (update code)
 from dataset_config_loader import (
     load_dataset_config,
     build_features_from_config,
@@ -241,7 +237,10 @@ def generate_robot_data_frame(
         img_obs_horizon = dataset_config.get("dataset", {}).get("img_obs_horizon", 2)
         
         # 处理普通特征 - 根据 features 配置重命名键
-        features_config = dataset_config.get("features", {})
+        features_config = {
+            **dataset_config.get("features", {}),
+            **dataset_config.get("single_frame_features", {}),
+        }
         for feature_name in features_config.keys():
             # 从特征名中提取原始键名 (去掉 "observation." 前缀)
             if feature_name.startswith("observation."):

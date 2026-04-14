@@ -4,6 +4,7 @@ from typing import Any
 from flax import nnx
 from flax import struct
 import jax
+import jax.numpy as jnp
 import optax
 
 from openpi.models import model as _model
@@ -21,6 +22,28 @@ class TrainState:
 
     ema_decay: float | None = struct.field(pytree_node=False)
     ema_params: nnx.State | None = None
+
+
+def ema_merge_trees(decay: float, old_tree: at.PyTree, new_tree: at.PyTree) -> at.PyTree:
+    """Blend ``new_tree`` into ``old_tree`` with EMA for floating-point arrays only.
+
+    NNX graphs can include PRNG key leaves (e.g. from ``nnx.Dropout``); those must not be
+    linearly mixed with parameters.
+    """
+
+    def leaf(old, new):
+        if isinstance(old, jax.Array) and isinstance(new, jax.Array):
+            if old.shape != new.shape:
+                return new
+            if jax.dtypes.issubdtype(old.dtype, jax.dtypes.prng_key) or jax.dtypes.issubdtype(
+                new.dtype, jax.dtypes.prng_key
+            ):
+                return new
+            if jnp.issubdtype(old.dtype, jnp.floating) and jnp.issubdtype(new.dtype, jnp.floating):
+                return decay * old + (1 - decay) * new
+        return new
+
+    return jax.tree.map(leaf, old_tree, new_tree)
 
 
 @at.typecheck

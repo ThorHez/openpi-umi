@@ -1,7 +1,8 @@
 """See _CONFIGS for the list of available configs."""
 
 import abc
-from collections.abc import Sequence
+
+from collections.abc import Callable, Sequence
 import dataclasses
 import difflib
 import logging
@@ -14,8 +15,10 @@ from typing_extensions import override
 import tyro
 
 import openpi.models.model as _model
-import openpi.models.pi0_advantage as pi0_advantage
+
 import openpi.models.pi0_config as pi0_config
+import openpi.models.pi0_gripper as pi0_gripper
+
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
@@ -30,8 +33,11 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
 import openpi.models.pi0_discrete as pi0_discrete
+
+import openpi.models.pi0_value as pi0_value
 from openpi.transforms import make_bool_mask
 from openpi.models.pi0_discrete import CheckpointWeightLoaderWithDiscreteHead
+from openpi.training.weight_loaders import CheckpointWeightLoaderWithValueHead
 
 ModelType: TypeAlias = _model.ModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
@@ -165,7 +171,7 @@ class ModelTransformFactory(GroupFactory):
                     else model_config.fast_model_tokenizer
                 )
                 tokenizer_kwargs = (
-                    {} if model_config.fast_model_tokenizer_kwargs is None else model_config.fast_model_tokenizer_kwargs
+                    {} if getattr(model_config, "fast_model_tokenizer_kwargs", None) is None else model_config.fast_model_tokenizer_kwargs
                 )
                 return _transforms.Group(
                     inputs=[
@@ -624,6 +630,8 @@ class LeRobotUmiDataConfigPadded_V3(DataConfigFactory):
                         "state_sequence": "state_sequence",
                         "camera0_rgb_0": "camera0_rgb_0",
                         "camera0_rgb_1": "camera0_rgb_1",
+                        "episode_index": "episode_index",
+                        "frame_index": "frame_index",
                     }
                 )
             ]
@@ -690,6 +698,7 @@ class LeRobotUmiDataConfigPadded_V4(DataConfigFactory):
                 )
             ]
         )
+
         data_transforms = _transforms.Group(
             inputs=[umi_policy.UmiInputsV4()],
             outputs=[umi_policy.UmiOutputsV4()],
@@ -1134,7 +1143,7 @@ class LeRobotUmiDataConfig_Hybrid(DataConfigFactory):
         )
 
         tokenizer_kwargs = (
-            {} if model_config.fast_model_tokenizer_kwargs is None else model_config.fast_model_tokenizer_kwargs
+            {} if getattr(model_config, "fast_model_tokenizer_kwargs", None) is None else model_config.fast_model_tokenizer_kwargs
         )
 
         model_transforms = _transforms.Group(
@@ -1190,22 +1199,25 @@ class LeRobotUmiDataConfig_Bimamual_Hybrid(LeRobotUmiDataConfig_Hybrid):
 
     data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiInputsV4_Bimanual()
 
+
 @dataclasses.dataclass(frozen=True)
-class LeRobotUmiDataConfig_Bimamual_DeskHeight_ImageHorizon1_Hybrid(LeRobotUmiDataConfig_Hybrid):
+class LeRobotUmiDataConfig_Bimamual_ImageHorizon1_Hybrid(LeRobotUmiDataConfig_Hybrid):
     mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
         "robot0_eef_pos": "robot0_eef_pos",
         "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
         "robot0_gripper_width": "robot0_gripper_width",
-        "robot0_eef_desk_height": "robot0_eef_desk_height",
+        # "robot0_eef_desk_height": "robot0_eef_desk_height",
+        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
         "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
         "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
         "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
         "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
         # "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
         "robot1_eef_pos": "robot1_eef_pos",
-        "robot1_eef_desk_height": "robot1_eef_desk_height",
+        # "robot1_eef_desk_height": "robot1_eef_desk_height",
         "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
         "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
         "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
         "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
         "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
@@ -1218,26 +1230,283 @@ class LeRobotUmiDataConfig_Bimamual_DeskHeight_ImageHorizon1_Hybrid(LeRobotUmiDa
 
     normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
         "actions": make_bool_mask(3, -7, 3, -7),
-        "state": make_bool_mask(4, -12, 3, -7, 4, -12, 3, -7),
+        "state": make_bool_mask(6, -12, 3, -7, 6, -12, 3, -7),
     })
 
-    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiInputsV4_Bimanual_DeskHeight_Horizon1()
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiInputsV4_Bimanual_Horizon1()
 
 
 @dataclasses.dataclass(frozen=True)
-class LeRobotUmiDataConfig_Bimamual_HeadView_DeskHeight_ImageHorizon1_Hybrid(LeRobotUmiDataConfig_Hybrid):
+class LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(LeRobotUmiDataConfig_Hybrid):
     mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
         "robot0_eef_pos": "robot0_eef_pos",
         "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
         "robot0_gripper_width": "robot0_gripper_width",
-        "robot0_eef_pos_desk": "robot0_eef_pos_desk",
+        # "robot0_eef_pos_desk": "robot0_eef_pos_desk",
+        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
         "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
         "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
         "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
         "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
         # "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
         "robot1_eef_pos": "robot1_eef_pos",
-        "robot1_eef_pos_desk": "robot1_eef_pos_desk",
+        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+        # "robot1_eef_pos_desk": "robot1_eef_pos_desk",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+        # "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
+        "base_0_rgb_0": "base_0_rgb_0",
+        "base_0_depth_0": "base_0_depth_0",
+
+        "actions": "actions",
+        "prompt": "task",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -12, 3, -7, 6, -12, 3, -7),
+    })
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiInputsV4_Bimanual_HeadView_Depth_Horizon1()
+    data_outputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiOutputsV4()
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(self.mapping)
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                _transforms.Transform_depth_to_3ch_image(depth_column_name="base_0_depth_0"),
+                self.data_inputs_fn()
+                ],
+            outputs=[self.data_outputs_fn()],
+        )
+
+        tokenizer_kwargs = (
+            {} if getattr(model_config, "fast_model_tokenizer_kwargs", None) is None else model_config.fast_model_tokenizer_kwargs
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+                _transforms.KeepModelKeys(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Value(LeRobotUmiDataConfig_Hybrid):
+    """Value training variant: inherits HeadView+Depth layout, adds episode_index/frame_index passthrough."""
+
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+        "base_0_rgb_0": "base_0_rgb_0",
+        "base_0_depth_0": "base_0_depth_0",
+        "actions": "actions",
+        "prompt": "task",
+        "episode_index": "episode_index",
+        "frame_index": "frame_index",
+        "value_target": "value_target",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -12, 3, -7, 6, -12, 3, -7),
+    })
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiInputsV4_Bimanual_HeadView_Depth_Horizon1()
+    data_outputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiOutputsV4()
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(self.mapping)
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                _transforms.Transform_depth_to_3ch_image(depth_column_name="base_0_depth_0"),
+                self.data_inputs_fn()
+            ],
+            outputs=[self.data_outputs_fn()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+                _transforms.KeepModelKeys(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_ACP(LeRobotUmiDataConfig_Hybrid):
+    """ACP (Advantage-Conditioned Policy) training variant.
+
+    Reads ``is_positive`` from the dataset (written by ``lerobot_value_infer.py``) and appends
+    ``Advantage: positive`` / ``Advantage: negative`` to the task prompt before tokenization.
+    Data pipeline: RepackTransform (includes is_positive) -> ... -> ACPConditionPrompt -> TokenizePrompt.
+    """
+
+    acp_dropout: float = 0.1
+
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+        "base_0_rgb_0": "base_0_rgb_0",
+        "base_0_depth_0": "base_0_depth_0",
+        "actions": "actions",
+        "prompt": "task",
+        "is_positive": "is_positive",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -12, 3, -7, 6, -12, 3, -7),
+    })
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiInputsV4_Bimanual_HeadView_Depth_Horizon1()
+    data_outputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiOutputsV4()
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(self.mapping)
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                _transforms.Transform_depth_to_3ch_image(depth_column_name="base_0_depth_0"),
+                self.data_inputs_fn()
+            ],
+            outputs=[self.data_outputs_fn()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ACPConditionPrompt(
+                    indicator_key="is_positive",
+                    dropout=self.acp_dropout,
+                    default_positive=True,
+                ),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+                _transforms.KeepModelKeys(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Bimamual_HeadView_ImageHorizon1_Hybrid(LeRobotUmiDataConfig_Hybrid):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        # "robot0_eef_pos_desk": "robot0_eef_pos_desk",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+        # "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
+        "robot1_eef_pos": "robot1_eef_pos",
+        # "robot1_eef_pos_desk": "robot1_eef_pos_desk",
         "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
         "robot1_gripper_width": "robot1_gripper_width",
         "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
@@ -1255,41 +1524,7 @@ class LeRobotUmiDataConfig_Bimamual_HeadView_DeskHeight_ImageHorizon1_Hybrid(LeR
         "state": make_bool_mask(4, -12, 3, -7, 4, -12, 3, -7),
     })
 
-    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiInputsV4_Bimanual_HeadView_DeskHeight_Horizon1()
-
-@dataclasses.dataclass(frozen=True)
-class LeRobotUmiDataConfig_Bimamual_HeadView_DeskHeight_ImageHorizon2_Hybrid(LeRobotUmiDataConfig_Hybrid):
-    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
-        "robot0_eef_pos": "robot0_eef_pos",
-        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
-        "robot0_gripper_width": "robot0_gripper_width",
-        "robot0_eef_desk_height": "robot0_eef_desk_height",
-        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
-        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
-        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
-        # "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
-        "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
-        "robot1_eef_pos": "robot1_eef_pos",
-        "robot1_eef_desk_height": "robot1_eef_desk_height",
-        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
-        "robot1_gripper_width": "robot1_gripper_width",
-        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
-        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
-        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
-        # "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
-        "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
-
-        "base_0_rgb_1": "base_head_rgb_1",
-        "actions": "actions",
-        "prompt": "task",
-    })
-
-    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
-        "actions": make_bool_mask(3, -7, 3, -7),
-        "state": make_bool_mask(4, -12, 3, -7, 4, -12, 3, -7),
-    })
-
-    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiInputsV4_Bimanual_HeadView_DeskHeight_Horizon2()
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiInputsV4_Bimanual_HeadView_Horizon1()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1332,7 +1567,7 @@ class LeRobotUmiDataConfigPadded_V4_Hybrid(DataConfigFactory):
         )
 
         tokenizer_kwargs = (
-            {} if model_config.fast_model_tokenizer_kwargs is None else model_config.fast_model_tokenizer_kwargs
+            {} if getattr(model_config, "fast_model_tokenizer_kwargs", None) is None else model_config.fast_model_tokenizer_kwargs
         )
 
         model_transforms = _transforms.Group(
@@ -1415,6 +1650,150 @@ class LeRobotUmiDataConfigPadded_V5(DataConfigFactory):
             model_transforms=model_transforms,
         )
 
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfigPadded_V4_Bimanual_Horizon1(DataConfigFactory):
+    """
+    UMI data config for bimanual (V4).
+    """
+
+    normalize_masks = {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -12, 3, -7, 6, -12, 3, -7),
+    }
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "robot0_eef_pos": "robot0_eef_pos",
+                        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+                        "robot0_gripper_width": "robot0_gripper_width",
+                        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+                        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+                        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+                        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+                        "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+                        # "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
+                        "robot1_eef_pos": "robot1_eef_pos",
+                        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+                        "robot1_gripper_width": "robot1_gripper_width",
+                        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+                        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+                        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+                        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+                        "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+                        # "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
+                        # "base_0_rgb_0": "base_0_rgb_0",
+                        "actions": "actions",
+                        "prompt": "task",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[umi_policy.UmiInputsV4_Bimanual_Horizon1()],
+            outputs=[umi_policy.UmiOutputsV4()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfigPadded_V4_Bimanual_Horizon2(DataConfigFactory):
+    """
+    UMI data config for bimanual (V4).
+    """
+
+    normalize_masks = {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(3, -12, 3, -7, 3, -12, 3, -7),
+    }
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "robot0_eef_pos": "robot0_eef_pos",
+                        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+                        "robot0_gripper_width": "robot0_gripper_width",
+                        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+                        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+                        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+                        "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+                        "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
+                        "robot1_eef_pos": "robot1_eef_pos",
+                        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+                        "robot1_gripper_width": "robot1_gripper_width",
+                        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+                        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+                        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+                        "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+                        "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
+                        # "base_0_rgb_0": "base_0_rgb_0",
+                        "actions": "actions",
+                        "prompt": "task",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[umi_policy.UmiInputsV4_Bimanual_Horizon2()],
+            outputs=[umi_policy.UmiOutputsV4()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
 
 @dataclasses.dataclass(frozen=True)
 class LeRobotUmiDataConfigPadded_V4_Bimanual(DataConfigFactory):
@@ -1454,7 +1833,7 @@ class LeRobotUmiDataConfigPadded_V4_Bimanual(DataConfigFactory):
                         "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
                         "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
                         "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
-                        "base_0_rgb_0": "base_0_rgb_0",
+                        # "base_0_rgb_0": "base_0_rgb_0",
                         "actions": "actions",
                         "prompt": "task",
                     }
@@ -1681,10 +2060,9 @@ class LeRobotUmiDataConfigPadded_V2(DataConfigFactory):
     training_mode: bool = True
     use_10d_pose: bool = True
     use_relative_state: bool = True
-    
+
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
-        # Repack transform
         repack_transform = _transforms.Group(
             inputs=[
                 _transforms.RepackTransform(
@@ -1701,13 +2079,10 @@ class LeRobotUmiDataConfigPadded_V2(DataConfigFactory):
                 )
             ]
         )
-        
-        # Data transforms (UmiInputs + optional DeltaActions)
         data_transforms = _transforms.Group(
             inputs=[umi_policy.UmiInputs(model_type=model_config.model_type, use_10d_pose=self.use_10d_pose)],
             outputs=[umi_policy.UmiOutputs(use_10d_pose=self.use_10d_pose)],
         )
-        
         if self.use_delta_actions:
             if self.use_10d_pose:
                 delta_action_mask = _transforms.make_bool_mask(9, -1)
@@ -1729,15 +2104,10 @@ class LeRobotUmiDataConfigPadded_V2(DataConfigFactory):
             )
 
         if not self.training_mode:
-            # In inference mode, we need to transform the image to the desired resolution
             print("In inference mode, transforming image to 224x224")
             data_transforms = data_transforms.push(
                 inputs=[_transforms.UmiImageTransform(out_res=(224, 224))],
             )
-        
-        # Model transforms - customized to pad AFTER normalization
-        # This ensures padding values stay as 0 instead of being normalized to -1.0
-        # Use PadActionsOnly since Pi0.5 with discrete_state_input=False doesn't use state
         model_transforms = _transforms.Group(
             inputs=[
                 _transforms.InjectDefaultPrompt(None),
@@ -1766,12 +2136,17 @@ class MultiDataConfigFactory(DataConfigFactory):
     state_pad_dim: if set (> 0), a PadStateOnly(state_pad_dim) transform is appended to each
         dataset's model_transforms so that all datasets produce identically-shaped state tensors
         for batching. Set to 0 or None to skip.
+
+    use_merged_norm_stats: if True, after creating each dataset's DataConfig, merge all
+        norm_stats (with optional weights) and assign the merged norm_stats to every config,
+        so all datasets use the same normalization. Recommended for multi-dataset training.
     """
 
     repo_id: str = "multi"
     datasets: list[DataConfigFactory] = dataclasses.field(default_factory=list)
     weights: list[float] | None = None  # None = uniform; same length as datasets
     state_pad_dim: int | None = None
+    use_merged_norm_stats: bool = True
 
     def _apply_state_pad(self, dc: DataConfig) -> DataConfig:
         """If state_pad_dim is configured, append PadStateOnly to model_transforms."""
@@ -1791,7 +2166,19 @@ class MultiDataConfigFactory(DataConfigFactory):
         self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig
     ) -> list[DataConfig]:
         """Return DataConfig for every dataset (for multi-dataset loader)."""
-        return [self._apply_state_pad(f.create(assets_dirs, model_config)) for f in self.datasets]
+        all_configs = [self._apply_state_pad(f.create(assets_dirs, model_config)) for f in self.datasets]
+        if self.use_merged_norm_stats:
+            stats_dict_list = [dc.norm_stats for dc in all_configs if dc.norm_stats is not None]
+            if stats_dict_list:
+                merge_weights = self.weights
+                if merge_weights is None or len(merge_weights) != len(all_configs):
+                    merge_weights = [1.0] * len(all_configs)
+                weights_for_merge = [merge_weights[i] for i, dc in enumerate(all_configs) if dc.norm_stats is not None]
+                merged = _normalize.merge_norm_stats_dict(stats_dict_list, weights=weights_for_merge)
+                if merged:
+                    all_configs = [dataclasses.replace(dc, norm_stats=merged) for dc in all_configs]
+                    logging.info("Multi-dataset: merged norm_stats applied to all datasets.")
+        return all_configs
 
 
 @dataclasses.dataclass(frozen=True)
@@ -2027,6 +2414,21 @@ class TrainConfig:
     # data parallel between 2 groups of devices.
     fsdp_devices: int = 1
 
+    # --- Value training (train_value.py): optional, used when fitting value targets ---
+    c_fail_coef: float = 1.0
+    value_clip_min: float = -1.0
+    value_clip_max: float = 0.0
+    episode_metadata_path: str | None = None
+    task_max_lengths: dict[int, int] | None = None
+
+    # --- Evaluation settings (train_value.py) ---
+    # Fraction of dataset reserved for validation (0 disables evaluation).
+    val_ratio: float = 0.0
+    # How often (in steps) to run evaluation on the validation set.
+    eval_interval: int = 1000
+    # Number of validation batches per evaluation round.
+    eval_batches: int = 10
+
     @property
     def assets_dirs(self) -> pathlib.Path:
         """Get the assets directory for this config."""
@@ -2049,8 +2451,269 @@ class TrainConfig:
             raise ValueError("Cannot resume and overwrite at the same time.")
 
 
+# Pi0Value config instances for value-only training (freeze backbone, train value head only).
+_pi0_value_config = pi0_value.Pi0ValueConfig()
+
+_pi0_value_config_umi_bimanual = pi0_value.Pi0ValueConfig(
+    pi05=True,
+    action_dim=32,
+    action_horizon=16,
+    action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+    max_token_len=756,
+    num_value_bins=201,
+    value_min=-1.0,
+    value_max=0.0,
+    value_head_dropout=0.1,
+    soft_value_targets=True,
+)
+
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS = [
+    #
+    # Value-only training (train_value.py): Pi0 backbone + value head, fit normalized value targets.
+    #
+    TrainConfig(
+        name="pi0_value_umi",
+        model=_pi0_value_config,
+        freeze_filter=_pi0_value_config.get_freeze_filter_value_head_only(),
+        data=FakeDataConfig(repo_id="fake"),
+        c_fail_coef=1.0,
+        value_clip_min=-1.0,
+        value_clip_max=0.0,
+    ),
+    #
+    # Value training for UMI bimanual with head view + depth (HITL dataset).
+    # Freezes the Pi0.5 backbone and only trains the value head (final_norm, value_fc1, value_fc2).
+    # Uses episode_index / frame_index from dataset for normalized value target computation.
+    #
+    # Usage:
+    #   python scripts/train_value.py pi0_value_umi_bimanual_headview_depth --exp_name=my_value_exp
+    #
+    # If ``episode_metadata_path`` is unset, episode/task metadata is read from each local dataset's
+    # ``meta/episodes.jsonl`` (and ``meta/tasks.jsonl``) when present — same layout as LeRobot.
+    # Optional override:
+    #   --episode_metadata_path=/path/to/episode_metadata.json
+    #
+    # episode_metadata.json format:
+    #   {
+    #     "episodes": [{"episode_index": 0, "task_index": 0, "length": 500, "success": true}, ...],
+    #     "task_max_lengths": {"0": 600}
+    #   }
+    #
+    TrainConfig(
+        name="pi0_value_umi_bimanual_headview_depth",
+        model=_pi0_value_config_umi_bimanual,
+        freeze_filter=_pi0_value_config_umi_bimanual.get_freeze_filter_value_head_only(),
+        data=LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Value(
+            repo_id="/root/openpi-umi/data/horizon_cloth_folding_value_training_20260401_ep116_unified",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/root/openpi-umi/data/horizon_cloth_folding_value_training_20260401_ep116_unified",
+            ),
+            base_config=UmiDataConfig(
+                action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                robot_type="ARM=2 G=1 H=0",
+            ),
+        ),
+        weight_loader=CheckpointWeightLoaderWithValueHead(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=3_000,
+            peak_lr=1e-4,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=60_000,
+        batch_size=72,
+        num_workers=16,
+        fsdp_devices=8,
+        log_interval=10,
+        save_interval=1000,
+        keep_period=30_000,
+        c_fail_coef=1.0,
+        value_clip_min=-1.0,
+        value_clip_max=0.0,
+        episode_metadata_path=None,
+        val_ratio=0.1
+    ),
+    TrainConfig(
+        name="pi0_value_umi_bimanual_headview_depth_infer",
+        model=_pi0_value_config_umi_bimanual,
+        freeze_filter=_pi0_value_config_umi_bimanual.get_freeze_filter_value_head_only(),
+        data=LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Value(
+            repo_id="/root/openpi-umi/data/horizon_cloth_folding_advantage_eval_failure_20260404_161149_to_20260404_161519_ep4",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/root/openpi-umi/data/horizon_cloth_folding_advantage_eval_failure_20260404_161149_to_20260404_161519_ep4",
+            ),
+            base_config=UmiDataConfig(
+                action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                robot_type="ARM=2 G=1 H=0",
+            ),
+        ),
+        weight_loader=CheckpointWeightLoaderWithValueHead(
+            "/root/openpi-umi/checkpoints/pi0_value_umi_bimanual_headview_depth/my_experiment_v2/59999/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=3_000,
+            peak_lr=1e-4,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=60_000,
+        batch_size=72,
+        num_workers=16,
+        fsdp_devices=8,
+        log_interval=10,
+        save_interval=1000,
+        keep_period=30_000,
+        c_fail_coef=1.0,
+        value_clip_min=-1.0,
+        value_clip_max=0.0,
+        episode_metadata_path=None,
+        val_ratio=0.1
+    ),
+    TrainConfig(
+        name="pi0_value_umi_bimanual_headview_depth_multi_dataset",
+        model=_pi0_value_config_umi_bimanual,
+        freeze_filter=_pi0_value_config_umi_bimanual.get_freeze_filter_value_head_only(),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Value(
+                    repo_id="/root/openpi-umi/data/horizon_cloth_folding_value_training_20260401_ep116_unified",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/horizon_cloth_folding_value_training_20260401_ep116_unified",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Value(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260320",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260320",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Value(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260323",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260323",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Value(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260316",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260316",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Value(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260317",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260317",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                )
+            ],
+        ),
+        weight_loader=CheckpointWeightLoaderWithValueHead(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=1e-4,
+            decay_steps=70_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=80_000,
+        batch_size=72,
+        num_workers=12,
+        fsdp_devices=8,
+        log_interval=10,
+        save_interval=2000,
+        keep_period=40_000,
+        c_fail_coef=1.0,
+        value_clip_min=-1.0,
+        value_clip_max=0.0,
+        episode_metadata_path=None,
+        val_ratio=0.1
+    ),
+    #
+    # ACP (Advantage-Conditioned Policy) training: Pi0.5 hybrid + Advantage tag in prompt.
+    # Requires dataset with ``is_positive`` column (produced by ``scripts/lerobot_value_infer.py``).
+    #
+    # Usage:
+    #   python scripts/train.py pi05_acp_umi_bimanual_headview_depth --exp_name=my_acp_exp
+    #
+    TrainConfig(
+        name="pi05_acp_umi_bimanual_headview_depth",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+        ),
+        data=LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_ACP(
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_hitl_test",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_hitl_test",
+            ),
+            base_config=UmiDataConfig(
+                action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                robot_type="ARM=2 G=1 H=0",
+            ),
+            acp_dropout=0.1,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=8e-5,
+            decay_steps=40_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=50_000,
+        batch_size=72,
+        num_workers=12,
+        fsdp_devices=2,
+        log_interval=10,
+        save_interval=2000,
+        keep_period=10_000,
+    ),
     #
     # Inference Aloha configs.
     #
@@ -2470,27 +3133,6 @@ _CONFIGS = [
         ).get_freeze_filter(),
         ema_decay=None,
     ),
-    #
-    # Pi0Advantage UMI configs (flow matching + value head).
-    #
-    TrainConfig(
-        name="pi0_advantage_umi",
-        model=pi0_advantage.Pi0AdvantageConfig(
-            action_dim=7,
-            action_horizon=10,
-            loss_action_weight=1.0,
-            loss_value_weight=1.0,
-            task_max_steps=1500,
-        ),
-        data=LeRobotUmiDataConfig(
-            repo_id="your_hf_username/umi_dataset",
-            base_config=DataConfig(prompt_from_task=True),
-            use_delta_actions=True,
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
-        num_train_steps=30_000,
-        batch_size=32,
-    ),
     TrainConfig(
         name="pi0_fast_umi",
         # Using pi0-FAST model for faster inference
@@ -2565,30 +3207,27 @@ _CONFIGS = [
         num_workers=0,  # Set to 0 to avoid /dev/shm space issues
         # fsdp_devices=4,  # Temporarily disabled - may be incompatible with Pi0.5
     ),
+    #
+    # Online UMI configs (merged from config.py.online).
+    #
     TrainConfig(
         name="pi05_umi_10d_80k_95_real_umi_v2",
-        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
         model=pi0_config.Pi0Config(
             pi05=True,
-            action_dim=10,  # Padded to match pretrained model
+            action_dim=10,
             action_horizon=10,
             discrete_state_input=False,
-            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
-            # action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
         ),
         data=LeRobotUmiDataConfigPadded_V3(
-            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v6_train",  # New dataset with 32-dim actions
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v6_train",
             assets=AssetsConfig(
-                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_v6_train",
             ),
             base_config=DataConfig(prompt_from_task=True),
             training_mode=True,
         ),
-        # Now we can load pretrained weights!
         weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_10d_80k_95_real_umi_v2/my_experiment/79999/params"),
-        # weight_loader=weight_loaders.NoOpWeightLoader(),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1_000,
             peak_lr=5e-5,
@@ -2604,25 +3243,21 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_v2",
-        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
         model=pi0_config.Pi0Config(
             pi05=True,
-            action_dim=32,  # Padded to match pretrained model
+            action_dim=32,
             action_horizon=10,
-            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
             action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
         ),
         data=LeRobotUmiDataConfigPadded_V3(
-            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v6_train",  # New dataset with 32-dim actions
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v6_train",
             assets=AssetsConfig(
-                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_v6_train",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=False),
             training_mode=True,
         ),
-        # Now we can load pretrained weights!
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
@@ -2641,35 +3276,20 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72_compute_norm_stats",
-        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
         model=pi0_config.Pi0Config(
             pi05=True,
-            action_dim=32,  # Padded to match pretrained model
+            action_dim=32,
             action_horizon=16,
-            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
             action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
         ),
         data=LeRobotUmiDataConfigPadded_V4(
-            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",  # New dataset with 32-dim actions
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
             assets=AssetsConfig(
-                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
-            # training_mode=True,
         ),
-        # Now we can load pretrained weights!
-        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        # lr_schedule=_optimizer.CosineDecaySchedule(
-        #     warmup_steps=2_000,
-        #     peak_lr=8e-5,
-        #     decay_steps=95_000,
-        #     decay_lr=1e-5,
-        # ),
-        # optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        # ema_decay=0.999,
-        # num_train_steps=100_000,
         batch_size=512,
         num_workers=8,
         fsdp_devices=8,
@@ -2678,20 +3298,17 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_compute_norm_stats",
-        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
         model=pi0_config.Pi0Config(
             pi05=True,
-            action_dim=32,  # Padded to match pretrained model
+            action_dim=32,
             action_horizon=16,
-            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
             action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
         ),
         data=LeRobotUmiDataConfigPadded_V4_Bimanual(
-            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_merge_mason_ray_cyrus_20251224_20260107_exclude_25_all_clean",  # New dataset with 32-dim actions
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_merge_fold_clothes_mason_ray_cyrus_24_07_exclude_25_all_with_desk_height",
             assets=AssetsConfig(
-                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
                 asset_id=".",
-                assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_merge_mason_ray_cyrus_20251224_20260107_exclude_25_all_clean",
+                assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_merge_fold_clothes_mason_ray_cyrus_24_07_exclude_25_all_with_desk_height",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
@@ -2702,18 +3319,58 @@ _CONFIGS = [
         keep_period=10000,
     ),
     TrainConfig(
-        name="pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_headview_deskheight_horizon2_compute_norm_stats",
-        model=pi0_discrete.Pi0DiscreteConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_horizon1_compute_norm_stats",
+        model=pi0_config.Pi0Config(
             pi05=True,
             action_dim=32,
             action_horizon=16,
             action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
-            enable_discrete_head=True,
-            fast_model_tokenizer_kwargs={
-                "fast_tokenizer_path": "/root/fast_tokenizer"
-            },
         ),
-        data=LeRobotUmiDataConfig_Bimamual_HeadView_DeskHeight_ImageHorizon2_Hybrid(
+        data=LeRobotUmiDataConfigPadded_V4_Bimanual_Horizon1(
+            repo_id="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+            ),
+            base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+        ),
+        batch_size=512,
+        num_workers=8,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=10000,
+    ),
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_horizon1_compute_norm_stats_fsdp_2",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=LeRobotUmiDataConfigPadded_V4_Bimanual_Horizon1(
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_hitl_test_with_value",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_hitl_test_with_value",
+            ),
+            base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+        ),
+        batch_size=512,
+        num_workers=8,
+        fsdp_devices=2,
+        log_interval=10,
+        keep_period=10000,
+    ),
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_horizon2_compute_norm_stats",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=LeRobotUmiDataConfigPadded_V4_Bimanual_Horizon2(
             repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_with_desk_height_20260216_all_clean",
             assets=AssetsConfig(
                 asset_id=".",
@@ -2728,7 +3385,7 @@ _CONFIGS = [
         keep_period=10000,
     ),
     TrainConfig(
-        name="pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_deskheight_horizon1_compute_norm_stats",
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_headview_horizon1_compute_norm_stats",
         model=pi0_discrete.Pi0DiscreteConfig(
             pi05=True,
             action_dim=32,
@@ -2739,11 +3396,11 @@ _CONFIGS = [
                 "fast_tokenizer_path": "/root/fast_tokenizer"
             },
         ),
-        data=LeRobotUmiDataConfig_Bimamual_DeskHeight_ImageHorizon1_Hybrid(
-            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_merge_fold_clothes_mason_ray_cyrus_24_07_exclude_25_all_with_desk_height_clean",
+        data=LeRobotUmiDataConfig_Bimamual_HeadView_ImageHorizon1_Hybrid(
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_error_with_depth_20260305_clip",
             assets=AssetsConfig(
                 asset_id=".",
-                assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_merge_fold_clothes_mason_ray_cyrus_24_07_exclude_25_all_with_desk_height_clean",
+                assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_error_with_depth_20260305_clip",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
@@ -2788,33 +3445,21 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72_v4",
-        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
         model=pi0_config.Pi0Config(
             pi05=True,
-            action_dim=32,  # Padded to match pretrained model
+            action_dim=32,
             action_horizon=16,
-            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
             action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
         ),
         data=LeRobotUmiDataConfigPadded_V4(
-            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",  # New dataset with 32-dim actions
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
             assets=AssetsConfig(
-                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
-        # Now we can load pretrained weights!
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        # weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4/my_experiment_ray_cyrus/61000/params"),
-        #weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72/my_experiment_fix_norm/99999/"),
-        
-        # freeze_filter=nnx.filterlib.Not(
-        #     nnx.PathContains("action_expert", exact=False)
-        # ),
-        
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
             peak_lr=8e-5,
@@ -2832,38 +3477,25 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid",
-        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
         model=pi0_discrete.Pi0DiscreteConfig(
             pi05=True,
-            action_dim=32,  # Padded to match pretrained model
+            action_dim=32,
             action_horizon=16,
-            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
             action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
             enable_discrete_head=True,
-            # Local path for FAST tokenizer (offline mode)
             fast_model_tokenizer_kwargs={
                 "fast_tokenizer_path": "/root/fast_tokenizer"
             },
         ),
         data=LeRobotUmiDataConfigPadded_V4_Hybrid(
-            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",  # New dataset with 32-dim actions
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
             assets=AssetsConfig(
-                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
-        # Now we can load pretrained weights!
         weight_loader=CheckpointWeightLoaderWithDiscreteHead("gs://openpi-assets/checkpoints/pi05_base/params"),
-        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        # weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4/my_experiment_ray_cyrus/61000/params"),
-        #weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72/my_experiment_fix_norm/99999/"),
-        
-        # freeze_filter=nnx.filterlib.Not(
-        #     nnx.PathContains("action_expert", exact=False)
-        # ),
-        
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
             peak_lr=8e-5,
@@ -2895,12 +3527,12 @@ _CONFIGS = [
         data=MultiDataConfigFactory(
             state_pad_dim=128,
             # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
-            weights=[1.0, 1.0, 1.0, 4.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            weights=[1.0, 4.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
             datasets=[
                 LeRobotUmiDataConfig_Hybrid(
                     repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v7.3_merge_20251216",
                     assets=AssetsConfig(
-                        asset_id=".",
+                        asset_id="v73_merge",
                         assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_v7.3_merge_20251216",
                     ),
                     base_config=UmiDataConfig(
@@ -2912,35 +3544,13 @@ _CONFIGS = [
                 LeRobotUmiDataConfig_Hybrid(
                     repo_id="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
                     assets=AssetsConfig(
-                        asset_id=".",
+                        asset_id="pick_elec",
                         assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
                     ),
                     base_config=UmiDataConfig(
                         action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
                         # 双臂: "ARM=2,G=0,H=0"；单臂: "ARM=1,G=0,H=0"（G=全局视角, H=高度，按需改为 1）
                         robot_type="ARM=1 G=0 H=0",
-                    ),
-                ),
-                LeRobotUmiDataConfig_Bimamual_DeskHeight_ImageHorizon1_Hybrid(
-                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_merge_fold_clothes_mason_ray_cyrus_24_07_exclude_25_all_with_desk_height_clean",
-                    assets=AssetsConfig(
-                        asset_id=".",
-                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_merge_fold_clothes_mason_ray_cyrus_24_07_exclude_25_all_with_desk_height_clean",
-                    ),
-                    base_config=UmiDataConfig(
-                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-                        robot_type="ARM=2 G=0 H=1",
-                    ),
-                ),
-                LeRobotUmiDataConfig_Bimamual_HeadView_DeskHeight_ImageHorizon2_Hybrid(
-                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_with_desk_height_20260216_all_clean",
-                    assets=AssetsConfig(
-                        asset_id=".",
-                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_with_desk_height_20260216_all_clean",
-                    ),
-                    base_config=UmiDataConfig(
-                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-                        robot_type="ARM=2 G=1 H=1",
                     ),
                 ),
             ]
@@ -2962,6 +3572,451 @@ _CONFIGS = [
         keep_period=40000,
     ),
     TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_multi_dataset_fold_clothes",
+        model=pi0_discrete.Pi0DiscreteConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+            enable_discrete_head=True,
+            fast_model_tokenizer_kwargs={
+                "fast_tokenizer_path": "/root/fast_tokenizer"
+            },
+            max_token_len=756,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
+            weights=[4.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_20260126",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_20260126",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=0 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_merge_fold_clothes_mason_ray_cyrus_24_07_exclude_25_all_with_desk_height",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_merge_fold_clothes_mason_ray_cyrus_24_07_exclude_25_all_with_desk_height",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=0 H=0",
+                    ),
+                ),
+            ]
+        ),
+        weight_loader=CheckpointWeightLoaderWithDiscreteHead("gs://openpi-assets/checkpoints/pi05_base/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=70_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=80_000,
+        batch_size=72,
+        num_workers=12,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=40000,
+    ),
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_two_stage_augment",
+        model=pi0_discrete.Pi0DiscreteConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+            enable_discrete_head=True,
+            fast_model_tokenizer_kwargs={
+                "fast_tokenizer_path": "/root/fast_tokenizer"
+            },
+            max_token_len=756,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
+            weights=[1.0, 10.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_20260126",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_20260126",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=0 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_two_stage_28_02_clip",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_two_stage_28_02_clip",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=0 H=0",
+                    ),
+                ),
+            ]
+        ),
+        weight_loader=CheckpointWeightLoaderWithDiscreteHead("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_multi_dataset_fold_clothes/my_experiment/79999/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=35_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=40_000,
+        batch_size=72,
+        num_workers=12,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=40000,
+    ),
+
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_all_data",
+        model=pi0_discrete.Pi0DiscreteConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+            enable_discrete_head=True,
+            fast_model_tokenizer_kwargs={
+                "fast_tokenizer_path": "/root/fast_tokenizer"
+            },
+            max_token_len=756,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
+            weights=[1.0, 1.0, 1.0, 1.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260316",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260316",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=0 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260317",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260317",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=0 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_with_depth_20260303_20260304_clean",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_with_depth_20260303_20260304_clean",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=0 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_with_depth_20260312_clean",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_with_depth_20260312_clean",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=0 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_with_depth_20260305_clean",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_with_depth_20260305_clean",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=0 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_merge_fold_clothes_mason_ray_cyrus_24_07_exclude_25_all_v2_clean",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_merge_fold_clothes_mason_ray_cyrus_24_07_exclude_25_all_v2_clean",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=0 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_merge_fold_clothes_merge_fold_red_clothes_cyrus_20251217_clean",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_merge_fold_clothes_merge_fold_red_clothes_cyrus_20251217_clean",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=0 H=0",
+                    ),
+                ),
+            ]
+        ),
+        weight_loader=CheckpointWeightLoaderWithDiscreteHead("gs://openpi-assets/checkpoints/pi05_base/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=90_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=100_000,
+        batch_size=72,
+        num_workers=12,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=50_000,
+    ),
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_horizon_folding_260322",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
+            weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260316",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260316",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260317",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260317",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260320",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260320",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260323",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260323",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+            ]
+        ),
+        weight_loader=CheckpointWeightLoaderWithDiscreteHead("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_horizon_folding_260322/my_experiment/19000/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=60_000,
+        batch_size=72,
+        num_workers=12,
+        fsdp_devices=6,
+        log_interval=10,
+        keep_period=30_000,
+    ),
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_messy_folding_gripper_binary_260413",
+        model=pi0_gripper.Pi0GripperConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+            gripper_binary_indices=(9, 19),
+            gripper_binary_threshold=0.02,
+            gripper_binary_loss_weight=0.5,
+            gripper_binary_close_value=0.0,
+            gripper_binary_open_value=0.085,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
+            weights=[1.0, 1.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/cloth_folding_hitl_replay_buffer_0407_gripper_bin",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/cloth_folding_hitl_replay_buffer_0407_gripper_bin",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260408_ep85_gripper_bin",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260408_ep85_gripper_bin",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+            ]
+        ),
+        # 从标准 pi05 checkpoint 初始化时，新增的 gripper_binary_head 会保留随机初始化；
+        # 后续训练保存出的 checkpoint 会自动包含这个 head。
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithGripperHead(
+            "/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_horizon_folding_260322/my_experiment_v2/59999/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=60_000,
+        batch_size=72,
+        num_workers=8,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=30000,
+    ),
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_messy_folding_260410",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
+            weights=[1.0, 1.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/cloth_folding_hitl_replay_buffer_0407_gripper_bin",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/cloth_folding_hitl_replay_buffer_0407_gripper_bin",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260408_ep85_gripper_bin",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260408_ep85_gripper_bin",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+            ]
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_horizon_folding_260322/my_experiment_v2/59999/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=60_000,
+        batch_size=72,
+        num_workers=12,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=30_000,
+    ),
+    TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72_v5",
         model=pi0_config.Pi0Config(
             pi05=True,
@@ -2977,16 +4032,7 @@ _CONFIGS = [
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
-        # Now we can load pretrained weights!
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        # weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4/my_experiment_ray_cyrus/61000/params"),
-        #weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72/my_experiment_fix_norm/99999/"),
-        
-        # freeze_filter=nnx.filterlib.Not(
-        #     nnx.PathContains("action_expert", exact=False)
-        # ),
-        
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
             peak_lr=8e-5,
@@ -3004,38 +4050,27 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_freeze_vlm_only",
-        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
         model=pi0_config.Pi0Config(
             pi05=True,
-            action_dim=32,  # Padded to match pretrained model
+            action_dim=32,
             action_horizon=16,
-            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
             action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
         ),
         data=LeRobotUmiDataConfigPadded_V4(
-            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v7.3_merge_20251216",  # New dataset with 32-dim actions
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v7.3_merge_20251216",
             assets=AssetsConfig(
-                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_v7.3_merge_20251216",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
-        # Now we can load pretrained weights!
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        # weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4/my_experiment_ray_cyrus/61000/params"),
-        #weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72/my_experiment_fix_norm/99999/"),
-        
-        # freeze VLM only
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
-            action_dim=32,  # Padded to match pretrained model
+            action_dim=32,
             action_horizon=16,
-            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
             action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
         ).get_freeze_filter_freeze_vlm_only(),
-        
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
             peak_lr=8e-5,
@@ -3053,29 +4088,22 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_bimanual",
-        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
         model=pi0_config.Pi0Config(
             pi05=True,
-            action_dim=32,  # Padded to match pretrained model
+            action_dim=32,
             action_horizon=16,
-            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
             action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
             max_token_len=512,
         ),
         data=LeRobotUmiDataConfigPadded_V4_Bimanual(
-            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_merge_mason_ray_cyrus_20251224_20260107_exclude_25_all_clean",  # New dataset with 32-dim actions
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_merge_mason_ray_cyrus_20251224_20260107_exclude_25_all_clean",
             assets=AssetsConfig(
-                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_merge_mason_ray_cyrus_20251224_20260107_exclude_25_all_clean",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
-        # Now we can load pretrained weights!
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        # weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4_bimanual/my_experiment_v2/39999/params"),
-        # weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4/my_experiment_ray_cyrus/61000/params"),
-        #weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72/my_experiment_fix_norm/99999/"),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
             peak_lr=8e-5,
@@ -3093,31 +4121,24 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_10d_relative",
-        # Using 32-dim actions (padded from 7-dim) to be compatible with pi05_base pretrained model
         model=pi0_config.Pi0Config(
             pi05=True,
-            action_dim=32,  # Padded to match pretrained model
+            action_dim=32,
             action_horizon=10,
             discrete_state_input=False,
-            # Only compute loss on first 7 dimensions (real UMI actions), ignore padded dims
             action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
         ),
         data=LeRobotUmiDataConfigPadded_V2(
-            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v4_train",  # New dataset with 32-dim actions
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_v4_train",
             assets=AssetsConfig(
-                # Will load norm_stats from assets/pi05_umi_32d/umi_lerobot_dataset_32d/
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_v4_train",
             ),
             base_config=DataConfig(prompt_from_task=True),
-            # 使用delta动作
             use_delta_actions=True,
-            # 使用相对状态输入
             use_relative_state=True,
-            # 使用10d位姿
             use_10d_pose=True,
         ),
-        # Now we can load pretrained weights!
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1_000,

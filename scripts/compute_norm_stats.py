@@ -3,6 +3,19 @@
 This script is used to compute the normalization statistics for a given config. It
 will compute the mean and standard deviation of the data in the dataset and save it
 to the config assets directory.
+
+Why it can be slow:
+  1. Main cause: For each sample we run the full pipeline (LeRobot load + repack +
+     data_transforms). data_transforms (e.g. UmiInputsV4_Bimanual) need camera images
+     to build the observation, so the loader loads and decodes images for every sample
+     even though we only use state and actions for norm stats. Image I/O and decode
+     dominate runtime.
+  2. We iterate over the full dataset (or max_frames). Large datasets → many batches.
+  3. RunningStats uses per-dimension histograms (5000 bins) for quantiles; when min/max
+     change, _adjust_histograms runs. Minor compared to (1).
+
+Mitigations: Use --max-frames to cap samples (e.g. 50000); ensure config has a large
+batch_size (e.g. 512) and num_workers (e.g. 8).
 """
 
 import numpy as np
