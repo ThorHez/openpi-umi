@@ -4529,6 +4529,35 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_messy_folding_260410/params"),
     ),
     TrainConfig(
+        name="pi05_umi_bimanual_infer_with_depth_gripper_binary",
+        model=pi0_gripper.Pi0GripperConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+            gripper_binary_indices=(9, 19),
+            gripper_binary_threshold=0.02,
+            gripper_binary_loss_weight=0.5,
+            gripper_binary_close_value=0.0,
+            gripper_binary_open_value=0.085,
+        ),
+         data=LeRobotUmiDataConfig_Bimanual_Inference_With_Depth(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_messy_folding_260409",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_messy_folding_260409/assets",
+            ),
+            base_config=UmiDataConfig(robot_type="ARM=2 G=1 H=0",),
+            prompt="fold the clothes",
+        ),
+        # 从标准 pi05 checkpoint 初始化时，新增的 gripper_binary_head 会保留随机初始化；
+        # 后续训练保存出的 checkpoint 会自动包含这个 head。
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_horizon_folding_260322/my_experiment_v2/59999/params"
+        )
+    ),
+    TrainConfig(
         name="pi05_umi_bimanual_infer_with_depth_ray",
         model=pi0_config.Pi0Config(
             pi05=True,
@@ -4567,27 +4596,6 @@ _CONFIGS = [
             prompt="fold the clothes",
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/79999_v4_bimanual_20260111/params"),
-    ),
-    TrainConfig(
-        name="pi05_umi_desk_height_bimanual_infer",
-        model=pi0_config.Pi0Config(
-            pi05=True,
-            action_dim=32,
-            action_horizon=16,
-            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-            max_token_len=512,
-        ),
-        data=LeRobotUmiDataConfig_DeskHeight_Bimanual_Inference(
-            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/79999_multi_task_20260226",
-            assets=AssetsConfig(
-                asset_id="fold_merge_exclude25",
-                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/79999_multi_task_20260226/assets",
-            ),
-            base_config=UmiDataConfig(robot_type="ARM=2 G=0 H=1",),
-            # prompt="fold the clothes",
-            prompt="pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box",
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/79999_multi_task_20260226/params"),
     ),
     TrainConfig(
         name="pi05_umi_32d",
