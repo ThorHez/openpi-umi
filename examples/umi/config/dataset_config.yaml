@@ -8,7 +8,7 @@ dataset:
   action_horizon: 16        # 动作预测长度
   action_dim: 10            # 动作维度 (每个机器人)
   low_dim_obs_horizon: 2    # 低维观测长度
-  img_obs_horizon: 2        # 图像观测长度
+  img_obs_horizon: 1        # 图像观测长度
   obs_down_sample_steps: 3  # 观测下采样步长
 
 # 从原始数据集加载的字段

@@ -84,7 +84,7 @@ features:
       enabled: true
       min_value: 0.0
       max_value: 0.085
-      threshold: 0.01
+      threshold: 0.03
       invert: false  # true 时：> threshold 赋 min_value，否则赋 max_value
 
   # ============ Robot1 观测特征 (双臂时自动启用) ============
@@ -116,7 +116,7 @@ features:
       enabled: true
       min_value: 0.0
       max_value: 0.085
-      threshold: 0.01
+      threshold: 0.03
       invert: false
 
   # ============ 相对位置特征 (双臂时自动启用) ============

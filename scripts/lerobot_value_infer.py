@@ -5,18 +5,6 @@ frame, computes n-step advantages from value targets, binarizes them into
 positive/negative indicators, and writes all annotations back into the
 dataset's parquet files.
 
-<<<<<<< Updated upstream
-Usage:
-    python scripts/lerobot_value_infer.py \
-        --config-name pi0_value_umi \
-        --checkpoint-dir ./checkpoints/pi0_value_umi/my_exp/10000 \
-        --dataset-root ./data/my_lerobot_dataset \
-        --n-step 1 \
-        --positive-ratio 0.5 \
-        --c-fail-coef 1.0 \
-        --success-field success \
-        --default-success true \
-=======
 Two modes are supported via ``--dataset-root``:
 
 * **Single-dataset mode** -- if the path is itself a LeRobot dataset root
@@ -43,18 +31,10 @@ Usage::
         --dataset-root ./data \\
         --skip-existing \\
         --continue-on-error \\
->>>>>>> Stashed changes
         --batch-size 32
 """
 
 import argparse
-<<<<<<< Updated upstream
-import json
-import logging
-import os
-from pathlib import Path
-from typing import Any
-=======
 import dataclasses
 import json
 import logging
@@ -63,7 +43,6 @@ import re
 import time
 from pathlib import Path
 from typing import Any, NamedTuple
->>>>>>> Stashed changes
 
 if "TMPDIR" not in os.environ:
     _tmp = Path(os.environ.get("HOME", "/root")) / "tmp"
@@ -89,10 +68,7 @@ logging.basicConfig(
     format="%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
     level=logging.INFO,
-<<<<<<< Updated upstream
-=======
     force=True,  # openpi imports install a WARNING-level handler; override it
->>>>>>> Stashed changes
 )
 logger = logging.getLogger(__name__)
 
@@ -389,20 +365,6 @@ def load_existing_value_targets(
 
 
 # ---------------------------------------------------------------------------
-<<<<<<< Updated upstream
-# Main pipeline
-# ---------------------------------------------------------------------------
-
-def run_value_inference(args: argparse.Namespace) -> None:
-    config = _config.get_config(args.config_name)
-    dataset_root = Path(args.dataset_root).resolve()
-
-    logger.info("Config: %s", args.config_name)
-    logger.info("Checkpoint: %s", args.checkpoint_dir)
-    logger.info("Dataset root: %s", dataset_root)
-
-    # ---- 1. Load model (data-parallel across all visible devices) ----
-=======
 # Dataset discovery
 # ---------------------------------------------------------------------------
 
@@ -492,7 +454,6 @@ def setup_model(args: argparse.Namespace, config: _config.TrainConfig) -> ModelH
     """Load checkpoint, build the JIT'd value-inference function, return a
     handle that can be reused across many datasets.
     """
->>>>>>> Stashed changes
     num_devices = jax.device_count()
     mesh = jax.sharding.Mesh(jax.devices(), ("batch",))
     replicated = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
@@ -512,9 +473,6 @@ def setup_model(args: argparse.Namespace, config: _config.TrainConfig) -> ModelH
     model.eval()
     logger.info("Model loaded and replicated across %d device(s).", num_devices)
 
-<<<<<<< Updated upstream
-    # ---- 2. Load raw dataset metadata ----
-=======
     def _infer_value(obs):
         logits = model.forward_value_logits(obs)
         return model.expected_value_from_logits(logits)
@@ -563,7 +521,6 @@ def process_dataset(
     logger.info("Dataset root: %s", dataset_root)
 
     # ---- 1. Load raw dataset metadata ----
->>>>>>> Stashed changes
     raw_dataset = lerobot_dataset.LeRobotDataset(
         repo_id=str(dataset_root),
         root=str(dataset_root),
@@ -571,47 +528,24 @@ def process_dataset(
     raw_frames = raw_dataset.hf_dataset.with_format(None)
     frame_count = len(raw_frames)
     if frame_count == 0:
-<<<<<<< Updated upstream
-        raise ValueError("Dataset has no frames.")
-=======
         raise ValueError(f"Dataset has no frames: {dataset_root}")
->>>>>>> Stashed changes
 
     absolute_indices = np.asarray(raw_frames["index"], dtype=np.int64).reshape(-1)
     episode_indices = np.asarray(raw_frames["episode_index"], dtype=np.int64).reshape(-1)
     frame_indices = np.asarray(raw_frames["frame_index"], dtype=np.int64).reshape(-1)
     task_indices = np.asarray(raw_frames["task_index"], dtype=np.int64).reshape(-1)
 
-<<<<<<< Updated upstream
-    logger.info("Dataset: %d frames, %d episodes", frame_count, len(np.unique(episode_indices)))
-=======
     logger.info(
         "Dataset: %d frames, %d episodes",
         frame_count,
         len(np.unique(episode_indices)),
     )
->>>>>>> Stashed changes
 
     episode_info, task_max_lengths = build_episode_info(
         raw_dataset,
         success_field=args.success_field,
         default_success=args.default_success,
     )
-<<<<<<< Updated upstream
-    logger.info("Episode info: %d episodes, %d tasks", len(episode_info), len(task_max_lengths))
-
-    # ---- 3. Batched value inference via data loader ----
-    # batch_size must be divisible by num_devices for even data-parallel splitting.
-    effective_bs = args.batch_size
-    if effective_bs % num_devices != 0:
-        effective_bs = ((effective_bs + num_devices - 1) // num_devices) * num_devices
-        logger.info("Adjusted batch_size %d -> %d (divisible by %d devices)", args.batch_size, effective_bs, num_devices)
-
-    infer_config = _replace_config_for_inference(config, dataset_root, effective_bs, checkpoint_dir=args.checkpoint_dir)
-    data_loader = _data_loader.create_data_loader(
-        infer_config,
-        sharding=data_parallel,
-=======
     logger.info(
         "Episode info: %d episodes, %d tasks",
         len(episode_info),
@@ -628,7 +562,6 @@ def process_dataset(
     data_loader = _data_loader.create_data_loader(
         infer_config,
         sharding=handle.data_parallel,
->>>>>>> Stashed changes
         shuffle=False,
     )
 
@@ -636,19 +569,6 @@ def process_dataset(
     prediction_lookup = np.zeros(max_abs_index + 1, dtype=np.float32)
     prediction_seen = np.zeros(max_abs_index + 1, dtype=np.bool_)
 
-<<<<<<< Updated upstream
-    def _infer_value(obs):
-        logits = model.forward_value_logits(obs)
-        return model.expected_value_from_logits(logits)
-
-    infer_value = jax.jit(_infer_value, out_shardings=replicated)
-
-    batch_count = (frame_count + effective_bs - 1) // effective_bs
-    sample_cursor = 0
-
-    logger.info("Starting value inference (%d batches, batch_size=%d, %d device(s))...", batch_count, effective_bs, num_devices)
-    pbar = tqdm.tqdm(total=batch_count, desc="Value inference")
-=======
     batch_count = (frame_count + handle.effective_bs - 1) // handle.effective_bs
     sample_cursor = 0
 
@@ -660,7 +580,6 @@ def process_dataset(
         handle.num_devices,
     )
     pbar = tqdm.tqdm(total=batch_count, desc=desc)
->>>>>>> Stashed changes
     batches_done = 0
 
     # Async pipeline: submit batch N to GPU while post-processing batch N-1 on CPU.
@@ -670,14 +589,8 @@ def process_dataset(
 
     for obs, _actions in data_loader:
         bs = obs.state.shape[0]
-<<<<<<< Updated upstream
-        cur_values = infer_value(obs)  # non-blocking: returns a future/lazy JAX array
-
-        # While GPU works on cur_values, collect results from previous batch
-=======
         cur_values = handle.infer_value(obs)
 
->>>>>>> Stashed changes
         if prev_values is not None:
             val_np = np.asarray(prev_values).astype(np.float32).reshape(-1)
             batch_abs_indices = absolute_indices[prev_cursor : prev_cursor + prev_bs]
@@ -694,10 +607,6 @@ def process_dataset(
         if batches_done >= batch_count:
             break
 
-<<<<<<< Updated upstream
-    # Collect the last batch
-=======
->>>>>>> Stashed changes
     if prev_values is not None:
         val_np = np.asarray(prev_values).astype(np.float32).reshape(-1)
         batch_abs_indices = absolute_indices[prev_cursor : prev_cursor + prev_bs]
@@ -721,20 +630,7 @@ def process_dataset(
         float(np.std(predicted_values)),
     )
 
-<<<<<<< Updated upstream
-    # ---- 4. Compute value targets, rewards, advantages ----
-    # value_tgts = value_targets.compute_normalized_value_targets(
-    #     episode_indices=episode_indices,
-    #     frame_indices=frame_indices,
-    #     episode_info=episode_info,
-    #     task_max_lengths=task_max_lengths,
-    #     c_fail_coef=args.c_fail_coef,
-    #     clip_min=config.value_clip_min,
-    #     clip_max=config.value_clip_max,
-    # )
-=======
     # ---- 3. Compute value targets, rewards, advantages ----
->>>>>>> Stashed changes
     value_tgts = load_existing_value_targets(raw_frames, "value_target")
 
     rewards = compute_dense_rewards_from_targets(value_tgts, episode_indices, frame_indices)
@@ -759,11 +655,7 @@ def process_dataset(
     for task_idx, threshold in sorted(thresholds.items()):
         logger.info("  task %d threshold=%.6f", task_idx, threshold)
 
-<<<<<<< Updated upstream
-    # ---- 5. Write back to parquet ----
-=======
     # ---- 4. Write back to parquet ----
->>>>>>> Stashed changes
     columns = {
         "predicted_value": predicted_values.astype(np.float32),
         "advantage": advantages.astype(np.float32),
@@ -784,8 +676,6 @@ def process_dataset(
     logger.info("Done. Wrote predicted_value, advantage, is_positive to %s", dataset_root)
 
 
-<<<<<<< Updated upstream
-=======
 # ---------------------------------------------------------------------------
 # Orchestrator (single dataset OR batch)
 # ---------------------------------------------------------------------------
@@ -878,7 +768,6 @@ def run_value_inference(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
->>>>>>> Stashed changes
 def _replace_config_for_inference(
     config: _config.TrainConfig,
     dataset_root: Path,
@@ -890,11 +779,6 @@ def _replace_config_for_inference(
     When checkpoint_dir is given, norm stats are loaded from the checkpoint's
     ``assets/`` directory instead of from the (possibly different) eval dataset.
     """
-<<<<<<< Updated upstream
-    import dataclasses
-
-=======
->>>>>>> Stashed changes
     data_factory = config.data
     if hasattr(data_factory, "repo_id"):
         data_factory = dataclasses.replace(data_factory, repo_id=str(dataset_root))
@@ -915,12 +799,6 @@ def _replace_config_for_inference(
 
 
 def parse_args() -> argparse.Namespace:
-<<<<<<< Updated upstream
-    parser = argparse.ArgumentParser(description="Value inference + advantage annotation for LeRobot datasets")
-    parser.add_argument("--config-name", type=str, required=True, help="Name of the training config (e.g. pi0_value_umi)")
-    parser.add_argument("--checkpoint-dir", type=str, required=True, help="Path to checkpoint step dir (contains params/)")
-    parser.add_argument("--dataset-root", type=str, required=True, help="Path to LeRobot dataset root")
-=======
     parser = argparse.ArgumentParser(
         description="Value inference + advantage annotation for LeRobot datasets",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -947,15 +825,12 @@ def parse_args() -> argparse.Namespace:
             "datasets to process in batch."
         ),
     )
->>>>>>> Stashed changes
     parser.add_argument("--batch-size", type=int, default=72, help="Inference batch size")
     parser.add_argument("--n-step", type=int, default=50, help="N-step for advantage computation")
     parser.add_argument("--positive-ratio", type=float, default=0.4, help="Target ratio of positive indicators per task")
     parser.add_argument("--c-fail-coef", type=float, default=1.0, help="Failure penalty coefficient for value targets")
     parser.add_argument("--success-field", type=str, default="success", help="Field name for success label in episodes.jsonl")
     parser.add_argument("--default-success", type=str, default="true", help="Default success label if field is missing (true/false)")
-<<<<<<< Updated upstream
-=======
 
     # Batch-mode controls
     parser.add_argument(
@@ -990,7 +865,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Only print which datasets would be processed, then exit.",
     )
->>>>>>> Stashed changes
     return parser.parse_args()
 
 

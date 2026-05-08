@@ -218,6 +218,26 @@ class ACPConditionPrompt(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class ACPForcePositivePrompt(DataTransformFn):
+    """Always append ``Advantage: positive`` to the prompt for inference.
+
+    This is a simplified version of ACPConditionPrompt for inference only,
+    where we always want to condition on positive advantage.
+
+    Must be placed **before** ``TokenizePrompt`` / ``TokenizeHybridInput`` in the
+    transform pipeline so the tag is included in the tokenized prompt.
+    """
+
+    def __call__(self, data: DataDict) -> DataDict:
+        prompt = data.get("prompt")
+        if prompt is not None and not isinstance(prompt, str):
+            prompt = prompt.item()
+
+        data["prompt"] = build_acp_tagged_task(prompt, is_positive=True)
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
 class Normalize(DataTransformFn):
     norm_stats: at.PyTree[NormStats] | None
     # If true, will use quantile normalization for all keys (default behavior).

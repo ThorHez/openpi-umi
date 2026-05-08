@@ -91,8 +91,9 @@ class Observation(Generic[ArrayT]):
     that should be produced by the data transforms.
     """
 
-    # Images, in [-1, 1] float32.
-    images: dict[str, at.Float[ArrayT, "*b h w c"]]
+    # Images, in [-1, 1] float32. Supports both single images [*b, h, w, c]
+    # and video clips [*b, t, h, w, c].
+    images: dict[str, at.Float[ArrayT, "*b ..."]]
     # Image masks, with same keys as images.
     image_masks: dict[str, at.Bool[ArrayT, "*b"]]
     # Low-dimensional robot state.

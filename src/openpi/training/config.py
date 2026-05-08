@@ -1136,6 +1136,91 @@ class LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_ACP(LeRobotUmiD
 
 
 @dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_ACP_Inference(DataConfigFactory):
+    """ACP (Advantage-Conditioned Policy) inference configuration.
+
+    For inference, always conditions on positive advantage by appending
+    ``Advantage: positive`` to the task prompt before tokenization.
+
+    Data pipeline: RepackTransform -> ... -> ACPForcePositivePrompt -> TokenizePrompt.
+    """
+
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+        "base_0_rgb_0": "base_0_rgb_0",
+        "base_0_depth_0": "base_0_depth_0",
+        "actions": "actions",
+        "prompt": "task",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -12, 3, -7, 6, -12, 3, -7),
+    })
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiInputsV4_Bimanual_HeadView_Depth_Horizon1()
+    data_outputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiOutputsV4()
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(self.mapping)
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                _transforms.Transform_depth_to_3ch_image(depth_column_name="base_0_depth_0"),
+                self.data_inputs_fn()
+            ],
+            outputs=[self.data_outputs_fn()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ACPForcePositivePrompt(),  # Always use positive for inference
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+                _transforms.KeepModelKeys(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class LeRobotUmiDataConfig_Bimamual_HeadView_ImageHorizon1_Hybrid(LeRobotUmiDataConfig_Hybrid):
     mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
         "robot0_eef_pos": "robot0_eef_pos",
@@ -2155,10 +2240,10 @@ _CONFIGS = [
         model=_pi0_value_config_umi_bimanual,
         freeze_filter=_pi0_value_config_umi_bimanual.get_freeze_filter_value_head_only(),
         data=LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Value(
-            repo_id="/root/openpi-umi/data/horizon_cloth_folding_value_training_20260401_ep116_unified",
+            repo_id="/root/openpi-umi/data/fold_clothes_value_training/horizon_cloth_folding_value_training_20260401_20260417_ep177",
             assets=AssetsConfig(
                 asset_id=".",
-                assets_dir="/root/openpi-umi/data/horizon_cloth_folding_value_training_20260401_ep116_unified",
+                assets_dir="/root/openpi-umi/data/fold_clothes_value_training/horizon_cloth_folding_value_training_20260401_20260417_ep177",
             ),
             base_config=UmiDataConfig(
                 action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
@@ -2176,13 +2261,13 @@ _CONFIGS = [
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=0.999,
-        num_train_steps=60_000,
+        num_train_steps=80_000,
         batch_size=72,
         num_workers=16,
         fsdp_devices=8,
         log_interval=10,
         save_interval=1000,
-        keep_period=30_000,
+        keep_period=40_000,
         c_fail_coef=1.0,
         value_clip_min=-1.0,
         value_clip_max=0.0,
@@ -2205,7 +2290,7 @@ _CONFIGS = [
             ),
         ),
         weight_loader=CheckpointWeightLoaderWithValueHead(
-            "/root/openpi-umi/checkpoints/pi0_value_umi_bimanual_headview_depth/my_experiment_v2/59999/params"
+            "/root/openpi-umi/checkpoints/pi0_value_umi_bimanual_headview_depth/my_experiment_v2/79999/params"
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=3_000,
@@ -2363,6 +2448,151 @@ _CONFIGS = [
         log_interval=10,
         save_interval=2000,
         keep_period=10_000,
+    ),
+    TrainConfig(
+        name="pi05_acp_umi_bimanual_headview_depth_multi_dataset",
+        model=pi0_gripper.Pi0GripperConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+            gripper_binary_indices=(9, 19),
+            gripper_binary_threshold=0.03,
+            gripper_binary_loss_weight=0.5,
+            gripper_binary_close_value=0.0,
+            gripper_binary_open_value=0.085,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
+            # weights=[5.0, 1.0, 1.0, 0.5, 5.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_ACP(
+                    repo_id="/root/openpi-umi/data/fold_clothes_messy_demostration/cloth_folding_hitl_replay_buffer_0407_gripper_bin",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/fold_clothes_messy_demostration/cloth_folding_hitl_replay_buffer_0407_gripper_bin",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    acp_dropout=0.3,
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_ACP(
+                    repo_id="/root/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_advantage_error_hitl_20260417_20260418_ep171",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_advantage_error_hitl_20260417_20260418_ep171",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    acp_dropout=0.3,
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_ACP(
+                    repo_id="/root/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_advantage_error_hitl_20260422_ep100",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_advantage_error_hitl_20260422_ep100",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    acp_dropout=0.3,
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_ACP(
+                    repo_id="/root/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_ep102",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_ep102",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    acp_dropout=0.3,
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_ACP(
+                    repo_id="/root/openpi-umi/data/fold_clothes_messy_demostration/horizon_cloth_folding_advantage_messy_demostration_20260408_ep85_gripper_bin",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/fold_clothes_messy_demostration/horizon_cloth_folding_advantage_messy_demostration_20260408_ep85_gripper_bin",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    acp_dropout=0.3,
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_ACP(
+                    repo_id="/root/openpi-umi/data/fold_clothes_messy_demostration/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/fold_clothes_messy_demostration/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    acp_dropout=0.3,
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_ACP(
+                    repo_id="/root/openpi-umi/data/fold_clothes_value_training/horizon_cloth_folding_value_training_20260401_20260417_ep177",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/fold_clothes_value_training/horizon_cloth_folding_value_training_20260401_20260417_ep177",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    acp_dropout=0.3,
+                ),
+            ]
+        ),
+        # 从标准 pi05 checkpoint 初始化时，新增的 gripper_binary_head 会保留随机初始化；
+        # 后续训练保存出的 checkpoint 会自动包含这个 head。
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithGripperHead(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=80_000,
+        batch_size=72,
+        num_workers=8,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=40000,
+    ),
+    TrainConfig(
+        name="pi05_acp_umi_bimanual_headview_depth_bimanual_infer",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+        ),
+        data=LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_ACP_Inference(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_bimanual_v1",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_bimanual_v1",
+            ),
+            base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=())
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_bimanual_v1/params"),
     ),
     #
     # Inference Aloha configs.
@@ -2977,10 +3207,10 @@ _CONFIGS = [
             action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
         ),
         data=LeRobotUmiDataConfigPadded_V4_Bimanual_Horizon1(
-            repo_id="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+            repo_id="/root/openpi-umi/data/fold_clothes_value_training/horizon_cloth_folding_value_training_20260401_20260417_ep177",
             assets=AssetsConfig(
                 asset_id=".",
-                assets_dir="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+                assets_dir="/root/openpi-umi/data/fold_clothes_value_training/horizon_cloth_folding_value_training_20260401_20260417_ep177",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
@@ -3528,7 +3758,7 @@ _CONFIGS = [
         keep_period=30_000,
     ),
     TrainConfig(
-        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_messy_folding_gripper_binary_260413",
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_messy_folding_gripper_binary_260422",
         model=pi0_gripper.Pi0GripperConfig(
             pi05=True,
             action_dim=32,
@@ -3536,7 +3766,7 @@ _CONFIGS = [
             action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
             max_token_len=512,
             gripper_binary_indices=(9, 19),
-            gripper_binary_threshold=0.02,
+            gripper_binary_threshold=0.03,
             gripper_binary_loss_weight=0.5,
             gripper_binary_close_value=0.0,
             gripper_binary_open_value=0.085,
@@ -3544,7 +3774,8 @@ _CONFIGS = [
         data=MultiDataConfigFactory(
             state_pad_dim=128,
             # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
-            weights=[1.0, 1.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            # weights=[5.0, 1.0, 1.0, 0.5, 5.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            weights=[1.0, 1.0, 2.0, 7.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
             datasets=[
                 LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
                     repo_id="/root/openpi-umi/data/cloth_folding_hitl_replay_buffer_0407_gripper_bin",
@@ -3568,11 +3799,44 @@ _CONFIGS = [
                         robot_type="ARM=2 G=1 H=0",
                     ),
                 ),
+                # LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                #     repo_id="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+                #     assets=AssetsConfig(
+                #         asset_id=".",
+                #         assets_dir="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+                #     ),
+                #     base_config=UmiDataConfig(
+                #         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                #         robot_type="ARM=2 G=1 H=0",
+                #     ),
+                # ),
+                # LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                #     repo_id="/root/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_advantage_error_hitl_20260417_20260418_ep171",
+                #     assets=AssetsConfig(
+                #         asset_id=".",
+                #         assets_dir="/root/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_advantage_error_hitl_20260417_20260418_ep171",
+                #     ),
+                #     base_config=UmiDataConfig(
+                #         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                #         robot_type="ARM=2 G=1 H=0",
+                #     ),
+                # ),
                 LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
-                    repo_id="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+                    repo_id="/root/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_advantage_error_hitl_20260422_ep100",
                     assets=AssetsConfig(
                         asset_id=".",
-                        assets_dir="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+                        assets_dir="/root/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_advantage_error_hitl_20260422_ep100",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_ep102",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_ep102",
                     ),
                     base_config=UmiDataConfig(
                         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
@@ -3584,7 +3848,7 @@ _CONFIGS = [
         # 从标准 pi05 checkpoint 初始化时，新增的 gripper_binary_head 会保留随机初始化；
         # 后续训练保存出的 checkpoint 会自动包含这个 head。
         weight_loader=weight_loaders.CheckpointWeightLoaderWithGripperHead(
-            "/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_horizon_folding_260322/my_experiment_v2/59999/params"
+            "/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_messy_folding_gripper_binary_260422/my_experiment_v3/19999/params"
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
@@ -3599,7 +3863,7 @@ _CONFIGS = [
         num_workers=8,
         fsdp_devices=8,
         log_interval=10,
-        keep_period=30000,
+        keep_period=20000,
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_messy_folding_260410",

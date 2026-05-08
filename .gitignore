@@ -181,9 +181,12 @@ debug_output/
 # Logs
 logs/
 *.log
+*.out
 
 # Third-party libraries
 third_party/
 
 # Images
 *.png
+
+*.tar.gz
