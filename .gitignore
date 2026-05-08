@@ -181,3 +181,9 @@ debug_output/
 # Logs
 logs/
 *.log
+
+# Third-party libraries
+third_party/
+
+# Images
+*.png
