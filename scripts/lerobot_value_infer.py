@@ -5,6 +5,7 @@ frame, computes n-step advantages from value targets, binarizes them into
 positive/negative indicators, and writes all annotations back into the
 dataset's parquet files.
 
+<<<<<<< Updated upstream
 Usage:
     python scripts/lerobot_value_infer.py \
         --config-name pi0_value_umi \
@@ -15,15 +16,54 @@ Usage:
         --c-fail-coef 1.0 \
         --success-field success \
         --default-success true \
+=======
+Two modes are supported via ``--dataset-root``:
+
+* **Single-dataset mode** -- if the path is itself a LeRobot dataset root
+  (i.e. it contains ``meta/info.json`` and ``data/chunk-*/episode_*.parquet``),
+  only that dataset is processed.
+* **Batch mode** -- otherwise the path is treated as a *parent directory* and
+  every immediate subdirectory that looks like a LeRobot dataset is processed
+  in turn. The model is loaded **once** and reused across all datasets, so the
+  per-dataset overhead is just data loading + inference + writeback.
+
+Usage::
+
+    # Single dataset
+    python scripts/lerobot_value_infer.py \\
+        --config-name pi0_value_umi \\
+        --checkpoint-dir ./checkpoints/pi0_value_umi/my_exp/10000 \\
+        --dataset-root ./data/my_lerobot_dataset \\
+        --batch-size 32
+
+    # All LeRobot datasets directly under ./data
+    python scripts/lerobot_value_infer.py \\
+        --config-name pi0_value_umi \\
+        --checkpoint-dir ./checkpoints/pi0_value_umi/my_exp/10000 \\
+        --dataset-root ./data \\
+        --skip-existing \\
+        --continue-on-error \\
+>>>>>>> Stashed changes
         --batch-size 32
 """
 
 import argparse
+<<<<<<< Updated upstream
 import json
 import logging
 import os
 from pathlib import Path
 from typing import Any
+=======
+import dataclasses
+import json
+import logging
+import os
+import re
+import time
+from pathlib import Path
+from typing import Any, NamedTuple
+>>>>>>> Stashed changes
 
 if "TMPDIR" not in os.environ:
     _tmp = Path(os.environ.get("HOME", "/root")) / "tmp"
@@ -49,6 +89,10 @@ logging.basicConfig(
     format="%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
     level=logging.INFO,
+<<<<<<< Updated upstream
+=======
+    force=True,  # openpi imports install a WARNING-level handler; override it
+>>>>>>> Stashed changes
 )
 logger = logging.getLogger(__name__)
 
@@ -345,6 +389,7 @@ def load_existing_value_targets(
 
 
 # ---------------------------------------------------------------------------
+<<<<<<< Updated upstream
 # Main pipeline
 # ---------------------------------------------------------------------------
 
@@ -357,6 +402,97 @@ def run_value_inference(args: argparse.Namespace) -> None:
     logger.info("Dataset root: %s", dataset_root)
 
     # ---- 1. Load model (data-parallel across all visible devices) ----
+=======
+# Dataset discovery
+# ---------------------------------------------------------------------------
+
+ANNOTATION_COLUMNS = ("predicted_value", "advantage", "is_positive")
+
+
+def is_lerobot_dataset_root(path: Path) -> bool:
+    """A directory is a LeRobot dataset iff it has ``meta/info.json`` and at
+    least one ``data/chunk-*/episode_*.parquet``.
+    """
+    if not path.is_dir():
+        return False
+    if not (path / "meta" / "info.json").is_file():
+        return False
+    return any(path.glob("data/chunk-*/episode_*.parquet"))
+
+
+def discover_dataset_roots(
+    target: Path,
+    *,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+) -> list[Path]:
+    """Discover LeRobot dataset roots at or under ``target``.
+
+    * If ``target`` itself is a dataset root, returns ``[target]``.
+    * Otherwise scans direct children of ``target`` (one level deep) and
+      returns any that look like dataset roots, sorted by path.
+
+    ``include``/``exclude`` are lists of regex patterns matched against the
+    directory *name* (not full path).
+    """
+    target = target.resolve()
+    if not target.exists():
+        raise FileNotFoundError(f"Dataset path does not exist: {target}")
+    if not target.is_dir():
+        raise NotADirectoryError(f"Not a directory: {target}")
+
+    if is_lerobot_dataset_root(target):
+        return [target]
+
+    roots: list[Path] = []
+    for child in sorted(target.iterdir()):
+        if child.is_dir() and is_lerobot_dataset_root(child):
+            roots.append(child)
+
+    if include:
+        compiled = [re.compile(p) for p in include]
+        roots = [r for r in roots if any(c.search(r.name) for c in compiled)]
+    if exclude:
+        compiled = [re.compile(p) for p in exclude]
+        roots = [r for r in roots if not any(c.search(r.name) for c in compiled)]
+
+    return roots
+
+
+def already_annotated(dataset_root: Path) -> bool:
+    """Return True if ``info.json`` already lists every annotation column."""
+    info_path = dataset_root / "meta" / "info.json"
+    if not info_path.is_file():
+        return False
+    try:
+        with info_path.open() as f:
+            info = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return False
+    features = info.get("features") or {}
+    return all(col in features for col in ANNOTATION_COLUMNS)
+
+
+# ---------------------------------------------------------------------------
+# Model setup (loaded once, reused across all datasets)
+# ---------------------------------------------------------------------------
+
+
+class ModelHandle(NamedTuple):
+    model: Any
+    infer_value: Any  # jit'd function obs -> jax.Array
+    mesh: jax.sharding.Mesh
+    replicated: jax.sharding.NamedSharding
+    data_parallel: jax.sharding.NamedSharding
+    num_devices: int
+    effective_bs: int
+
+
+def setup_model(args: argparse.Namespace, config: _config.TrainConfig) -> ModelHandle:
+    """Load checkpoint, build the JIT'd value-inference function, return a
+    handle that can be reused across many datasets.
+    """
+>>>>>>> Stashed changes
     num_devices = jax.device_count()
     mesh = jax.sharding.Mesh(jax.devices(), ("batch",))
     replicated = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
@@ -376,7 +512,58 @@ def run_value_inference(args: argparse.Namespace) -> None:
     model.eval()
     logger.info("Model loaded and replicated across %d device(s).", num_devices)
 
+<<<<<<< Updated upstream
     # ---- 2. Load raw dataset metadata ----
+=======
+    def _infer_value(obs):
+        logits = model.forward_value_logits(obs)
+        return model.expected_value_from_logits(logits)
+
+    infer_value = jax.jit(_infer_value, out_shardings=replicated)
+
+    effective_bs = args.batch_size
+    if effective_bs % num_devices != 0:
+        effective_bs = ((effective_bs + num_devices - 1) // num_devices) * num_devices
+        logger.info(
+            "Adjusted batch_size %d -> %d (divisible by %d devices)",
+            args.batch_size,
+            effective_bs,
+            num_devices,
+        )
+
+    return ModelHandle(
+        model=model,
+        infer_value=infer_value,
+        mesh=mesh,
+        replicated=replicated,
+        data_parallel=data_parallel,
+        num_devices=num_devices,
+        effective_bs=effective_bs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-dataset pipeline
+# ---------------------------------------------------------------------------
+
+
+def process_dataset(
+    args: argparse.Namespace,
+    config: _config.TrainConfig,
+    dataset_root: Path,
+    handle: ModelHandle,
+    *,
+    progress_prefix: str = "",
+) -> None:
+    """Run inference + advantage annotation for a single LeRobot dataset.
+
+    Reuses the pre-loaded model from ``handle``. ``progress_prefix`` is shown
+    in the tqdm bar (useful when iterating over many datasets).
+    """
+    logger.info("Dataset root: %s", dataset_root)
+
+    # ---- 1. Load raw dataset metadata ----
+>>>>>>> Stashed changes
     raw_dataset = lerobot_dataset.LeRobotDataset(
         repo_id=str(dataset_root),
         root=str(dataset_root),
@@ -384,20 +571,33 @@ def run_value_inference(args: argparse.Namespace) -> None:
     raw_frames = raw_dataset.hf_dataset.with_format(None)
     frame_count = len(raw_frames)
     if frame_count == 0:
+<<<<<<< Updated upstream
         raise ValueError("Dataset has no frames.")
+=======
+        raise ValueError(f"Dataset has no frames: {dataset_root}")
+>>>>>>> Stashed changes
 
     absolute_indices = np.asarray(raw_frames["index"], dtype=np.int64).reshape(-1)
     episode_indices = np.asarray(raw_frames["episode_index"], dtype=np.int64).reshape(-1)
     frame_indices = np.asarray(raw_frames["frame_index"], dtype=np.int64).reshape(-1)
     task_indices = np.asarray(raw_frames["task_index"], dtype=np.int64).reshape(-1)
 
+<<<<<<< Updated upstream
     logger.info("Dataset: %d frames, %d episodes", frame_count, len(np.unique(episode_indices)))
+=======
+    logger.info(
+        "Dataset: %d frames, %d episodes",
+        frame_count,
+        len(np.unique(episode_indices)),
+    )
+>>>>>>> Stashed changes
 
     episode_info, task_max_lengths = build_episode_info(
         raw_dataset,
         success_field=args.success_field,
         default_success=args.default_success,
     )
+<<<<<<< Updated upstream
     logger.info("Episode info: %d episodes, %d tasks", len(episode_info), len(task_max_lengths))
 
     # ---- 3. Batched value inference via data loader ----
@@ -411,6 +611,24 @@ def run_value_inference(args: argparse.Namespace) -> None:
     data_loader = _data_loader.create_data_loader(
         infer_config,
         sharding=data_parallel,
+=======
+    logger.info(
+        "Episode info: %d episodes, %d tasks",
+        len(episode_info),
+        len(task_max_lengths),
+    )
+
+    # ---- 2. Batched value inference via data loader ----
+    infer_config = _replace_config_for_inference(
+        config,
+        dataset_root,
+        handle.effective_bs,
+        checkpoint_dir=args.checkpoint_dir,
+    )
+    data_loader = _data_loader.create_data_loader(
+        infer_config,
+        sharding=handle.data_parallel,
+>>>>>>> Stashed changes
         shuffle=False,
     )
 
@@ -418,6 +636,7 @@ def run_value_inference(args: argparse.Namespace) -> None:
     prediction_lookup = np.zeros(max_abs_index + 1, dtype=np.float32)
     prediction_seen = np.zeros(max_abs_index + 1, dtype=np.bool_)
 
+<<<<<<< Updated upstream
     def _infer_value(obs):
         logits = model.forward_value_logits(obs)
         return model.expected_value_from_logits(logits)
@@ -429,6 +648,19 @@ def run_value_inference(args: argparse.Namespace) -> None:
 
     logger.info("Starting value inference (%d batches, batch_size=%d, %d device(s))...", batch_count, effective_bs, num_devices)
     pbar = tqdm.tqdm(total=batch_count, desc="Value inference")
+=======
+    batch_count = (frame_count + handle.effective_bs - 1) // handle.effective_bs
+    sample_cursor = 0
+
+    desc = f"{progress_prefix}Value inference" if progress_prefix else "Value inference"
+    logger.info(
+        "Starting value inference (%d batches, batch_size=%d, %d device(s))...",
+        batch_count,
+        handle.effective_bs,
+        handle.num_devices,
+    )
+    pbar = tqdm.tqdm(total=batch_count, desc=desc)
+>>>>>>> Stashed changes
     batches_done = 0
 
     # Async pipeline: submit batch N to GPU while post-processing batch N-1 on CPU.
@@ -438,9 +670,14 @@ def run_value_inference(args: argparse.Namespace) -> None:
 
     for obs, _actions in data_loader:
         bs = obs.state.shape[0]
+<<<<<<< Updated upstream
         cur_values = infer_value(obs)  # non-blocking: returns a future/lazy JAX array
 
         # While GPU works on cur_values, collect results from previous batch
+=======
+        cur_values = handle.infer_value(obs)
+
+>>>>>>> Stashed changes
         if prev_values is not None:
             val_np = np.asarray(prev_values).astype(np.float32).reshape(-1)
             batch_abs_indices = absolute_indices[prev_cursor : prev_cursor + prev_bs]
@@ -457,7 +694,10 @@ def run_value_inference(args: argparse.Namespace) -> None:
         if batches_done >= batch_count:
             break
 
+<<<<<<< Updated upstream
     # Collect the last batch
+=======
+>>>>>>> Stashed changes
     if prev_values is not None:
         val_np = np.asarray(prev_values).astype(np.float32).reshape(-1)
         batch_abs_indices = absolute_indices[prev_cursor : prev_cursor + prev_bs]
@@ -481,6 +721,7 @@ def run_value_inference(args: argparse.Namespace) -> None:
         float(np.std(predicted_values)),
     )
 
+<<<<<<< Updated upstream
     # ---- 4. Compute value targets, rewards, advantages ----
     # value_tgts = value_targets.compute_normalized_value_targets(
     #     episode_indices=episode_indices,
@@ -491,6 +732,9 @@ def run_value_inference(args: argparse.Namespace) -> None:
     #     clip_min=config.value_clip_min,
     #     clip_max=config.value_clip_max,
     # )
+=======
+    # ---- 3. Compute value targets, rewards, advantages ----
+>>>>>>> Stashed changes
     value_tgts = load_existing_value_targets(raw_frames, "value_target")
 
     rewards = compute_dense_rewards_from_targets(value_tgts, episode_indices, frame_indices)
@@ -515,7 +759,11 @@ def run_value_inference(args: argparse.Namespace) -> None:
     for task_idx, threshold in sorted(thresholds.items()):
         logger.info("  task %d threshold=%.6f", task_idx, threshold)
 
+<<<<<<< Updated upstream
     # ---- 5. Write back to parquet ----
+=======
+    # ---- 4. Write back to parquet ----
+>>>>>>> Stashed changes
     columns = {
         "predicted_value": predicted_values.astype(np.float32),
         "advantage": advantages.astype(np.float32),
@@ -536,6 +784,101 @@ def run_value_inference(args: argparse.Namespace) -> None:
     logger.info("Done. Wrote predicted_value, advantage, is_positive to %s", dataset_root)
 
 
+<<<<<<< Updated upstream
+=======
+# ---------------------------------------------------------------------------
+# Orchestrator (single dataset OR batch)
+# ---------------------------------------------------------------------------
+
+
+def run_value_inference(args: argparse.Namespace) -> None:
+    config = _config.get_config(args.config_name)
+    target_path = Path(args.dataset_root).resolve()
+
+    logger.info("Config: %s", args.config_name)
+    logger.info("Checkpoint: %s", args.checkpoint_dir)
+    logger.info("Target path: %s", target_path)
+
+    dataset_roots = discover_dataset_roots(
+        target_path,
+        include=args.include,
+        exclude=args.exclude,
+    )
+    if not dataset_roots:
+        raise RuntimeError(
+            f"No LeRobot datasets found at or under {target_path} "
+            "(expected meta/info.json + data/chunk-*/episode_*.parquet)."
+        )
+
+    if args.skip_existing:
+        kept: list[Path] = []
+        for root in dataset_roots:
+            if already_annotated(root):
+                logger.info("Skipping (already annotated): %s", root)
+            else:
+                kept.append(root)
+        dataset_roots = kept
+        if not dataset_roots:
+            logger.info("All discovered datasets are already annotated; nothing to do.")
+            return
+
+    logger.info("Will process %d dataset(s):", len(dataset_roots))
+    for r in dataset_roots:
+        logger.info("  - %s", r)
+
+    if args.list_only:
+        return
+
+    handle = setup_model(args, config)
+
+    successes: list[Path] = []
+    failures: list[tuple[Path, BaseException]] = []
+    overall_t0 = time.monotonic()
+
+    for i, dataset_root in enumerate(dataset_roots, 1):
+        prefix = f"[{i}/{len(dataset_roots)}] "
+        logger.info("%s===== Processing %s =====", prefix, dataset_root)
+        t0 = time.monotonic()
+        try:
+            process_dataset(
+                args,
+                config,
+                dataset_root,
+                handle,
+                progress_prefix=prefix,
+            )
+        except Exception as exc:
+            elapsed = time.monotonic() - t0
+            logger.exception(
+                "%sFailed after %.1fs: %s -> %r",
+                prefix,
+                elapsed,
+                dataset_root,
+                exc,
+            )
+            failures.append((dataset_root, exc))
+            if not args.continue_on_error:
+                raise
+        else:
+            elapsed = time.monotonic() - t0
+            logger.info("%sFinished %s in %.1fs", prefix, dataset_root, elapsed)
+            successes.append(dataset_root)
+
+    total_elapsed = time.monotonic() - overall_t0
+    logger.info(
+        "Summary: %d/%d succeeded in %.1fs total",
+        len(successes),
+        len(dataset_roots),
+        total_elapsed,
+    )
+    if failures:
+        logger.error("Failed datasets:")
+        for r, e in failures:
+            logger.error("  - %s: %r", r, e)
+        raise SystemExit(1)
+
+
+>>>>>>> Stashed changes
 def _replace_config_for_inference(
     config: _config.TrainConfig,
     dataset_root: Path,
@@ -547,8 +890,11 @@ def _replace_config_for_inference(
     When checkpoint_dir is given, norm stats are loaded from the checkpoint's
     ``assets/`` directory instead of from the (possibly different) eval dataset.
     """
+<<<<<<< Updated upstream
     import dataclasses
 
+=======
+>>>>>>> Stashed changes
     data_factory = config.data
     if hasattr(data_factory, "repo_id"):
         data_factory = dataclasses.replace(data_factory, repo_id=str(dataset_root))
@@ -569,16 +915,82 @@ def _replace_config_for_inference(
 
 
 def parse_args() -> argparse.Namespace:
+<<<<<<< Updated upstream
     parser = argparse.ArgumentParser(description="Value inference + advantage annotation for LeRobot datasets")
     parser.add_argument("--config-name", type=str, required=True, help="Name of the training config (e.g. pi0_value_umi)")
     parser.add_argument("--checkpoint-dir", type=str, required=True, help="Path to checkpoint step dir (contains params/)")
     parser.add_argument("--dataset-root", type=str, required=True, help="Path to LeRobot dataset root")
+=======
+    parser = argparse.ArgumentParser(
+        description="Value inference + advantage annotation for LeRobot datasets",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--config-name",
+        type=str,
+        required=True,
+        help="Name of the training config (e.g. pi0_value_umi)",
+    )
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        required=True,
+        help="Path to checkpoint step dir (contains params/)",
+    )
+    parser.add_argument(
+        "--dataset-root",
+        type=str,
+        required=True,
+        help=(
+            "Either (a) the path to a single LeRobot dataset root or (b) a "
+            "parent directory whose immediate subdirectories are LeRobot "
+            "datasets to process in batch."
+        ),
+    )
+>>>>>>> Stashed changes
     parser.add_argument("--batch-size", type=int, default=72, help="Inference batch size")
     parser.add_argument("--n-step", type=int, default=50, help="N-step for advantage computation")
     parser.add_argument("--positive-ratio", type=float, default=0.4, help="Target ratio of positive indicators per task")
     parser.add_argument("--c-fail-coef", type=float, default=1.0, help="Failure penalty coefficient for value targets")
     parser.add_argument("--success-field", type=str, default="success", help="Field name for success label in episodes.jsonl")
     parser.add_argument("--default-success", type=str, default="true", help="Default success label if field is missing (true/false)")
+<<<<<<< Updated upstream
+=======
+
+    # Batch-mode controls
+    parser.add_argument(
+        "--include",
+        action="append",
+        default=None,
+        metavar="REGEX",
+        help=(
+            "Regex applied to dataset directory NAME; only matching datasets "
+            "are processed. Repeatable; ORed across patterns."
+        ),
+    )
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=None,
+        metavar="REGEX",
+        help="Regex applied to dataset directory NAME; matching datasets are dropped. Repeatable.",
+    )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip datasets whose meta/info.json already declares predicted_value/advantage/is_positive.",
+    )
+    parser.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="If a single dataset fails, log and proceed to the next (instead of aborting).",
+    )
+    parser.add_argument(
+        "--list-only",
+        action="store_true",
+        help="Only print which datasets would be processed, then exit.",
+    )
+>>>>>>> Stashed changes
     return parser.parse_args()
 
 

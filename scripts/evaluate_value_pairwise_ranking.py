@@ -500,6 +500,11 @@ def run_eval(args: argparse.Namespace) -> None:
         )
 
     precomputed_pred_col = _dataset_precomputed_pred_column(hf_cols)
+    # If targets are forced to be recomputed from meta, also force model inference so
+    # predicted_value is recomputed (ignore any stored prediction columns).
+    if args.target_source == "computed":
+        precomputed_pred_col = None
+
     if precomputed_pred_col is None and not args.checkpoint_dir:
         raise ValueError(
             "Missing --checkpoint-dir (required for inference). "
