@@ -493,6 +493,23 @@ def _merge_value_target_params(
     )
 
 
+def _success_field_configured(dataset_config: Dict | None) -> bool:
+    """Return True iff the dataset config opts into a ``success`` per-frame field.
+
+    Checked locations: ``load_keys``, ``features``, ``single_frame_features``.
+    """
+    if not dataset_config:
+        return False
+    load_keys = dataset_config.get("load_keys") or []
+    if isinstance(load_keys, (list, tuple)) and "success" in load_keys:
+        return True
+    for section in ("features", "single_frame_features"):
+        entries = dataset_config.get(section) or {}
+        if isinstance(entries, dict) and "success" in entries:
+            return True
+    return False
+
+
 def process_episode_fast_vectorized(
     episode_idx: int,
     episode_data: Dict[str, np.ndarray],
@@ -542,7 +559,11 @@ def _attach_value_targets_to_frames(
     clip_max: float,
     task_to_index: Dict[str, int],
 ) -> None:
-    """Compute normalized value targets and attach `value_target` to each frame dict in-place."""
+    """Compute normalized value targets and attach `value_target` to each frame dict in-place.
+
+    Callers must verify upfront that every episode has per-frame ``success`` labels;
+    this helper raises if any episode is missing them.
+    """
     def _frame_success_to_bool(frame: Dict[str, Any]) -> bool | None:
         if "success" not in frame:
             return None
@@ -563,14 +584,12 @@ def _attach_value_targets_to_frames(
         ep_length = len(frames)
         success_markers = [_frame_success_to_bool(frame) for frame in frames]
         success_markers = [x for x in success_markers if x is not None]
-        if success_markers:
-            # Per-episode success is derived from success labels in frame data.
-            ep_success = any(success_markers)
-        else:
+        if not success_markers:
             raise ValueError(
                 f"Missing `success` labels for episode_index={ep_idx}. "
                 "Value target computation requires `success` in dataset frames."
             )
+        ep_success = any(success_markers)
 
         episode_info[ep_idx] = value_targets.EpisodeTargetInfo(
             task_index=task_index,
@@ -633,9 +652,17 @@ def convert_to_lerobot(
         value_clip_min=value_clip_min,
         value_clip_max=value_clip_max,
     )
+    compute_value_targets = _success_field_configured(dataset_config)
+    if not compute_value_targets:
+        print(
+            "WARNING: `success` is not declared in dataset config (load_keys / features / "
+            "single_frame_features). Skipping value_target computation; "
+            "`value_target` will NOT be written to the dataset."
+        )
     print(
         f"Value target (after YAML merge): c_fail_coef={c_fail_coef}, "
-        f"value_clip_min={value_clip_min}, value_clip_max={value_clip_max}"
+        f"value_clip_min={value_clip_min}, value_clip_max={value_clip_max}, "
+        f"compute_value_targets={compute_value_targets}"
     )
     _print_gripper_binarize_config(dataset_config)
 
@@ -675,7 +702,7 @@ def convert_to_lerobot(
             }
             for i in range(state_sequence_length):
                 features[f"observation.left_wrist_0_rgb_{i}"] = {"dtype": "image", "shape": (224, 224, 3), "names": ["height", "width", "channel"]}
-        if "value_target" not in features:
+        if compute_value_targets and "value_target" not in features:
             features["value_target"] = {"dtype": "float32", "shape": (1,), "names": None}
 
         lerobot_dataset = LeRobotDataset.create(
@@ -734,13 +761,14 @@ def convert_to_lerobot(
             if meta.get_task_index(task) is None:
                 meta.add_task(task)
         task_to_index = {v: k for k, v in meta.task_to_task_index.items()}
-        _attach_value_targets_to_frames(
-            flat,
-            c_fail_coef=c_fail_coef,
-            clip_min=value_clip_min,
-            clip_max=value_clip_max,
-            task_to_index=task_to_index,
-        )
+        if compute_value_targets:
+            _attach_value_targets_to_frames(
+                flat,
+                c_fail_coef=c_fail_coef,
+                clip_min=value_clip_min,
+                clip_max=value_clip_max,
+                task_to_index=task_to_index,
+            )
         # Precompute start index per episode
         start_indices = []
         idx = 0
