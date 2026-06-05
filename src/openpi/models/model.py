@@ -93,7 +93,8 @@ class Observation(Generic[ArrayT]):
 
     # Images, in [-1, 1] float32. Supports both single images [*b, h, w, c]
     # and video clips [*b, t, h, w, c].
-    images: dict[str, at.Float[ArrayT, "*b ..."]]
+    # Use "..." to represent any number of batch dimensions followed by spatial dims.
+    images: dict[str, at.Float[ArrayT, "..."]]
     # Image masks, with same keys as images.
     image_masks: dict[str, at.Bool[ArrayT, "*b"]]
     # Low-dimensional robot state.
@@ -203,6 +204,16 @@ def preprocess_observation(
     out_images = {}
     for key in image_keys:
         image = observation.images[key]
+
+        # Video tensors from Pi0Mem have shape [B, T, H, W, C] (5-D).
+        # Flatten the time dimension into the batch dimension so that all
+        # downstream logic (resize, augmentation) operates on 4-D arrays,
+        # then restore the time dimension afterwards.
+        is_video = image.ndim == 5
+        if is_video:
+            B, T = image.shape[:2]
+            image = image.reshape(B * T, *image.shape[2:])  # [B*T, H, W, C]
+
         if image.shape[1:3] != image_resolution:
             logger.info(f"Resizing image {key} from {image.shape[1:3]} to {image_resolution}")
             image = image_tools.resize_with_pad(image, *image_resolution)
@@ -210,6 +221,8 @@ def preprocess_observation(
         if train:
             if rng is None:
                 # Stochastic augmax requires a key; skip augmentation if none (caller should pass rng).
+                if is_video:
+                    image = image.reshape(B, T, *image.shape[1:])
                 out_images[key] = image
                 continue
 
@@ -233,13 +246,29 @@ def preprocess_observation(
             # Back to [-1, 1].
             image = image * 2.0 - 1.0
 
+        if is_video:
+            image = image.reshape(B, T, *image.shape[1:])  # restore [B, T, H, W, C]
+
         out_images[key] = image
 
     for depth_key in depth_keys:
+        if depth_key not in observation.images:
+            continue
+
         depth = observation.images[depth_key]
+
+        is_video = depth.ndim == 5
+        if is_video:
+            B, T = depth.shape[:2]
+            depth = depth.reshape(B * T, *depth.shape[2:])
+
         if depth.shape[1:3] != image_resolution:
             logger.info(f"Resizing depth {depth_key} from {depth.shape[1:3]} to {image_resolution}")
             depth = image_tools.resize_with_pad(depth, *image_resolution)
+
+        if is_video:
+            depth = depth.reshape(B, T, *depth.shape[1:])
+
         # do not apply augmentations to depth
         out_images[depth_key] = depth
 

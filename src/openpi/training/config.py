@@ -30,6 +30,8 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
 import openpi.models.pi0_discrete as pi0_discrete
+import openpi.models.pi0_mem as pi0_mem
+import openpi.models.pi0_mem_compress as pi0_mem_compress
 import openpi.models.pi0_value as pi0_value
 from openpi.transforms import make_bool_mask
 from openpi.models.pi0_discrete import CheckpointWeightLoaderWithDiscreteHead
@@ -1451,6 +1453,136 @@ class LeRobotUmiDataConfigPadded_V4_Bimanual_Horizon1(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=model_transforms,
         )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(DataConfigFactory):
+    """Pi0Mem bimanual wrist-only data config.
+
+    Mirrors ``LeRobotUmiDataConfigPadded_V4_Bimanual_Horizon1`` for the
+    state/action layout, normalize masks and repack mapping, but lays the
+    image side out for Pi0Mem's video encoder:
+
+    - Image keys ``left_wrist_0_rgb_0`` / ``right_wrist_0_rgb_0`` are loaded
+      across ``num_frames`` historical frames by ``VideoFrameDataset`` (the
+      training script wraps the LeRobot dataset before transforms run).
+    - ``transforms_video.BuildVideoTensor`` then stacks the per-frame keys
+      ``<base>_<t>`` into ``<base>_video`` of shape ``(T, 3, 224, 224)``.
+    - A small inline Pi0Mem video-input transform (defined in
+      ``openpi.training.config_pi0_mem``) builds the state vector and the
+      ``image`` / ``image_mask`` dicts that Pi0Mem expects, with each image
+      having shape ``(T, 224, 224, 3)``.
+
+    NOTE: ``ResizeImages`` is intentionally omitted in ``model_transforms``
+    because frames are already 224x224 and ``image_tools.resize_with_pad``
+    does not understand a leading time dimension.
+    """
+
+    # Number of historical frames to stack per image stream (T).
+    num_frames: int = 2
+    # Stride (in raw dataset rows) between consecutive frames.
+    frame_stride: int = 1
+    # Behavior near the start of an episode: 'repeat' first valid frame, or 'zero' pad.
+    padding_mode: str = "repeat"
+    # Single-frame image keys to expand into video (look up history in the underlying
+    # LeRobot dataset). Must match keys actually stored in the dataset.
+    image_keys: tuple[str, ...] = ("left_wrist_0_rgb_0", "right_wrist_0_rgb_0")
+
+    # Same masks as the Horizon1 sibling: 20-d bimanual actions, 38-d concatenated state.
+    normalize_masks = {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state":   make_bool_mask(6, -12, 3, -7, 6, -12, 3, -7),
+    }
+
+    def video_frame_config(self):
+        """VideoFrameConfig consumed by the Pi0Mem training script's data loader."""
+        from openpi.training.mem.video_dataset import VideoFrameConfig
+
+        return VideoFrameConfig(
+            image_keys=tuple(self.image_keys),
+            num_frames=self.num_frames,
+            frame_stride=self.frame_stride,
+            padding_mode=self.padding_mode,
+        )
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        return dataclasses.replace(config, normalize_masks=self.normalize_masks)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Imported lazily to avoid a hard dependency from config.py on the
+        # Pi0Mem-specific helper module.
+        import openpi.training.config_pi0_mem as _config_pi0_mem
+        from openpi import transforms_video as _transforms_video
+
+        # The per-frame image keys produced by VideoFrameDataset are
+        #   "<image_key>_<t>" for t in [0, num_frames).
+        # The repack mapping keeps those keys (they will be stacked next).
+        per_frame_keys = {
+            f"{k}_{t}": f"{k}_{t}"
+            for k in self.image_keys
+            for t in range(self.num_frames)
+        }
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        # State (same as Horizon1).
+                        "robot0_eef_pos": "robot0_eef_pos",
+                        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+                        "robot0_gripper_width": "robot0_gripper_width",
+                        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+                        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+                        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+                        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+                        "robot1_eef_pos": "robot1_eef_pos",
+                        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+                        "robot1_gripper_width": "robot1_gripper_width",
+                        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+                        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+                        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+                        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+                        # Per-frame images (e.g. left_wrist_0_rgb_0_0 .. _T-1).
+                        **per_frame_keys,
+                        "actions": "actions",
+                        "prompt": "task",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                _transforms_video.BuildVideoTensor(
+                    image_keys=tuple(self.image_keys),
+                    num_frames=self.num_frames,
+                    output_keys={k: f"{k}_video" for k in self.image_keys},
+                ),
+                _config_pi0_mem.UmiInputsV4_Bimanual_Video(num_frames=self.num_frames),
+            ],
+        )
+
+        # Same model_transforms as the Horizon1 sibling, minus ResizeImages.
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
 
 @dataclasses.dataclass(frozen=True)
 class LeRobotUmiDataConfigPadded_V4_Bimanual_Horizon2(DataConfigFactory):
@@ -3207,10 +3339,10 @@ _CONFIGS = [
             action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
         ),
         data=LeRobotUmiDataConfigPadded_V4_Bimanual_Horizon1(
-            repo_id="/root/openpi-umi/data/fold_clothes_value_training/horizon_cloth_folding_value_training_20260401_20260417_ep177",
+            repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/eval_horizon_cloth_folding_test_20260427_124609_to_20260427_132407_ep51",
             assets=AssetsConfig(
                 asset_id=".",
-                assets_dir="/root/openpi-umi/data/fold_clothes_value_training/horizon_cloth_folding_value_training_20260401_20260417_ep177",
+                assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/eval_horizon_cloth_folding_test_20260427_124609_to_20260427_132407_ep51",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
@@ -3696,43 +3828,10 @@ _CONFIGS = [
             weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
             datasets=[
                 LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
-                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260316",
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
                     assets=AssetsConfig(
                         asset_id=".",
-                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260316",
-                    ),
-                    base_config=UmiDataConfig(
-                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-                        robot_type="ARM=2 G=1 H=0",
-                    ),
-                ),
-                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
-                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260317",
-                    assets=AssetsConfig(
-                        asset_id=".",
-                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260317",
-                    ),
-                    base_config=UmiDataConfig(
-                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-                        robot_type="ARM=2 G=1 H=0",
-                    ),
-                ),
-                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
-                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260320",
-                    assets=AssetsConfig(
-                        asset_id=".",
-                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260320",
-                    ),
-                    base_config=UmiDataConfig(
-                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-                        robot_type="ARM=2 G=1 H=0",
-                    ),
-                ),
-                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
-                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260323",
-                    assets=AssetsConfig(
-                        asset_id=".",
-                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260323",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
                     ),
                     base_config=UmiDataConfig(
                         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
@@ -3741,7 +3840,7 @@ _CONFIGS = [
                 ),
             ]
         ),
-        weight_loader=CheckpointWeightLoaderWithDiscreteHead("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_horizon_folding_260322/my_experiment/19000/params"),
+        weight_loader=CheckpointWeightLoaderWithDiscreteHead("gs://openpi-assets/checkpoints/pi05_base/params"),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
             peak_lr=8e-5,
@@ -3752,10 +3851,374 @@ _CONFIGS = [
         ema_decay=0.999,
         num_train_steps=60_000,
         batch_size=72,
-        num_workers=12,
-        fsdp_devices=6,
+        num_workers=16,
+        fsdp_devices=8,
         log_interval=10,
         keep_period=30_000,
+    ),
+    # =====================================================================
+    # Pi0Mem wrist-only twin of the 260322 fold-clothes hybrid config.
+    # Same 4 datasets / weights / schedule as the HeadView+Depth Pi0Mem entry
+    # above, but every child uses the bimanual wrist-only factory
+    # (LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem) — i.e. NO base_0_rgb
+    # and NO base_0_depth streams. Only left_wrist_0_rgb + right_wrist_0_rgb
+    # are loaded as T-frame video tensors. Pi0Mem.embed_prefix iterates over
+    # whatever keys are in obs.images, so dropping the base streams is a
+    # data-side concern only — no model code changes required.
+    # Launch:
+    #   XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/mem/train_pi0_mem.py \
+    #     pi0_mem_umi_32d_60k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322 \
+    #     --exp-name=my_experiment [--overwrite | --resume]
+    # =====================================================================
+    TrainConfig(
+        name="pi0_mem_umi_32d_60k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322",
+        model=pi0_mem.Pi0MemConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+            num_frames=1,
+            temporal_every=4,
+            # siglip_remat_policy="dots_with_no_batch_dims_saveable",
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    num_frames=1,
+                )
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=60_000,
+        batch_size=72,
+        num_workers=24,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=30_000,
+    ),
+    # =====================================================================
+    # Pi0MemCompress wrist-only twin of the Pi0Mem entry directly above.
+    # Same dataset / weights / schedule / batch / LR, but the visual
+    # backbone is openpi.models.siglip_mem_compress (compressed-history MEM)
+    # instead of openpi.models.siglip_mem (per-block temporal attention).
+    # Reuses the same Pi0Mem-aware DataConfig (LeRobotUmiDataConfig_Bimamual_
+    # Horizon1_Pi0Mem) — the data pipeline is identical, only the model
+    # changes. Launch with the compress training script:
+    #   XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/mem/train_pi0_mem_compress.py \
+    #     pi0_mem_compress_umi_32d_60k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322 \
+    #     --exp-name=my_experiment [--overwrite | --resume]
+    # =====================================================================
+    TrainConfig(
+        name="pi0_mem_compress_umi_32d_60k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322",
+        model=pi0_mem_compress.Pi0MemCompressConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+            num_frames=16,
+            memory_every=4,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+            # history_gate_init=-4.6,
+            #history_gate_init=0.0,
+            # Fixed-gate experiment: uncomment one of these to force the memory
+            # branch open instead of learning sigmoid(history_memory_gate_logit).
+            # history_gate_fixed=0.5,
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=20.0,
+            # siglip_remat_policy="dots_with_no_batch_dims_saveable",
+            diversity_weight=0.01,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4
+                )
+            ],
+        ),
+        # Pi0MemCompress adds HistoryResampler_0/... and per-block
+        # history_memory_gate_logit which are NOT present in pi05_base. Use
+        # the memory-aware loader so those new params fall back to the
+        # model's random init instead of failing pytree-structure validation.
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=25_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=24,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=5_000,
+    ),
+    # =====================================================================
+    # History-required variant of the fixed-gate Pi0MemCompress run above.
+    #
+    # Goal: make the policy stay accurate when current-frame evidence is
+    # incomplete, so the clean history path has a direct reason to become useful.
+    #
+    # Added training-only mechanisms in scripts/mem/train_pi0_mem_compress.py:
+    #   - current_frame_dropout_prob: sometimes blank the current frame while
+    #     keeping history intact.
+    #   - current_frame_mask_prob: softly mask current-frame pixels.
+    #   - current_frame_corrupt_loss_weight: add a normalized second action
+    #     loss on the corrupted-current / clean-history view.
+    #
+    # Launch:
+    #   XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/mem/train_pi0_mem_compress.py \
+    #     pi0_mem_compress_umi_32d_30k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322_history_required \
+    #     --exp-name=my_experiment --overwrite
+    # =====================================================================
+    TrainConfig(
+        name="pi0_mem_compress_umi_32d_30k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322_history_required",
+        model=pi0_mem_compress.Pi0MemCompressConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+            num_frames=16,
+            memory_every=4,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=20.0,
+            diversity_weight=0.01,
+            current_frame_dropout_prob=0.25,
+            current_frame_mask_prob=0.15,
+            current_frame_corrupt_loss_weight=1.0,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                )
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=25_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=24,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=5_000,
+    ),
+    # =====================================================================
+    # Light MEM pressure variant for the fixed-gate Pi0MemCompress run.
+    #
+    # Use this when time is limited and the goal is to keep clean END100
+    # performance close to the original fixed-gate memory model while still
+    # giving the history branch a mild training signal. Compared with
+    # history_required above, this keeps clean action loss dominant:
+    #
+    #   normalized_action_loss = (clean + 0.25 * corrupt_current) / 1.25
+    #
+    # Launch:
+    #   XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/mem/train_pi0_mem_compress.py \
+    #     pi0_mem_compress_umi_32d_30k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322_history_light \
+    #     --exp-name=my_experiment --overwrite
+    # =====================================================================
+    TrainConfig(
+        name="pi0_mem_compress_umi_32d_30k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322_history_light",
+        model=pi0_mem_compress.Pi0MemCompressConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+            num_frames=16,
+            memory_every=4,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=20.0,
+            diversity_weight=0.01,
+            current_frame_dropout_prob=0.10,
+            current_frame_mask_prob=0.05,
+            current_frame_corrupt_loss_weight=0.25,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                )
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=25_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=24,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=5_000,
+    ),
+    # =====================================================================
+    # Pure current-frame baseline for the Pi0MemCompress experiment above.
+    #
+    # Motivation: ablation diagnostics on the fixed-gate memory run showed that
+    # the history branch changes predictions, but the largest changes tend to
+    # *increase* GT MSE. This config keeps the exact same UMI data, action
+    # layout, optimizer, schedule, batch, and training script, while disabling
+    # the compressed-history path:
+    #
+    #   - memory_every=0: no Transformer block reads history memory.
+    #   - history_memory_tokens=0: no HistoryResampler is instantiated.
+    #   - diversity_weight=0.0: no auxiliary memory-token loss.
+    #
+    # The visual encoder still receives the same video tensor shape from the
+    # Pi0Mem-aware data loader, but only the configured current frame contributes
+    # to the policy. Use this as the fair "no-history" baseline against the
+    # fixed-gate compressed-memory checkpoint.
+    #
+    # Launch:
+    #   XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/mem/train_pi0_mem_compress.py \
+    #     pi0_mem_compress_umi_32d_30k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322_current_only \
+    #     --exp-name=my_experiment --overwrite
+    # =====================================================================
+    TrainConfig(
+        name="pi0_mem_compress_umi_32d_30k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322_current_only",
+        model=pi0_mem_compress.Pi0MemCompressConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+            num_frames=16,
+            memory_every=0,
+            history_memory_tokens=0,
+            history_resampler_depth=1,
+            history_use_current_condition=False,
+            history_gate_fixed=0.0,
+            diversity_weight=0.0,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                )
+            ],
+        ),
+        # Still use the memory-compress-aware loader because the target visual
+        # encoder creates history gate params even when memory_every=0. Missing
+        # keys from pi05_base are therefore expected and should keep random init.
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=25_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=24,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=5_000,
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_messy_folding_gripper_binary_260422",
