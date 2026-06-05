@@ -147,6 +147,39 @@ class CheckpointWeightLoaderWithGripperHead(WeightLoader):
 
 
 @dataclasses.dataclass(frozen=True)
+class CheckpointWeightLoaderWithMemoryCompress(WeightLoader):
+    """Loads weights from a checkpoint, gracefully handling Pi0MemCompress params.
+
+    When loading from a pretrained Pi0/Pi0.5 SigLIP checkpoint (e.g.
+    ``pi05_base``) into a Pi0MemCompress model that uses the
+    :mod:`openpi.models.siglip_mem_compress` visual encoder, the following
+    newly-introduced parameters do not exist in the checkpoint and must fall
+    back to the model's random initialization rather than failing the
+    pytree-structure check:
+
+    - ``Transformer/HistoryResampler_0/...``: the learned history compressor
+      (memory queries, cross-attention, mlp refinement layers, optional
+      current-frame conditioning projection).
+    - ``Transformer/encoderblock*/history_memory_gate_logit``: per-block
+      sigmoid gate logit that controls how strongly current-frame tokens
+      attend to compressed history.
+
+    LoRA-style adapters are also allowed-missing for parity with
+    :class:`CheckpointWeightLoader`.
+    """
+
+    params_path: str
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
+        return _merge_params(
+            loaded_params,
+            params,
+            missing_regex=r".*(lora|HistoryResampler|history_memory_gate_logit).*",
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class CheckpointWeightLoaderIgnoreGripperHead(WeightLoader):
     """Loads a gripper-head checkpoint into a standard Pi0/Pi0.5 model, ignoring the extra head."""
 

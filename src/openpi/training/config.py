@@ -1833,6 +1833,135 @@ class LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(DataConfigFactory):
+    """Pi0Mem bimanual wrist-only data config.
+
+    Mirrors ``LeRobotUmiDataConfigPadded_V4_Bimanual_Horizon1`` for the
+    state/action layout, normalize masks and repack mapping, but lays the
+    image side out for Pi0Mem's video encoder:
+
+    - Image keys ``left_wrist_0_rgb_0`` / ``right_wrist_0_rgb_0`` are loaded
+      across ``num_frames`` historical frames by ``VideoFrameDataset`` (the
+      training script wraps the LeRobot dataset before transforms run).
+    - ``transforms_video.BuildVideoTensor`` then stacks the per-frame keys
+      ``<base>_<t>`` into ``<base>_video`` of shape ``(T, 3, 224, 224)``.
+    - A small inline Pi0Mem video-input transform (defined in
+      ``openpi.training.config_pi0_mem``) builds the state vector and the
+      ``image`` / ``image_mask`` dicts that Pi0Mem expects, with each image
+      having shape ``(T, 224, 224, 3)``.
+
+    NOTE: ``ResizeImages`` is intentionally omitted in ``model_transforms``
+    because frames are already 224x224 and ``image_tools.resize_with_pad``
+    does not understand a leading time dimension.
+    """
+
+    # Number of historical frames to stack per image stream (T).
+    num_frames: int = 2
+    # Stride (in raw dataset rows) between consecutive frames.
+    frame_stride: int = 1
+    # Behavior near the start of an episode: 'repeat' first valid frame, or 'zero' pad.
+    padding_mode: str = "repeat"
+    # Single-frame image keys to expand into video (look up history in the underlying
+    # LeRobot dataset). Must match keys actually stored in the dataset.
+    image_keys: tuple[str, ...] = ("left_wrist_0_rgb_0", "right_wrist_0_rgb_0", "left_wrist_1_rgb_0", "right_wrist_1_rgb_0", "base_0_rgb_0", "base_0_depth_0")
+
+    # Same masks as the Horizon1 sibling: 20-d bimanual actions, 38-d concatenated state.
+    normalize_masks = {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state":   make_bool_mask(6, -13, 6, -13),
+    }
+
+    def video_frame_config(self):
+        """VideoFrameConfig consumed by the Pi0Mem training script's data loader."""
+        from openpi.training.mem.video_dataset import VideoFrameConfig
+
+        return VideoFrameConfig(
+            image_keys=tuple(self.image_keys),
+            num_frames=self.num_frames,
+            frame_stride=self.frame_stride,
+            padding_mode=self.padding_mode,
+        )
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        return dataclasses.replace(config, normalize_masks=self.normalize_masks)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Imported lazily to avoid a hard dependency from config.py on the
+        # Pi0Mem-specific helper module.
+        import openpi.training.config_pi0_mem as _config_pi0_mem
+        from openpi import transforms_video as _transforms_video
+
+        # The per-frame image keys produced by VideoFrameDataset are
+        #   "<image_key>_<t>" for t in [0, num_frames).
+        # The repack mapping keeps those keys (they will be stacked next).
+        per_frame_keys = {
+            f"{k}_{t}": f"{k}_{t}"
+            for k in self.image_keys
+            for t in range(self.num_frames)
+        }
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        # State (same as Horizon1).
+                        "robot0_eef_pos": "robot0_eef_pos",
+                        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+                        "robot0_gripper_width": "robot0_gripper_width",
+                        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+                        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+                        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+                        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+                        "robot1_eef_pos": "robot1_eef_pos",
+                        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+                        "robot1_gripper_width": "robot1_gripper_width",
+                        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+                        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+                        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+                        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+                        # Per-frame images (e.g. left_wrist_0_rgb_0_0 .. _T-1).
+                        **per_frame_keys,
+                        "actions": "actions",
+                        "prompt": "task",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                _transforms_video.BuildVideoTensor(
+                    image_keys=tuple(self.image_keys),
+                    num_frames=self.num_frames,
+                    output_keys={k: f"{k}_video" for k in self.image_keys},
+                ),
+                _config_pi0_mem.WBCD_V1_Bimanual_Video(num_frames=self.num_frames),
+            ],
+        )
+
+        # Same model_transforms as the Horizon1 sibling, minus ResizeImages.
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class WBCD_V1_Bimanual_Horizon1_Compute_Norm_Stats(DataConfigFactory):
     """
     UMI data config for bimanual (V4).
@@ -4485,6 +4614,193 @@ _CONFIGS = [
         fsdp_devices=8,
         log_interval=10,
         keep_period=5_000,
+    ),
+    TrainConfig(
+        name="pi0_mem_compress_umi_wbcd_history_light_v1_260605",
+        model=pi0_mem_compress.Pi0MemCompressConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=360,
+            num_frames=16,
+            memory_every=4,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=20.0,
+            diversity_weight=0.01,
+            current_frame_dropout_prob=0.05,
+            current_frame_mask_prob=0.05,
+            current_frame_corrupt_loss_weight=0.25,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[0.1, 0.1, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3, 0.2, 0.6, 0.6],
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                )
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=60_000,
+        batch_size=72,
+        num_workers=24,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=30_000,
     ),
     # =====================================================================
     # Pure current-frame baseline for the Pi0MemCompress experiment above.

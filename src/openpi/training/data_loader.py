@@ -397,6 +397,7 @@ class TorchDataLoader:
         num_workers: int = 0,
         seed: int = 0,
         framework: str = "jax",
+        prefetch_factor: int | None = None,
     ):
         """Create a PyTorch data loader.
 
@@ -412,6 +413,10 @@ class TorchDataLoader:
             num_workers: The number of worker processes to use. If zero, the data loader will
                 execute in the main process.
             seed: The seed to use for shuffling the data.
+            prefetch_factor: How many batches each worker prefetches in advance. Only
+                effective when num_workers>0. Defaults to PyTorch's own default (2) when
+                None. For heavy CPU dataloading (e.g. Pi0Mem T-frame video loading) values
+                of 4-8 usually keep the GPU fed.
         """
         if jax.process_count() > 1:
             raise NotImplementedError("Data loading with multiple processes is not supported.")
@@ -435,6 +440,9 @@ class TorchDataLoader:
 
         generator = torch.Generator()
         generator.manual_seed(seed)
+        extra_kwargs = {}
+        if num_workers > 0 and prefetch_factor is not None:
+            extra_kwargs["prefetch_factor"] = prefetch_factor
         self._data_loader = torch.utils.data.DataLoader(
             typing.cast(torch.utils.data.Dataset, dataset),
             batch_size=local_batch_size,
@@ -447,6 +455,7 @@ class TorchDataLoader:
             worker_init_fn=_worker_init_fn,
             drop_last=True,
             generator=generator,
+            **extra_kwargs,
         )
 
     @property
