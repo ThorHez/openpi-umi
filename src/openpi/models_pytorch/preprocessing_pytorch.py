@@ -27,14 +27,27 @@ def preprocess_observation_pytorch(
     """Torch.compile-compatible version of preprocess_observation_pytorch with simplified type annotations.
 
     This function avoids complex type annotations that can cause torch.compile issues.
-    """
-    if not set(image_keys).issubset(observation.images):
-        raise ValueError(f"images dict missing keys: expected {image_keys}, got {list(observation.images)}")
 
+    Robust to missing image keys: any expected `image_key` that is absent from `observation.images`
+    is filled with a zero image of `image_resolution` (channels-first) and its mask is forced to
+    False. Enables mixed-view multi-dataset training (e.g. 2-view + 4-view).
+    """
     batch_shape = observation.state.shape[:-1]
+    device = observation.state.device
+
+    # Track which keys were synthesized so masks can be forced to False later.
+    synthesized_keys: set = set()
 
     out_images = {}
     for key in image_keys:
+        if key not in observation.images:
+            # Default channels-first to match the rest of the PyTorch path.
+            out_images[key] = torch.zeros(
+                (*batch_shape, 3, *image_resolution), dtype=torch.float32, device=device
+            )
+            synthesized_keys.add(key)
+            continue
+
         image = observation.images[key]
 
         # TODO: This is a hack to handle both [B, C, H, W] and [B, H, W, C] formats
@@ -150,7 +163,10 @@ def preprocess_observation_pytorch(
     # obtain mask
     out_masks = {}
     for key in out_images:
-        if key not in observation.image_masks:
+        if key in synthesized_keys:
+            # synthesized zero image -> invalid view
+            out_masks[key] = torch.zeros(batch_shape, dtype=torch.bool, device=observation.state.device)
+        elif key not in observation.image_masks:
             # do not mask by default
             out_masks[key] = torch.ones(batch_shape, dtype=torch.bool, device=observation.state.device)
         else:

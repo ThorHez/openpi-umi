@@ -206,6 +206,9 @@ class SequenceSampler:
         self.replay_buffer = dict()
         self.num_robot = 0
         for key in lowdim_keys:
+            if key not in replay_buffer:
+                print(f"Warning: lowdim key '{key}' not found in replay_buffer, skipping...")
+                continue
             if key.endswith('eef_pos'):
                 self.num_robot += 1
             self.replay_buffer[key] = replay_buffer[key][:]
