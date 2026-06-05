@@ -964,6 +964,254 @@ class LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(LeRobotU
 
 
 @dataclasses.dataclass(frozen=True)
+class WBCD_Bimamual_ImageHorizon1(DataConfigFactory):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        # "robot0_eef_pos_desk": "robot0_eef_pos_desk",
+        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        #"robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        #"robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+        # "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+        # "robot1_eef_pos_desk": "robot1_eef_pos_desk",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        #"robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        #"robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+        # "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
+        # "base_0_rgb_0": "base_0_rgb_0",
+        # "base_0_depth_0": "base_0_depth_0",
+
+        "actions": "actions",
+        "prompt": "task",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -13, 6, -13),
+    })
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.WBCD_V1_Bimanual_Horizon1()
+    data_outputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiOutputsV4()
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(self.mapping)
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                # _transforms.Transform_depth_to_3ch_image(depth_column_name="base_0_depth_0"),
+                self.data_inputs_fn(),
+                # Pad the missing left_wrist_1_rgb / right_wrist_1_rgb views with zeros + mask=False
+                # so this 2-view dataset can be mixed in the same batch with 4-view datasets.
+                _transforms.EnsureImageKeys(),
+            ],
+            outputs=[self.data_outputs_fn()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+                _transforms.KeepModelKeys(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class WBCD_Bimamual_4_views_ImageHorizon1(DataConfigFactory):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        # "robot0_eef_pos_desk": "robot0_eef_pos_desk",
+        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        #"robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        #"robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+        "left_wrist_1_rgb_0": "left_wrist_1_rgb_0",
+        # "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+        # "robot1_eef_pos_desk": "robot1_eef_pos_desk",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        #"robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        #"robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+        "right_wrist_1_rgb_0": "right_wrist_1_rgb_0",
+        # "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
+        # "base_0_rgb_0": "base_0_rgb_0",
+        # "base_0_depth_0": "base_0_depth_0",
+
+        "actions": "actions",
+        "prompt": "task",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -13, 6, -13),
+    })
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.WBCD_V1_Bimanual_4_views_Horizon1()
+    data_outputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiOutputsV4()
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(self.mapping)
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                # _transforms.Transform_depth_to_3ch_image(depth_column_name="base_0_depth_0"),
+                self.data_inputs_fn()
+                ],
+            outputs=[self.data_outputs_fn()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+                _transforms.KeepModelKeys(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+@dataclasses.dataclass(frozen=True)
+class WBCD_Bimamual_HeadView_Depth_ImageHorizon1(DataConfigFactory):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        # "robot0_eef_pos_desk": "robot0_eef_pos_desk",
+        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        #"robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        #"robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+        # "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+        # "robot1_eef_pos_desk": "robot1_eef_pos_desk",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        #"robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        #"robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+        # "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
+        "base_0_rgb_0": "base_0_rgb_0",
+        "base_0_depth_0": "base_0_depth_0",
+
+        "actions": "actions",
+        "prompt": "task",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -13, 6, -13),
+    })
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.WBCD_V1_Bimanual_HeadView_Depth_Horizon1()
+    data_outputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiOutputsV4()
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(self.mapping)
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                _transforms.Transform_depth_to_3ch_image(depth_column_name="base_0_depth_0"),
+                self.data_inputs_fn()
+                ],
+            outputs=[self.data_outputs_fn()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+                _transforms.KeepModelKeys(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+
+@dataclasses.dataclass(frozen=True)
 class LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Value(LeRobotUmiDataConfig_Hybrid):
     """Value training variant: inherits HeadView+Depth layout, adds episode_index/frame_index passthrough."""
 
@@ -1451,6 +1699,81 @@ class LeRobotUmiDataConfigPadded_V4_Bimanual_Horizon1(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=model_transforms,
         )
+
+
+@dataclasses.dataclass(frozen=True)
+class WBCD_V1_Bimanual_Horizon1_Compute_Norm_Stats(DataConfigFactory):
+    """
+    UMI data config for bimanual (V4).
+    """
+
+    normalize_masks = {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -13, 6, -13),
+    }
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "robot0_eef_pos": "robot0_eef_pos",
+                        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+                        "robot0_gripper_width": "robot0_gripper_width",
+                        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+                        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+                        #"robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+                        #"robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+                        #"left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+                        # "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
+                        "robot1_eef_pos": "robot1_eef_pos",
+                        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+                        "robot1_gripper_width": "robot1_gripper_width",
+                        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+                        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+                        #"robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+                        #"robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+                        #"right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+                        # "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
+                        # "base_0_rgb_0": "base_0_rgb_0",
+                        "actions": "actions",
+                        "prompt": "task",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[umi_policy.WBCD_V4_Bimanual_Horizon1_Compute_Norm_Stats()],
+            outputs=[umi_policy.UmiOutputsV4()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
 
 @dataclasses.dataclass(frozen=True)
 class LeRobotUmiDataConfigPadded_V4_Bimanual_Horizon2(DataConfigFactory):
@@ -3221,6 +3544,28 @@ _CONFIGS = [
         keep_period=10000,
     ),
     TrainConfig(
+        name="pi05_wbcd_bimanual_horizon1_compute_norm_stats",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=WBCD_V1_Bimanual_Horizon1_Compute_Norm_Stats(
+            repo_id="/root/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/root/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+            ),
+            base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+        ),
+        batch_size=512,
+        num_workers=8,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=10000,
+    ),
+    TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_horizon1_compute_norm_stats_fsdp_2",
         model=pi0_config.Pi0Config(
             pi05=True,
@@ -3693,7 +4038,8 @@ _CONFIGS = [
         data=MultiDataConfigFactory(
             state_pad_dim=128,
             # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
-            weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            # weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            weights=[1.0],
             datasets=[
                 LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
                     repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260316",
@@ -3706,39 +4052,39 @@ _CONFIGS = [
                         robot_type="ARM=2 G=1 H=0",
                     ),
                 ),
-                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
-                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260317",
-                    assets=AssetsConfig(
-                        asset_id=".",
-                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260317",
-                    ),
-                    base_config=UmiDataConfig(
-                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-                        robot_type="ARM=2 G=1 H=0",
-                    ),
-                ),
-                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
-                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260320",
-                    assets=AssetsConfig(
-                        asset_id=".",
-                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260320",
-                    ),
-                    base_config=UmiDataConfig(
-                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-                        robot_type="ARM=2 G=1 H=0",
-                    ),
-                ),
-                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
-                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260323",
-                    assets=AssetsConfig(
-                        asset_id=".",
-                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260323",
-                    ),
-                    base_config=UmiDataConfig(
-                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-                        robot_type="ARM=2 G=1 H=0",
-                    ),
-                ),
+                # LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                #     repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260317",
+                #     assets=AssetsConfig(
+                #         asset_id=".",
+                #         assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260317",
+                #     ),
+                #     base_config=UmiDataConfig(
+                #         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                #         robot_type="ARM=2 G=1 H=0",
+                #     ),
+                # ),
+                # LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                #     repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260320",
+                #     assets=AssetsConfig(
+                #         asset_id=".",
+                #         assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260320",
+                #     ),
+                #     base_config=UmiDataConfig(
+                #         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                #         robot_type="ARM=2 G=1 H=0",
+                #     ),
+                # ),
+                # LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                #     repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260323",
+                #     assets=AssetsConfig(
+                #         asset_id=".",
+                #         assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260323",
+                #     ),
+                #     base_config=UmiDataConfig(
+                #         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                #         robot_type="ARM=2 G=1 H=0",
+                #     ),
+                # ),
             ]
         ),
         weight_loader=CheckpointWeightLoaderWithDiscreteHead("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_horizon_folding_260322/my_experiment/19000/params"),
@@ -3752,10 +4098,235 @@ _CONFIGS = [
         ema_decay=0.999,
         num_train_steps=60_000,
         batch_size=72,
-        num_workers=12,
-        fsdp_devices=6,
+        num_workers=16,
+        fsdp_devices=8,
         log_interval=10,
         keep_period=30_000,
+    ),
+    TrainConfig(
+        name="pi05_umi_wbcd_v3_260522_h32",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=360,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
+            # weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            weights=[0.1, 0.1, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3, 0.2, 0.6, 0.6],
+            datasets=[
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+            ]
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_wbcd_v3_260522_h32/260602/69999/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=60_000,
+        batch_size=72,
+        num_workers=16,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=30_000,
+    ),
+    TrainConfig(
+        name="pi05_umi_wbcd_v1_260511",
+        model=pi0_gripper.Pi0GripperConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=360,
+            gripper_binary_indices=(9, 19),
+            gripper_binary_threshold=0.03,
+            gripper_binary_loss_weight=0.5,
+            gripper_binary_close_value=0.0,
+            gripper_binary_open_value=0.085,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
+            # weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            weights=[1.0, 1.0, 1.0],
+            datasets=[
+                WBCD_Bimamual_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/wbcd_260511_ori",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/wbcd_260511_ori",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=0 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/umi/wbcd_umi_260510_260511",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/umi/wbcd_umi_260510_260511",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=0 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/wbcd_260513",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/wbcd_260513",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=0 H=0",
+                    ),
+                ),
+            ]
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithGripperHead("/root/openpi-umi/checkpoints/pi05_umi_wbcd_v1_260511/my_experiment/79999/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=70_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=80_000,
+        batch_size=72,
+        num_workers=16,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=40_000,
     ),
     TrainConfig(
         name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_messy_folding_gripper_binary_260422",

@@ -36,10 +36,20 @@ class ModelType(enum.Enum):
 
 
 # The model always expects these images
+# IMAGE_KEYS = (
+#     "base_0_rgb",
+#     "left_wrist_0_rgb",
+#     "right_wrist_0_rgb",
+# )
+# IMAGE_KEYS = (
+#     "left_wrist_0_rgb",
+#     "right_wrist_0_rgb",
+# )
 IMAGE_KEYS = (
-    "base_0_rgb",
     "left_wrist_0_rgb",
+    "left_wrist_1_rgb",
     "right_wrist_0_rgb",
+    "right_wrist_1_rgb",
 )
 
 
@@ -93,7 +103,7 @@ class Observation(Generic[ArrayT]):
 
     # Images, in [-1, 1] float32. Supports both single images [*b, h, w, c]
     # and video clips [*b, t, h, w, c].
-    images: dict[str, at.Float[ArrayT, "*b ..."]]
+    images: dict[str, at.Float[ArrayT, "*b h w c"]]
     # Image masks, with same keys as images.
     image_masks: dict[str, at.Bool[ArrayT, "*b"]]
     # Low-dimensional robot state.
@@ -193,15 +203,24 @@ def preprocess_observation(
 ) -> Observation:
     """Preprocess the observations by performing image augmentations (if train=True), resizing (if necessary), and
     filling in a default image mask (if necessary).
-    """
 
-    if not set(image_keys).issubset(observation.images):
-        raise ValueError(f"images dict missing keys: expected {image_keys}, got {list(observation.images)}")
+    Robust to missing image keys: any expected `image_key` that is absent from `observation.images` is
+    filled with a zero image of `image_resolution` and its mask is forced to False. This enables
+    mixed-view multi-dataset training (e.g. some datasets with 2 wrist views, others with 4).
+    """
 
     batch_shape = observation.state.shape[:-1]
 
+    # Track which keys were synthesized (so we can force their mask to False later).
+    synthesized_keys: set[str] = set()
+
     out_images = {}
     for key in image_keys:
+        if key not in observation.images:
+            out_images[key] = jnp.zeros((*batch_shape, *image_resolution, 3), dtype=jnp.float32)
+            synthesized_keys.add(key)
+            continue
+
         image = observation.images[key]
         if image.shape[1:3] != image_resolution:
             logger.info(f"Resizing image {key} from {image.shape[1:3]} to {image_resolution}")
@@ -236,6 +255,8 @@ def preprocess_observation(
         out_images[key] = image
 
     for depth_key in depth_keys:
+        if depth_key not in observation.images:
+            continue
         depth = observation.images[depth_key]
         if depth.shape[1:3] != image_resolution:
             logger.info(f"Resizing depth {depth_key} from {depth.shape[1:3]} to {image_resolution}")
@@ -247,9 +268,12 @@ def preprocess_observation(
     # obtain mask
     out_masks = {}
     for key in out_images:
-        if key not in observation.image_masks:
+        if key in synthesized_keys:
+            # synthesized zero image -> invalid view
+            out_masks[key] = jnp.zeros(batch_shape, dtype=jnp.bool_)
+        elif key not in observation.image_masks:
             # do not mask by default
-            out_masks[key] = jnp.ones(batch_shape, dtype=jnp.bool)
+            out_masks[key] = jnp.ones(batch_shape, dtype=jnp.bool_)
         else:
             out_masks[key] = jnp.asarray(observation.image_masks[key])
 

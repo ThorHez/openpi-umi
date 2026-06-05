@@ -23,7 +23,7 @@ import shutil
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Tuple, Optional
 from multiprocessing import Pool, cpu_count
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import gc
@@ -93,28 +93,56 @@ except ImportError:
     exit(1)
 
 
-def load_zarr_dataset(zarr_path: str) -> Tuple[zarr.Group, str, bool]:
+def _find_zarr_root_dir(base_dir: str) -> str:
+    """Locate the actual zarr group directory under ``base_dir``.
+
+    A zarr group is identified by the presence of a ``.zgroup`` (v2) or
+    ``zarr.json`` (v3) file at its root. Some zip archives wrap the zarr group
+    in an extra top-level directory (e.g. ``foo.zarr/meta/...``); this helper
+    transparently descends one level if needed.
+    """
+    base = Path(base_dir)
+    if (base / ".zgroup").exists() or (base / "zarr.json").exists():
+        return str(base)
+    entries = [p for p in base.iterdir() if not p.name.startswith("__MACOSX")]
+    subdirs = [p for p in entries if p.is_dir()]
+    if len(subdirs) == 1:
+        inner = subdirs[0]
+        if (inner / ".zgroup").exists() or (inner / "zarr.json").exists():
+            print(f"Detected nested zarr root inside zip: {inner.name}/")
+            return str(inner)
+    raise FileNotFoundError(
+        f"No zarr group (.zgroup / zarr.json) found under {base_dir}. "
+        f"Contents: {[p.name for p in entries]}"
+    )
+
+
+def load_zarr_dataset(zarr_path: str) -> Tuple[zarr.Group, str, Optional[str]]:
     """
     Open UMI zarr dataset from a .zip file or an uncompressed .zarr directory.
-    Returns (root, path_for_workers, is_temp_dir).
-    - If zarr_path is a directory: open it directly, path_for_workers=zarr_path, is_temp_dir=False.
-    - If zarr_path is a zip: extract to temp, path_for_workers=temp_dir, is_temp_dir=True (caller should rmtree).
+    Returns (root, path_for_workers, cleanup_dir).
+    - If zarr_path is a directory: open it directly. cleanup_dir is None.
+    - If zarr_path is a zip: extract to temp. cleanup_dir is the temp dir to rmtree
+      (caller is responsible for cleanup). Handles both flat zips (zarr files at
+      root) and zips with one wrapping directory.
     """
     zarr_path = str(zarr_path)
     path = Path(zarr_path)
     print(f"Loading zarr dataset from: {zarr_path}")
     if path.is_dir():
-        root = zarr.open(zarr_path, mode="r")
+        zarr_root = _find_zarr_root_dir(zarr_path)
+        root = zarr.open(zarr_root, mode="r")
         print("Using uncompressed zarr directory.")
-        return root, zarr_path, False
+        return root, zarr_root, None
     if not path.exists():
         raise FileNotFoundError(f"Zarr path not found: {zarr_path}")
     temp_dir = tempfile.mkdtemp(dir="/root")
     print(f"Extracting zip to temporary directory: {temp_dir}")
     with zipfile.ZipFile(zarr_path, "r") as zip_ref:
         zip_ref.extractall(temp_dir)
-    root = zarr.open(temp_dir, mode="r")
-    return root, temp_dir, True
+    zarr_root = _find_zarr_root_dir(temp_dir)
+    root = zarr.open(zarr_root, mode="r")
+    return root, zarr_root, temp_dir
 
 
 def preload_episode_data(root, episode_start: int, episode_end: int, dataset_config: Dict = None) -> Dict[str, np.ndarray]:
@@ -669,7 +697,7 @@ def convert_to_lerobot(
     if num_workers is None:
         num_workers = min(cpu_count(), 16)
     print(f"Using {num_workers} worker processes (each loads from zarr, no large data transfer)")
-    root, zarr_root_path, is_temp_zarr = load_zarr_dataset(zarr_path)
+    root, zarr_root_path, zarr_cleanup_dir = load_zarr_dataset(zarr_path)
     try:
         data = root['data']
         meta = root['meta']
@@ -829,9 +857,9 @@ def convert_to_lerobot(
         else:
             print("\nTo push later: LeRobotDataset(..., root=...).push_to_hub(repo_id)")
     finally:
-        if is_temp_zarr:
+        if zarr_cleanup_dir is not None:
             print("Cleaning up temporary files...")
-            shutil.rmtree(zarr_root_path, ignore_errors=True)
+            shutil.rmtree(zarr_cleanup_dir, ignore_errors=True)
 
 
 def main():

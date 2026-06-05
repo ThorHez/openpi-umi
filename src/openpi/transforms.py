@@ -451,6 +451,61 @@ class UmiImageTransform(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class EnsureImageKeys(DataTransformFn):
+    """Per-sample pad missing image views with zeros and force their mask to False.
+
+    Use case: mixed-view multi-dataset training (e.g. some datasets have 2 wrist views,
+    others have 4). DataLoader collate requires every sample in a batch to share the same
+    set of `image` / `image_mask` keys, so each per-sample transform must emit the same
+    union of keys. Drop this transform right after the dataset-specific data_inputs to
+    auto-pad the missing views without rewriting every UMI policy class.
+
+    Args:
+        image_keys: Tuple of expected image keys (the union over all datasets in the mix).
+            Defaults to `model.IMAGE_KEYS`.
+
+    Behavior:
+        - Picks the shape of an existing image in `data["image"]` to size the zero pad.
+            If no existing image is found, falls back to (224, 224, 3) uint8 HWC layout.
+        - Inserts `np.False_` into `data["image_mask"]` for each padded view.
+        - Existing keys are left untouched.
+    """
+
+    image_keys: tuple[str, ...] | None = None
+
+    def __call__(self, data: DataDict) -> DataDict:
+        # Import locally to avoid a top-level cycle with openpi.models.
+        from openpi.models import model as _model
+
+        expected = self.image_keys if self.image_keys is not None else _model.IMAGE_KEYS
+
+        if "image" not in data:
+            return data
+
+        images = data["image"]
+        masks = data.get("image_mask", {})
+
+        # Reference image to copy shape/dtype from when padding.
+        ref_img = next(iter(images.values()), None)
+        if ref_img is not None:
+            ref_arr = np.asarray(ref_img)
+            ref_shape = ref_arr.shape
+            ref_dtype = ref_arr.dtype
+        else:
+            ref_shape = (224, 224, 3)
+            ref_dtype = np.uint8
+
+        for key in expected:
+            if key not in images:
+                images[key] = np.zeros(ref_shape, dtype=ref_dtype)
+                masks[key] = np.False_
+
+        data["image"] = images
+        data["image_mask"] = masks
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
 class ResizeImages(DataTransformFn):
     height: int
     width: int
