@@ -1,0 +1,14 @@
+Ablation Summary
+================================================================================
+Mode                 Episodes  Frames   MSE          RMSE         MAE          MSE_vs_ref_%  FirstMSE     PredDeltaRMSE  FracImproved  GateMean  
+-------------------------------------------------------------------------------------------------------------------------------------------------
+normal               20        8898     0.00314577   0.0560872    0.0278571    0             5.04091e-05  0              0             0.0010005 
+force_memory_gate    20        8898     0.00314569   0.0560865    0.0278567    -0.00263362   5.04082e-05  -              -             0.993307  
+memory_off           20        8898     0.00314731   0.0561009    0.0278408    0.0488283     5.16446e-05  0.00210983     0.511913      1.92875e-22
+repeat_current       20        8898     0.00314615   0.0560906    0.0278587    0.0119475     5.04427e-05  0.00103037     0.494044      0.0010005 
+shuffle_history      20        8898     0.00314581   0.0560875    0.0278569    0.00116839    5.04407e-05  0.00100211     0.49011       0.0010005 
+wrong_history        20        8898     0.00314626   0.0560915    0.027861     0.0152885     5.04463e-05  0.00106014     0.489323      0.0010005 
+
+Notes:
+- MSE_vs_ref_% is relative to the reference mode, default normal; lower MSE/MAE is better.
+- PredDeltaRMSE and FracImproved come from prediction_delta_vs_normal when present.

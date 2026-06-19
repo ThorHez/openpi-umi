@@ -1863,7 +1863,7 @@ class LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(DataConfigFactor
     padding_mode: str = "repeat"
     # Single-frame image keys to expand into video (look up history in the underlying
     # LeRobot dataset). Must match keys actually stored in the dataset.
-    image_keys: tuple[str, ...] = ("left_wrist_0_rgb_0", "right_wrist_0_rgb_0", "left_wrist_1_rgb_0", "right_wrist_1_rgb_0", "base_0_rgb_0", "base_0_depth_0")
+    image_keys: tuple[str, ...] = ("left_wrist_0_rgb_0", "right_wrist_0_rgb_0", "left_wrist_1_rgb_0", "right_wrist_1_rgb_0")
 
     # Same masks as the Horizon1 sibling: 20-d bimanual actions, 38-d concatenated state.
     normalize_masks = {
@@ -1911,15 +1911,15 @@ class LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(DataConfigFactor
                         "robot0_gripper_width": "robot0_gripper_width",
                         "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
                         "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
-                        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
-                        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+                        # "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+                        # "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
                         "robot1_eef_pos": "robot1_eef_pos",
                         "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
                         "robot1_gripper_width": "robot1_gripper_width",
                         "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
                         "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
-                        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
-                        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+                        # "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+                        # "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
                         # Per-frame images (e.g. left_wrist_0_rgb_0_0 .. _T-1).
                         **per_frame_keys,
                         "actions": "actions",
@@ -4623,7 +4623,7 @@ _CONFIGS = [
             action_horizon=32,
             action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
             max_token_len=360,
-            num_frames=16,
+            num_frames=8,
             memory_every=4,
             history_memory_tokens=256,
             history_resampler_depth=1,
@@ -4649,7 +4649,7 @@ _CONFIGS = [
                         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
                         robot_type="ARM=2 G=2 H=0",
                     ),
-                    num_frames=16,
+                    num_frames=8,
                     frame_stride=4,
                 ),
                 LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
@@ -4662,7 +4662,7 @@ _CONFIGS = [
                         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
                         robot_type="ARM=2 G=2 H=0",
                     ),
-                    num_frames=16,
+                    num_frames=8,
                     frame_stride=4,
                 ),
                 LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
@@ -4675,7 +4675,7 @@ _CONFIGS = [
                         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
                         robot_type="ARM=2 G=2 H=0",
                     ),
-                    num_frames=16,
+                    num_frames=8,
                     frame_stride=4,
                 ),
                 LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
@@ -4688,7 +4688,7 @@ _CONFIGS = [
                         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
                         robot_type="ARM=2 G=2 H=0",
                     ),
-                    num_frames=16,
+                    num_frames=8,
                     frame_stride=4,
                 ),
                 LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
@@ -4701,7 +4701,7 @@ _CONFIGS = [
                         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
                         robot_type="ARM=2 G=2 H=0",
                     ),
-                    num_frames=16,
+                    num_frames=8,
                     frame_stride=4,
                 ),
                 LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
@@ -4714,7 +4714,7 @@ _CONFIGS = [
                         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
                         robot_type="ARM=2 G=2 H=0",
                     ),
-                    num_frames=16,
+                    num_frames=8,
                     frame_stride=4,
                 ),
                 LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
@@ -4727,7 +4727,7 @@ _CONFIGS = [
                         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
                         robot_type="ARM=2 G=2 H=0",
                     ),
-                    num_frames=16,
+                    num_frames=8,
                     frame_stride=4,
                 ),
                 LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
@@ -4740,7 +4740,7 @@ _CONFIGS = [
                         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
                         robot_type="ARM=2 G=2 H=0",
                     ),
-                    num_frames=16,
+                    num_frames=8,
                     frame_stride=4,
                 ),
                 LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
@@ -4753,7 +4753,7 @@ _CONFIGS = [
                         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
                         robot_type="ARM=2 G=2 H=0",
                     ),
-                    num_frames=16,
+                    num_frames=8,
                     frame_stride=4,
                 ),
                 LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
@@ -4766,7 +4766,7 @@ _CONFIGS = [
                         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
                         robot_type="ARM=2 G=2 H=0",
                     ),
-                    num_frames=16,
+                    num_frames=8,
                     frame_stride=4,
                 ),
                 LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
@@ -4779,13 +4779,13 @@ _CONFIGS = [
                         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
                         robot_type="ARM=2 G=2 H=0",
                     ),
-                    num_frames=16,
+                    num_frames=8,
                     frame_stride=4,
                 )
             ],
         ),
         weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
-            "gs://openpi-assets/checkpoints/pi05_base/params"
+            "/data1/hzl_workspace_for_pi/openpi-umi/checkpoints/260602/69999/params"
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,

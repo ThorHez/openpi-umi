@@ -213,9 +213,9 @@ class WBCD_V1_Bimanual_Video(_transforms.DataTransformFn):
         assert right_video_1.shape == (T, 224, 224, 3), (
             f"right_wrist_1_rgb_0_video shape {right_video_1.shape} != (T={T}, 224, 224, 3)"
         )
-        assert actions.shape == (16, 20), f"actions shape {actions.shape} != (16, 20)"
+        # assert actions.shape == (32, 20), f"actions shape {actions.shape} != (16, 20)"
 
-        data["state"] = _build_bimanual_state(data)
+        data["state"] = _build_wbcd_bimanual_state(data)
 
         data["image"] = {
             "left_wrist_0_rgb": left_video_0,

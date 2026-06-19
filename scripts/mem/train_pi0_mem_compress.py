@@ -841,7 +841,7 @@ def main(config: _config.TrainConfig):
                 anomaly_reason = f"Spike: {current_loss:.6f} vs recent {recent_mean:.6f}\u00b1{recent_std:.6f}"
 
         if is_anomaly:
-            import pickle
+            # import pickle
             anomaly_file = anomaly_dir / f"step_{step:06d}_{current_loss:.6f}.pkl"
             pbar.write(f"\u26a0\ufe0f  ANOMALY DETECTED at step {step}: {anomaly_reason}")
             pbar.write(f"   Saving data to {anomaly_file}")
@@ -863,7 +863,7 @@ def main(config: _config.TrainConfig):
 
         stats_interval = 1000
         if step > 0 and step % stats_interval == 0 and len(loss_history) > 10:
-            import pickle
+            # import pickle
             stats_dir = config.checkpoint_dir / "periodic_stats"
             stats_dir.mkdir(exist_ok=True)
 
