@@ -1833,6 +1833,119 @@ class LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Bimamual_HeadView_Depth_Horizon1_Pi0Mem(DataConfigFactory):
+    """Pi0Mem data config for bimanual wrist + head RGB/depth streams.
+
+    Mirrors ``LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid``
+    on state/action layout, while expanding every image stream into a T-frame
+    video tensor for Pi0Mem / Pi0MemCompress.
+    """
+
+    num_frames: int = 2
+    frame_stride: int = 1
+    padding_mode: str = "repeat"
+    image_keys: tuple[str, ...] = (
+        "left_wrist_0_rgb_0",
+        "right_wrist_0_rgb_0",
+        "base_0_rgb_0",
+        "base_0_depth_0",
+    )
+    depth_image_keys: tuple[str, ...] = ("base_0_depth_0",)
+
+    normalize_masks = {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -12, 3, -7, 6, -12, 3, -7),
+    }
+
+    def video_frame_config(self):
+        """VideoFrameConfig consumed by the Pi0Mem training script's data loader."""
+        from openpi.training.mem.video_dataset import VideoFrameConfig
+
+        return VideoFrameConfig(
+            image_keys=tuple(self.image_keys),
+            num_frames=self.num_frames,
+            frame_stride=self.frame_stride,
+            padding_mode=self.padding_mode,
+        )
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        return dataclasses.replace(config, normalize_masks=self.normalize_masks)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        import openpi.training.config_pi0_mem as _config_pi0_mem
+        from openpi import transforms_video as _transforms_video
+
+        per_frame_keys = {
+            f"{k}_{t}": f"{k}_{t}"
+            for k in self.image_keys
+            for t in range(self.num_frames)
+        }
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "robot0_eef_pos": "robot0_eef_pos",
+                        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+                        "robot0_gripper_width": "robot0_gripper_width",
+                        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+                        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+                        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+                        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+                        "robot1_eef_pos": "robot1_eef_pos",
+                        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+                        "robot1_gripper_width": "robot1_gripper_width",
+                        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+                        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+                        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+                        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+                        **per_frame_keys,
+                        "actions": "actions",
+                        "prompt": "task",
+                    }
+                )
+            ]
+        )
+
+        depth_frame_transforms = [
+            _transforms.Transform_depth_to_3ch_image(depth_column_name=f"{key}_{t}")
+            for key in self.depth_image_keys
+            for t in range(self.num_frames)
+        ]
+        data_transforms = _transforms.Group(
+            inputs=[
+                *depth_frame_transforms,
+                _transforms_video.BuildVideoTensor(
+                    image_keys=tuple(self.image_keys),
+                    num_frames=self.num_frames,
+                    output_keys={k: f"{k}_video" for k in self.image_keys},
+                ),
+                _config_pi0_mem.UmiInputsV4_Bimanual_HeadView_Depth_Video(num_frames=self.num_frames),
+            ],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(DataConfigFactory):
     """Pi0Mem bimanual wrist-only data config.
 
@@ -2710,6 +2823,8 @@ class TrainConfig:
 
     # How often (in steps) to log training metrics.
     log_interval: int = 100
+    # If true, include detailed data-loader/per-step timing metrics in logs.
+    log_perf_metrics: bool = False
     # How often (in steps) to save checkpoints.
     save_interval: int = 1000
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
@@ -4615,6 +4730,116 @@ _CONFIGS = [
         log_interval=10,
         keep_period=5_000,
     ),
+    TrainConfig(
+        name="pi0_mem_compress_umi_wbcd_history_light_v2_260623",
+        model=pi0_mem_compress.Pi0MemCompressConfig(
+            # pi05=True,
+            # action_dim=32,
+            # action_horizon=32,
+            # action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            # max_token_len=360,
+            # num_frames=8,
+            # memory_every=4,
+            # history_memory_tokens=256,
+            # history_resampler_depth=1,
+            # history_use_current_condition=True,
+            # history_gate_fixed=1.0,
+            # history_gate_lr_multiplier=20.0,
+            # diversity_weight=0.01,
+            # current_frame_dropout_prob=0.05,
+            # current_frame_mask_prob=0.05,
+            # current_frame_corrupt_loss_weight=0.25,
+
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+
+            num_frames=8,
+            memory_every=4,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=1.0,
+
+            diversity_weight=0.01,
+
+            # current_frame_index=-1,
+            # current_frame_dropout_prob=0.05,
+            # current_frame_mask_prob=0.0,
+            # current_frame_corrupt_sample_prob=0.3,
+
+
+            current_frame_index=-1,
+            # current_frame_dropout_prob=0.1,
+            # current_frame_mask_prob=0.0,
+            # current_frame_corrupt_sample_prob=0.5,
+            # current_frame_corrupt_loss_weight=0.0,
+
+
+            current_frame_corrupt_sample_prob = 1.0,
+            current_frame_dropout_prob = 0.3,
+            current_frame_mask_prob = 0.0,
+            current_frame_corrupt_loss_weight = 0.0
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            weights=[1.0, 1.0],
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_Horizon1_Pi0Mem(
+                    repo_id="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/fold_clothes_messy_demostration/horizon_cloth_folding_advantage_messy_demostration_20260408_ep85_gripper_bin",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/fold_clothes_messy_demostration/horizon_cloth_folding_advantage_messy_demostration_20260408_ep85_gripper_bin",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    num_frames=8,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_Horizon1_Pi0Mem(
+                    repo_id="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/fold_clothes_messy_demostration/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/fold_clothes_messy_demostration/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    num_frames=8,
+                    frame_stride=4,
+                )
+            ],
+        ),
+        # weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+        #     "gs://openpi-assets/checkpoints/pi05_base/params"
+        # ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_mem_compress_umi_wbcd_history_light_v2_260623/260623/59999/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=32,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=15_000,
+    ),
+
+    # =====================================================================
     TrainConfig(
         name="pi0_mem_compress_umi_wbcd_history_light_v1_260605",
         model=pi0_mem_compress.Pi0MemCompressConfig(

@@ -114,13 +114,13 @@ class Pi0MemCompressConfig(pi0_config.Pi0Config):
     # softer version of full-frame dropout and is applied only by the memory
     # training script when the value is > 0.
     current_frame_mask_prob: float = 0.0
-    # Optional auxiliary action loss on a second view where only the current
-    # frame is corrupted and history remains clean:
-    #   action_loss = (loss(clean_current, clean_history)
-    #                + weight * loss(corrupted_current, clean_history))
-    #                / (1 + weight)
-    # This encourages the policy to remain correct when current-frame evidence
-    # is incomplete while keeping the history frames clean.
+    # Train-only probability of replacing the clean observation with a
+    # corrupted-current observation for the single forward in each train step.
+    # This encourages history use without paying for a second model forward.
+    current_frame_corrupt_sample_prob: float = 0.0
+    # Deprecated train-only auxiliary loss weight for the old two-forward
+    # corrupted-current objective. Kept for config compatibility; the memory
+    # training script now uses current_frame_corrupt_sample_prob instead.
     current_frame_corrupt_loss_weight: float = 0.0
     # Optional optimizer update multiplier for ``history_memory_gate_logit``.
     # Kept at 1.0 by default so existing checkpoint resumes keep the same
@@ -236,14 +236,16 @@ class Pi0MemCompress(_model.BaseModel):
         tensor (suitable for collapse / diversity metrics).
 
         Returns:
-            ``(tokens, input_mask, ar_mask, history_mem_stacked)`` where
-            ``history_mem_stacked`` is the concatenated history memory or
-            ``None`` if the observation had no image streams.
+            ``(tokens, input_mask, ar_mask, history_mem_stacked, encoder_auxes)``
+            where ``history_mem_stacked`` is the concatenated history memory or
+            ``None`` if the observation had no image streams, and
+            ``encoder_auxes`` keeps per-stream encoder internals for monitors.
         """
         input_mask = []
         ar_mask = []
         tokens = []
         history_mems = []
+        encoder_auxes = []
         for name in obs.images:
             image = obs.images[name]
 
@@ -257,6 +259,7 @@ class Pi0MemCompress(_model.BaseModel):
             # It is zeros (shape-stable) when T==1 / cur_idx==0, so safe to
             # collect unconditionally.
             history_mems.append(encoder_aux["encoder"]["history_mem"])
+            encoder_auxes.append(encoder_aux["encoder"])
 
             tokens.append(image_tokens)
             input_mask.append(
@@ -279,13 +282,13 @@ class Pi0MemCompress(_model.BaseModel):
         history_mem_stacked = (
             jnp.concatenate(history_mems, axis=0) if history_mems else None
         )
-        return tokens, input_mask, ar_mask, history_mem_stacked
+        return tokens, input_mask, ar_mask, history_mem_stacked, tuple(encoder_auxes)
 
     @at.typecheck
     def embed_prefix(
         self, obs: _model.Observation
     ) -> tuple[at.Float[at.Array, "b s emb"], at.Bool[at.Array, "b s"], at.Bool[at.Array, " s"]]:
-        tokens, input_mask, ar_mask, _ = self._embed_prefix_with_history_mem(obs)
+        tokens, input_mask, ar_mask, _, _ = self._embed_prefix_with_history_mem(obs)
         return tokens, input_mask, ar_mask
 
     @at.typecheck
@@ -382,8 +385,9 @@ class Pi0MemCompress(_model.BaseModel):
         train: bool = False,
     ):
         """Same training loss as :meth:`compute_loss`, but also returns
-        ``aux = {"history_mem": [B*S, M, D]}`` so trainer-side monitors can
-        log memory collapse / diversity without an extra forward pass.
+        ``aux`` with history-memory tensors and per-stream encoder internals
+        so trainer-side monitors can log memory health without an extra
+        forward pass.
 
         Mirrors :meth:`compute_loss` exactly except it routes the prefix
         embedding through :meth:`_embed_prefix_with_history_mem` so the
@@ -393,8 +397,8 @@ class Pi0MemCompress(_model.BaseModel):
         Returns:
             ``(loss_per_timestep, aux)``. ``aux["history_mem"]`` is the
             per-image-stream history memory concatenated along the batch
-            axis (i.e. shape ``[B * num_image_streams, M, D]``). It is
-            zero-shaped only if the observation has no image streams.
+            axis (i.e. shape ``[B * num_image_streams, M, D]``), and
+            ``aux["encoder_auxes"]`` keeps per-stream block outputs.
         """
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
         observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
@@ -406,7 +410,7 @@ class Pi0MemCompress(_model.BaseModel):
         x_t = time_expanded * noise + (1 - time_expanded) * actions
         u_t = noise - actions
 
-        prefix_tokens, prefix_mask, prefix_ar_mask, history_mem = (
+        prefix_tokens, prefix_mask, prefix_ar_mask, history_mem, encoder_auxes = (
             self._embed_prefix_with_history_mem(observation)
         )
         suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, time)
@@ -434,7 +438,7 @@ class Pi0MemCompress(_model.BaseModel):
         else:
             loss_per_timestep = jnp.mean(squared_error, axis=-1)
 
-        aux = {"history_mem": history_mem}
+        aux = {"history_mem": history_mem, "encoder_auxes": encoder_auxes}
         return loss_per_timestep, aux
 
     @override

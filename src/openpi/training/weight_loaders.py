@@ -160,6 +160,10 @@ class CheckpointWeightLoaderWithMemoryCompress(WeightLoader):
     - ``Transformer/HistoryResampler_0/...``: the learned history compressor
       (memory queries, cross-attention, mlp refinement layers, optional
       current-frame conditioning projection).
+    - ``Transformer/encoderblock*/HistoryLayerNorm_0/...``,
+      ``Transformer/encoderblock*/HistoryMultiHeadDotProductAttention_0/...``,
+      and ``Transformer/encoderblock*/HistoryOutProj/...``: per-block history
+      attention branch parameters.
     - ``Transformer/encoderblock*/history_memory_gate_logit``: per-block
       sigmoid gate logit that controls how strongly current-frame tokens
       attend to compressed history.
@@ -175,7 +179,11 @@ class CheckpointWeightLoaderWithMemoryCompress(WeightLoader):
         return _merge_params(
             loaded_params,
             params,
-            missing_regex=r".*(lora|HistoryResampler|history_memory_gate_logit).*",
+            missing_regex=(
+                r".*(lora|HistoryResampler|HistoryLayerNorm_0|"
+                r"HistoryMultiHeadDotProductAttention_0|HistoryOutProj|"
+                r"history_memory_gate_logit).*"
+            ),
         )
 
 

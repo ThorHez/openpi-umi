@@ -1,0 +1,41 @@
+digraph Pi0MemCompressSimple {
+    rankdir=TB;
+    bgcolor="white";
+    fontname="Helvetica";
+    splines=spline;
+    nodesep=0.4;
+    ranksep=0.6;
+    compound=true;
+    node [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled", color="#33333355", penwidth=1.2];
+    edge [fontname="Helvetica", fontsize=10, color="#555555", arrowsize=0.85];
+
+    // ===== pi0.5 baseline (gray/blue, de-emphasized) =====
+    clip   [label="Video clip  [B, T, H, W, C]\n(history frames + current frame)", fillcolor="#ECEFF1"];
+
+    subgraph cluster_baseline {
+        label="pi0.5 baseline";
+        style="rounded,dashed"; color="#90A4AE"; fontsize=13; fontcolor="#455A64";
+
+        vit  [label="SigLIP encoder\n(current frame only)", fillcolor="#E3F2FD"];
+        llm  [label="PaliGemma + Action Expert\n(flow matching)", fillcolor="#E8F5E9"];
+        act  [label="Action chunk\n[B, horizon, action_dim]", fillcolor="#FFF9C4"];
+    }
+
+    // ===== NEW: added on top of pi0.5 (amber, highlighted) =====
+    subgraph cluster_new {
+        label="Added on top of pi0.5  (our contribution)";
+        style="rounded,filled"; color="#FB8C00"; fillcolor="#FFF3E0"; fontsize=13; fontcolor="#E65100";
+
+        resampler [label="History Resampler\ncompress history -> M memory tokens", fillcolor="#FFE0B2", penwidth=1.5, color="#EF6C00"];
+        gate      [label="Gated Cross-Attention\n(every K layers, zero-init gate)\ncurrent tokens read history memory", fillcolor="#FFCC80", penwidth=1.6, color="#EF6C00"];
+    }
+
+    // ===== Edges =====
+    clip -> vit [label="current frame"];
+    clip -> resampler [label="history frames", color="#EF6C00", penwidth=1.4];
+    resampler -> gate [color="#EF6C00", penwidth=1.4];
+    gate -> vit [label="inject into encoder", color="#EF6C00", penwidth=1.4, style=bold];
+
+    vit -> llm [label="visual tokens"];
+    llm -> act;
+}

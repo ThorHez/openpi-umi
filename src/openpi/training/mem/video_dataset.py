@@ -48,6 +48,31 @@ def _parse_image(image) -> np.ndarray:
     return image
 
 
+def _to_int(value, default: int = -1) -> int:
+    """Convert scalar-like dataset values, including torch/np scalars, to int."""
+    if value is None:
+        return default
+    if hasattr(value, "item"):
+        try:
+            return int(value.item())
+        except Exception:
+            return default
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _batch_item(values, position: int):
+    """Extract one row value from a batched HuggingFace dataset column."""
+    if isinstance(values, (list, tuple)):
+        return values[position]
+    try:
+        return values[position]
+    except Exception:
+        return values
+
+
 class VideoFrameDataset(_data_loader.Dataset):
     """Dataset wrapper that loads video frames dynamically.
 
@@ -87,6 +112,18 @@ class VideoFrameDataset(_data_loader.Dataset):
                 "VideoFrameDataset requires a LeRobotDataset with hf_dataset attribute"
             )
 
+        self._history_hf_dataset = self._hf_dataset
+        try:
+            history_columns = list(dict.fromkeys(("episode_index", *self._config.image_keys)))
+            column_names = set(getattr(self._hf_dataset, "column_names", ()) or ())
+            if column_names and all(column in column_names for column in history_columns):
+                # Historical-frame lookup only needs episode_index and image streams.
+                # Keeping extra state/action/prompt columns out avoids unnecessary
+                # HuggingFace transform work for each random historical row.
+                self._history_hf_dataset = self._hf_dataset.select_columns(history_columns)
+        except Exception:
+            self._history_hf_dataset = self._hf_dataset
+
     def __getitem__(self, index: int) -> dict:
         """Get a sample with dynamically loaded video frames.
 
@@ -107,16 +144,16 @@ class VideoFrameDataset(_data_loader.Dataset):
         if "index" not in data:
             data["index"] = index
 
-        current_index = int(data.get("index", index))
-        current_episode = int(data.get("episode_index", -1))
-        current_frame_idx = int(data.get("frame_index", -1))
+        current_index = _to_int(data.get("index", index), default=int(index))
+        current_episode = _to_int(data.get("episode_index"), default=-1)
+        current_frame_idx = _to_int(data.get("frame_index"), default=-1)
 
         # If we don't have episode info, try to get it from dataset
         if current_episode < 0 or current_frame_idx < 0:
             try:
                 row = self._hf_dataset[int(current_index)]
-                current_episode = int(row.get("episode_index", -1))
-                current_frame_idx = int(row.get("frame_index", -1))
+                current_episode = _to_int(row.get("episode_index"), default=-1)
+                current_frame_idx = _to_int(row.get("frame_index"), default=-1)
                 data["episode_index"] = current_episode
                 data["frame_index"] = current_frame_idx
             except Exception:
@@ -137,12 +174,29 @@ class VideoFrameDataset(_data_loader.Dataset):
         # The current index is intentionally NOT fetched here — we reuse
         # the already-loaded ``data`` from ``self._dataset[index]`` instead.
         # ------------------------------------------------------------------
-        unique_offset_indices = {idx for idx in target_indices if idx >= 0 and idx != current_index}
+        unique_offset_indices = sorted({idx for idx in target_indices if idx >= 0 and idx != current_index})
         rows_cache: dict[int, dict | None] = {}
+
+        try:
+            batch_rows = self._history_hf_dataset[[int(idx) for idx in unique_offset_indices]]
+            for position, idx in enumerate(unique_offset_indices):
+                row = {key: _batch_item(value, position) for key, value in batch_rows.items()}
+                row_episode = _to_int(row.get("episode_index"))
+                if row_episode != current_episode and current_episode >= 0:
+                    # Crossed episode boundary -> treat as missing so we fall back
+                    # to padding (repeat first valid or zero) below.
+                    rows_cache[idx] = None
+                else:
+                    rows_cache[idx] = row
+        except Exception:
+            rows_cache.clear()
+
         for idx in unique_offset_indices:
+            if idx in rows_cache:
+                continue
             try:
-                row = self._hf_dataset[int(idx)]
-                row_episode = int(row.get("episode_index", -1))
+                row = self._history_hf_dataset[int(idx)]
+                row_episode = _to_int(row.get("episode_index"))
                 if row_episode != current_episode and current_episode >= 0:
                     # Crossed episode boundary -> treat as missing so we fall back
                     # to padding (repeat first valid or zero) below.

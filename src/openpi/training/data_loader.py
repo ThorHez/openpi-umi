@@ -2,6 +2,7 @@ from collections.abc import Iterator, Sequence
 import logging
 import multiprocessing
 import os
+import time
 import typing
 from typing import Literal, Protocol, SupportsIndex, TypeVar
 
@@ -53,10 +54,23 @@ class DataLoader(Protocol[T_co]):
 class TransformedDataset(Dataset[T_co]):
     def __init__(self, dataset: Dataset, transforms: Sequence[_transforms.DataTransformFn]):
         self._dataset = dataset
-        self._transform = _transforms.compose(transforms)
+        self._transforms = tuple(transforms)
 
     def __getitem__(self, index: SupportsIndex) -> T_co:
-        return self._transform(self._dataset[index])
+        perf = {}
+
+        start = time.perf_counter()
+        data = self._dataset[index]
+        perf["worker/base_getitem_s"] = time.perf_counter() - start
+
+        for transform in self._transforms:
+            name = type(transform).__name__
+            start = time.perf_counter()
+            data = transform(data)
+            perf[f"worker/{name}_s"] = perf.get(f"worker/{name}_s", 0.0) + (time.perf_counter() - start)
+
+        data["__perf"] = perf
+        return data
 
     def __len__(self) -> int:
         return len(self._dataset)
@@ -433,6 +447,12 @@ class TorchDataLoader:
                 jax.sharding.PartitionSpec("B"),
             )
         self._num_batches = num_batches
+        self._timing = {
+            "torch_next_s": 0.0,
+            "torch_next_max_s": 0.0,
+            "jax_shard_s": 0.0,
+            "jax_shard_max_s": 0.0,
+        }
 
         mp_context = None
         if num_workers > 0:
@@ -462,6 +482,11 @@ class TorchDataLoader:
     def torch_loader(self) -> torch.utils.data.DataLoader:
         return self._data_loader
 
+    def pop_timing(self) -> dict[str, float]:
+        timing = dict(self._timing)
+        self._timing = dict.fromkeys(self._timing, 0.0)
+        return timing
+
     def __iter__(self):
         num_items = 0
         while True:
@@ -470,13 +495,32 @@ class TorchDataLoader:
                 if self._num_batches is not None and num_items >= self._num_batches:
                     return
                 try:
+                    torch_start = time.perf_counter()
                     batch = next(data_iter)
+                    torch_next_s = time.perf_counter() - torch_start
+                    self._timing["torch_next_s"] += torch_next_s
+                    self._timing["torch_next_max_s"] = max(self._timing["torch_next_max_s"], torch_next_s)
+                    perf = batch.pop("__perf", None)
+                    if isinstance(perf, dict):
+                        for key, value in perf.items():
+                            value = np.asarray(value, dtype=np.float32)
+                            mean_key = key
+                            max_key = key.removesuffix("_s") + "_max_s"
+                            mean_value = float(np.mean(value))
+                            max_value = float(np.max(value))
+                            self._timing[mean_key] = self._timing.get(mean_key, 0.0) + mean_value
+                            self._timing[max_key] = max(self._timing.get(max_key, 0.0), max_value)
                 except StopIteration:
                     break  # We've exhausted the dataset. Create a new iterator and start over.
                 num_items += 1
                 # For JAX, convert to sharded arrays; for PyTorch, return torch tensors
                 if self._sharding is not None:
-                    yield jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
+                    shard_start = time.perf_counter()
+                    batch = jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
+                    jax_shard_s = time.perf_counter() - shard_start
+                    self._timing["jax_shard_s"] += jax_shard_s
+                    self._timing["jax_shard_max_s"] = max(self._timing["jax_shard_max_s"], jax_shard_s)
+                    yield batch
                 else:
                     yield jax.tree.map(torch.as_tensor, batch)
 
@@ -544,10 +588,26 @@ class DataLoaderImpl(DataLoader):
     def __init__(self, data_config: _config.DataConfig, data_loader: TorchDataLoader | RLDSDataLoader):
         self._data_config = data_config
         self._data_loader = data_loader
+        self._timing = {
+            "obs_from_dict_s": 0.0,
+            "obs_from_dict_max_s": 0.0,
+        }
 
     def data_config(self) -> _config.DataConfig:
         return self._data_config
 
+    def pop_timing(self) -> dict[str, float]:
+        timing = dict(self._timing)
+        self._timing = dict.fromkeys(self._timing, 0.0)
+        if hasattr(self._data_loader, "pop_timing"):
+            timing.update(self._data_loader.pop_timing())
+        return timing
+
     def __iter__(self):
         for batch in self._data_loader:
-            yield _model.Observation.from_dict(batch), batch["actions"]
+            obs_start = time.perf_counter()
+            observation = _model.Observation.from_dict(batch)
+            obs_from_dict_s = time.perf_counter() - obs_start
+            self._timing["obs_from_dict_s"] += obs_from_dict_s
+            self._timing["obs_from_dict_max_s"] = max(self._timing["obs_from_dict_max_s"], obs_from_dict_s)
+            yield observation, batch["actions"]

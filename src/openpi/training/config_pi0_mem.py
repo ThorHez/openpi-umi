@@ -419,7 +419,7 @@ def create_pi0_mem_data_loader(
         # Video loading is CPU-heavy: each sample fetches up to num_frames
         # rows from the underlying LeRobotDataset. Prefetch ~4 batches per
         # worker so the GPU isn't starved while workers decode frames.
-        prefetch_factor=4 if config.num_workers > 0 else None,
+        prefetch_factor=8 if config.num_workers > 0 else None,
     )
 
     return _data_loader.DataLoaderImpl(data_config, torch_loader)

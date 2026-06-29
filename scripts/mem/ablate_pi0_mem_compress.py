@@ -2,7 +2,7 @@
 
 What this script tests
 ----------------------
-Six ablations probe what the compressed-history memory branch in
+Seven ablations probe what the compressed-history memory branch in
 ``openpi.models.siglip_mem_compress`` actually contributes at inference time.
 None of them require retraining or updating the checkpoint — the same
 ``Pi0MemCompress`` policy is reused across all modes and only the input
@@ -25,6 +25,9 @@ shuffle_history   historical frames are temporally shuffled (positions 0..T-2);
                   the current frame stays in place.
                   -> if performance is unchanged, the memory branch is
                   invariant to temporal order.
+zero_current      current frames are replaced by zeros; historical frames stay
+                  clean.
+                  -> tests whether clean history alone can recover the action.
 memory_off        the effective history gate is forced to zero. For learned-gate
                   models this also sets every ``history_memory_gate_logit`` to
                   a very-negative value; for fixed-gate models it temporarily
@@ -137,6 +140,8 @@ class AblationMode(str, enum.Enum):
     REPEAT_CURRENT = "repeat_current"
     WRONG_HISTORY = "wrong_history"
     SHUFFLE_HISTORY = "shuffle_history"
+    ZERO_CURRENT = "zero_current"
+    ZERO_CURRENT_SUITE = "zero_current_suite"
     MEMORY_OFF = "memory_off"
     FORCE_MEMORY_GATE = "force_memory_gate"
     ALL = "all"
@@ -176,6 +181,9 @@ class Args:
 
     # Which ablation mode to run. Use "all" to run every mode in one invocation.
     ablation_mode: AblationMode = AblationMode.ALL
+    # If true, zero the current frame after applying the selected history/gate
+    # ablation. This creates a shared no-current-frame condition across modes.
+    zero_current_frame: bool = False
 
     # Number of episodes to evaluate. Set to -1 for all.
     num_episodes: int = 20
@@ -870,13 +878,14 @@ def apply_ablation_to_sample(
     num_frames: int,
     donor_sample: dict | None,
     rng: np.random.Generator,
+    zero_current_frame: bool = False,
 ) -> dict:
     """Return a shallow copy of ``sample`` with the requested image-key perturbation applied.
 
-    The data-side ablations all preserve the *current* frame (position
-    ``num_frames - 1``) and only manipulate historical positions ``0..T-2``,
-    so the policy still sees the correct "now" view. Position 0 (oldest) is
-    kept consistent with the model's temporal convention.
+    Most data-side ablations preserve the current frame (position
+    ``num_frames - 1``) and only manipulate historical positions ``0..T-2``.
+    ``zero_current`` is the opposite stress test: current is blanked while
+    clean history is preserved.
     """
     out = dict(sample)
 
@@ -915,12 +924,20 @@ def apply_ablation_to_sample(
                     # donor's current frame so historical positions are still wrong.
                     out[f"{img_key}_{t}"] = donor_sample.get(current_key, current_frame)
 
+        elif mode == AblationMode.ZERO_CURRENT:
+            out[current_key] = np.zeros_like(current_frame)
+
         elif mode in (AblationMode.MEMORY_OFF, AblationMode.FORCE_MEMORY_GATE):
             # No data-side change; the gate manipulation handled the model.
             pass
 
         else:
             raise ValueError(f"Unknown ablation mode: {mode}")
+
+    if zero_current_frame:
+        for img_key in image_keys:
+            current_key = f"{img_key}_{num_frames - 1}"
+            out[current_key] = np.zeros_like(out[current_key])
 
     return out
 
@@ -1508,6 +1525,7 @@ def _worker_load_one(
     donor_indices_pool: tuple[int, ...] | None,
     valid_dims: int,
     base_seed: int,
+    zero_current_frame: bool,
 ) -> tuple[dict, np.ndarray, float]:
     """Module-level entry point invoked inside fork-spawned loader processes.
 
@@ -1546,6 +1564,7 @@ def _worker_load_one(
         rng=local_rng,
         donor_indices_pool=list(donor_indices_pool) if donor_indices_pool else None,
         valid_dims=valid_dims,
+        zero_current_frame=bool(zero_current_frame),
     )
     return obs, gt, time.perf_counter() - t0
 
@@ -1561,6 +1580,7 @@ def _load_one_obs(
     rng: np.random.Generator,
     donor_indices_pool: list[int] | None,
     valid_dims: int,
+    zero_current_frame: bool,
 ) -> tuple[dict, np.ndarray]:
     """Load + perturb + obs-dict one frame index. Returns ``(obs, gt_actions)``.
 
@@ -1587,6 +1607,7 @@ def _load_one_obs(
         num_frames=num_frames,
         donor_sample=donor_sample,
         rng=rng,
+        zero_current_frame=zero_current_frame,
     )
     obs = build_obs_dict(
         perturbed,
@@ -1611,6 +1632,7 @@ def _prefetched_obs_iter(
     donor_indices_pool: list[int] | None,
     valid_dims: int,
     base_seed: int,
+    zero_current_frame: bool,
     executor: concurrent.futures.ProcessPoolExecutor | None,
     prefetch_size: int,
 ):
@@ -1651,6 +1673,7 @@ def _prefetched_obs_iter(
             donor_tuple,
             int(valid_dims),
             int(base_seed),
+            bool(zero_current_frame),
         )
 
     if executor is None:
@@ -1703,6 +1726,7 @@ def evaluate_episode(
     load_executor: concurrent.futures.ProcessPoolExecutor | None = None,
     prefetch_size: int = 0,
     base_seed: int = 0,
+    zero_current_frame: bool = False,
     sampling_seed: int = 0,
     profile_every_n_batches: int = 0,
 ) -> EpisodeStats | None:
@@ -1947,6 +1971,7 @@ def evaluate_episode(
             donor_indices_pool=donor_indices_pool,
             valid_dims=valid_dims,
             base_seed=base_seed,
+            zero_current_frame=zero_current_frame,
             executor=load_executor,
             prefetch_size=prefetch_size,
         ),
@@ -2290,6 +2315,7 @@ def run_mode(
                 load_executor=load_executor,
                 prefetch_size=prefetch_size,
                 base_seed=int(args.seed),
+                zero_current_frame=bool(args.zero_current_frame),
                 sampling_seed=int(args.sampling_seed),
                 profile_every_n_batches=int(args.profile_every_n_batches),
             )
@@ -2656,15 +2682,34 @@ def main(args: Args) -> None:
             batch_size // n_devices,
         )
 
+    if args.ablation_mode == AblationMode.ZERO_CURRENT_SUITE:
+        args.zero_current_frame = True
+        modes_to_run = [
+            AblationMode.NORMAL,
+            AblationMode.MEMORY_OFF,
+            AblationMode.WRONG_HISTORY,
+            AblationMode.REPEAT_CURRENT,
+            AblationMode.SHUFFLE_HISTORY,
+        ]
+    elif args.ablation_mode == AblationMode.ALL:
+        modes_to_run = [
+            AblationMode.NORMAL,
+            AblationMode.REPEAT_CURRENT,
+            AblationMode.WRONG_HISTORY,
+            AblationMode.SHUFFLE_HISTORY,
+            AblationMode.ZERO_CURRENT,
+            AblationMode.MEMORY_OFF,
+            AblationMode.FORCE_MEMORY_GATE,
+        ]
+    else:
+        modes_to_run = [args.ablation_mode]
+
     # Heads-up estimate: warn loudly if the user is about to wait > 1 h.
     # Empirically (16 frames * 2 cams * UMI ~1280-token decode):
     #   - GPU steady state: ~0.1 s/frame with prefetch+8GPU+bs=8, or ~0.05 s/frame with bs=32
     #   - CPU steady state: ~0.15 s/frame with 8 prefetch workers, ~1.2 s/frame without
     # In aggregate ~0.2 s/frame is a defensible "with everything on" estimate.
-    if args.ablation_mode == AblationMode.ALL:
-        n_modes = 6
-    else:
-        n_modes = 1
+    n_modes = len(modes_to_run)
     # We can't cheaply know episode lengths without iterating, but for UMI the
     # post-stride per-episode frame count is ~ min(max_frames, ~500/stride).
     if args.max_frames_per_episode > 0:
@@ -2685,18 +2730,6 @@ def main(args: Args) -> None:
         args.frame_window.value,
         sec_per_frame,
     )
-
-    if args.ablation_mode == AblationMode.ALL:
-        modes_to_run = [
-            AblationMode.NORMAL,
-            AblationMode.REPEAT_CURRENT,
-            AblationMode.WRONG_HISTORY,
-            AblationMode.SHUFFLE_HISTORY,
-            AblationMode.MEMORY_OFF,
-            AblationMode.FORCE_MEMORY_GATE,
-        ]
-    else:
-        modes_to_run = [args.ablation_mode]
 
     # Shared flag across modes: True until the first batched_infer call returns
     # (so we only log the "XLA is compiling, expect 5-15 min" hint once per run,

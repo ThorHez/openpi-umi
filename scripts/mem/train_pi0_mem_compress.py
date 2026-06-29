@@ -26,10 +26,16 @@ Launch with the standard tyro CLI::
 import os
 from pathlib import Path
 
-# Mirror train_pi0_mem.py: keep TMPDIR off / and overlay.
+# Keep training-generated caches and temporary files off the small root disk.
+_CACHE_HOME = Path("/data2/hzl_workspace_for_pi/.cache")
+os.environ.setdefault("XDG_CACHE_HOME", str(_CACHE_HOME))
+os.environ.setdefault("OPENPI_DATA_HOME", str(_CACHE_HOME / "openpi"))
+os.environ.setdefault("HF_HOME", str(_CACHE_HOME / "huggingface"))
+os.environ.setdefault("HF_DATASETS_CACHE", str(_CACHE_HOME / "huggingface" / "datasets"))
+os.environ.setdefault("TRANSFORMERS_CACHE", str(_CACHE_HOME / "huggingface" / "transformers"))
+
 if "TMPDIR" not in os.environ:
-    _tmp = Path(os.environ.get("HOME", "/root")) / "tmp"
-    _tmp.mkdir(parents=True, exist_ok=True)
+    _tmp = _CACHE_HOME / "tmp"
     os.environ["TMPDIR"] = os.environ["TEMP"] = os.environ["TMP"] = str(_tmp)
 
 import dataclasses
@@ -37,6 +43,7 @@ import functools
 import logging
 import platform
 import sys
+import time
 from typing import Any
 
 import etils.epath as epath
@@ -189,15 +196,19 @@ def new_memory_param_grad_metrics(grads):
 
     # New gates inside current-frame blocks.
     history_gate = select("history_memory_gate_logit")
+    history_cross_attn = select("HistoryMultiHeadDotProductAttention_0")
+    history_out_proj = select("HistoryOutProj")
 
     return {
-        "grad/memory_new_total_l2": _global_l2_norm(resampler + history_gate),
+        "grad/memory_new_total_l2": _global_l2_norm(resampler + history_gate + history_cross_attn + history_out_proj),
         "grad/history_resampler_l2": _global_l2_norm(resampler),
         "grad/memory_queries_l2": _global_l2_norm(memory_queries),
         "grad/current_condition_l2": _global_l2_norm(current_condition),
         "grad/resampler_cross_attn_l2": _global_l2_norm(resampler_cross_attn),
         "grad/resampler_mlp_l2": _global_l2_norm(resampler_mlp),
         "grad/history_gate_l2": _global_l2_norm(history_gate),
+        "grad/history_cross_attn_l2": _global_l2_norm(history_cross_attn),
+        "grad/history_out_proj_l2": _global_l2_norm(history_out_proj),
     }
 
 
@@ -276,6 +287,51 @@ def history_memory_collapse_metrics(model_out, eps=1e-6):
         "memory/hist_token_cosine_offdiag_max": offdiag_max,
         "memory/hist_token_centered_cosine_offdiag_mean": centered_offdiag_mean,
         "memory/hist_token_centered_cosine_offdiag_max": centered_offdiag_max,
+    }
+
+
+def memory_branch_activation_metrics(encoder_auxes, eps: float = 1e-6):
+    """Track the active history branch residual relative to spatial attention."""
+    mem_norms = []
+    spatial_norms = []
+    gate_values = []
+    active_weights = []
+
+    for encoder_aux in encoder_auxes:
+        for name, block_out in encoder_aux.items():
+            if not name.startswith("block") or "mem_update" not in block_out:
+                continue
+
+            mem_update = jnp.asarray(block_out["mem_update"], dtype=jnp.float32)
+            y_spatial = jnp.asarray(block_out["y_spatial"], dtype=jnp.float32)
+            mem_norm = jnp.mean(jnp.linalg.norm(mem_update, axis=-1))
+            spatial_norm = jnp.mean(jnp.linalg.norm(y_spatial, axis=-1))
+            active = (mem_norm > eps).astype(jnp.float32)
+
+            mem_norms.append(mem_norm)
+            spatial_norms.append(spatial_norm)
+            gate_values.append(jnp.asarray(block_out["history_gate"], dtype=jnp.float32))
+            active_weights.append(active)
+
+    if not mem_norms:
+        zero = jnp.asarray(0.0, dtype=jnp.float32)
+        return {
+            "memory/mem_update_norm": zero,
+            "memory/y_spatial_norm": zero,
+            "memory/mem_update_to_spatial_ratio": zero,
+            "gate/effective_mean": zero,
+        }
+
+    weights = jnp.stack(active_weights)
+    denom = jnp.maximum(jnp.sum(weights), 1.0)
+    mem_norm = jnp.sum(jnp.stack(mem_norms) * weights) / denom
+    spatial_norm = jnp.sum(jnp.stack(spatial_norms) * weights) / denom
+    gate_mean = jnp.sum(jnp.stack(gate_values) * weights) / denom
+    return {
+        "memory/mem_update_norm": mem_norm,
+        "memory/y_spatial_norm": spatial_norm,
+        "memory/mem_update_to_spatial_ratio": mem_norm / (spatial_norm + eps),
+        "gate/effective_mean": gate_mean,
     }
 
 
@@ -596,29 +652,25 @@ def train_step(
     current_frame_dropout_prob = float(getattr(config.model, "current_frame_dropout_prob", 0.0))
     current_frame_mask_prob = float(getattr(config.model, "current_frame_mask_prob", 0.0))
     current_frame_corruption_on = current_frame_dropout_prob > 0.0 or current_frame_mask_prob > 0.0
+    current_frame_corrupt_sample_prob = float(getattr(config.model, "current_frame_corrupt_sample_prob", 0.0))
+    current_frame_corrupt_sample_on = current_frame_corrupt_sample_prob > 0.0 and current_frame_corruption_on
     current_frame_corrupt_loss_weight = float(getattr(config.model, "current_frame_corrupt_loss_weight", 0.0))
-    current_frame_corrupt_loss_on = current_frame_corrupt_loss_weight > 0.0 and current_frame_corruption_on
     current_frame_index = int(getattr(config.model, "current_frame_index", -1))
 
     def loss_fn(model, rng, observation, actions):
-        corrupt_rng, clean_rng = jax.random.split(rng)
+        sample_rng, corrupt_rng, loss_rng = jax.random.split(rng, 3)
         zero = jnp.asarray(0.0, dtype=jnp.float32)
+        use_corrupt = zero
         corruption_metrics = {
             "current_frame_dropout_rate": zero,
             "current_frame_mask_rate": zero,
         }
 
-        chunked_loss, aux = model.compute_loss_with_memory_aux(
-            clean_rng, observation, actions, train=True
-        )
-        action_loss = jnp.mean(chunked_loss)
-
-        if diversity_on:
-            div_loss = memory_diversity_loss(aux["history_mem"])
-        else:
-            div_loss = jnp.asarray(0.0, dtype=action_loss.dtype)
-
-        if current_frame_corrupt_loss_on:
+        if current_frame_corrupt_sample_on:
+            use_corrupt = jax.random.bernoulli(
+                sample_rng,
+                p=jnp.asarray(current_frame_corrupt_sample_prob, dtype=jnp.float32),
+            ).astype(jnp.float32)
             corrupt_observation, corruption_metrics = apply_current_frame_corruption(
                 corrupt_rng,
                 observation,
@@ -626,27 +678,38 @@ def train_step(
                 dropout_prob=current_frame_dropout_prob,
                 mask_prob=current_frame_mask_prob,
             )
-            corrupt_chunked_loss, _ = model.compute_loss_with_memory_aux(
-                clean_rng, corrupt_observation, actions, train=True
-            )
-            current_frame_corrupt_action_loss = jnp.mean(corrupt_chunked_loss)
-            action_loss_denom = 1.0 + current_frame_corrupt_loss_weight
-            normalized_action_loss = (
-                action_loss
-                + current_frame_corrupt_loss_weight * current_frame_corrupt_action_loss
-            ) / action_loss_denom
+            images = {
+                key: jnp.where(use_corrupt.astype(jnp.bool_), corrupt_observation.images[key], image)
+                for key, image in observation.images.items()
+            }
+            observation = _copy_observation_with_images(observation, images)
+            corruption_metrics = {
+                key: use_corrupt * value
+                for key, value in corruption_metrics.items()
+            }
+
+        chunked_loss, aux = model.compute_loss_with_memory_aux(
+            loss_rng, observation, actions, train=True
+        )
+        action_loss = jnp.mean(chunked_loss)
+        normalized_action_loss = action_loss
+        current_frame_corrupt_action_loss = jnp.where(use_corrupt.astype(jnp.bool_), action_loss, zero)
+
+        if diversity_on:
+            div_loss = memory_diversity_loss(aux["history_mem"])
         else:
-            current_frame_corrupt_action_loss = jnp.asarray(0.0, dtype=action_loss.dtype)
-            normalized_action_loss = action_loss
+            div_loss = jnp.asarray(0.0, dtype=action_loss.dtype)
 
         total_loss = normalized_action_loss + diversity_weight * div_loss
 
         aux_out = {
             "history_mem": aux["history_mem"],
+            "encoder_auxes": aux["encoder_auxes"],
             "action_loss": action_loss,
             "normalized_action_loss": normalized_action_loss,
             "diversity_loss": div_loss,
             "current_frame_corrupt_action_loss": current_frame_corrupt_action_loss,
+            "current_frame_corrupt_sample_rate": use_corrupt,
             "current_frame_dropout_rate": corruption_metrics["current_frame_dropout_rate"],
             "current_frame_mask_rate": corruption_metrics["current_frame_mask_rate"],
         }
@@ -683,10 +746,8 @@ def train_step(
             lambda _, x: x.value.ndim > 1,
         ),
     )
-    # ``loss`` is the total (action + diversity); ``action_loss`` and
-    # ``normalized_action_loss`` / ``diversity_loss`` are surfaced separately
-    # so wandb can show the clean view, auxiliary corrupted-current view, and
-    # optimizer-driving action objective without conflating their scales.
+    # ``loss`` is the total (action + diversity); corruption metrics show how
+    # often the single forward used a corrupted-current observation.
     info = {
         "loss": loss,
         "action_loss": aux["action_loss"],
@@ -695,6 +756,8 @@ def train_step(
         "diversity_weight": jnp.asarray(diversity_weight, dtype=jnp.float32),
         "current_frame_corrupt_action_loss": aux["current_frame_corrupt_action_loss"],
         "current_frame_corrupt_loss_weight": jnp.asarray(current_frame_corrupt_loss_weight, dtype=jnp.float32),
+        "current_frame_corrupt_sample_prob": jnp.asarray(current_frame_corrupt_sample_prob, dtype=jnp.float32),
+        "current_frame_corrupt_sample_rate": aux["current_frame_corrupt_sample_rate"],
         "current_frame_dropout_rate": aux["current_frame_dropout_rate"],
         "current_frame_mask_rate": aux["current_frame_mask_rate"],
         "grad_norm": optax.global_norm(grads),
@@ -708,6 +771,7 @@ def train_step(
     # shape-stable zero tensor, so these metrics stay defined.
     info.update(new_memory_param_grad_metrics(grads))
     info.update(history_gate_param_metrics(new_params))
+    info.update(memory_branch_activation_metrics(aux["encoder_auxes"]))
     info.update(
         history_memory_collapse_metrics({"encoder": {"history_mem": aux["history_mem"]}})
     )
@@ -812,89 +876,70 @@ def main(config: _config.TrainConfig):
     )
 
     infos = []
-    loss_history = []
-    anomaly_dir = config.checkpoint_dir / "anomalies"
-    anomaly_dir.mkdir(exist_ok=True)
+    timing_stats = {
+        "data_next_s": 0.0,
+        "data_next_max_s": 0.0,
+        "torch_next_s": 0.0,
+        "torch_next_max_s": 0.0,
+        "jax_shard_s": 0.0,
+        "jax_shard_max_s": 0.0,
+        "obs_from_dict_s": 0.0,
+        "obs_from_dict_max_s": 0.0,
+        "log_sync_s": 0.0,
+        "loop_wall_s": 0.0,
+        "count": 0,
+    }
 
     for step in pbar:
+        loop_start = time.perf_counter()
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch)
         infos.append(info)
 
-        current_loss = float(info["loss"])
-        loss_history.append(current_loss)
-        if len(loss_history) > 100:
-            loss_history.pop(0)
-
-        is_anomaly = False
-        anomaly_reason = ""
-        loss_history_size = config.log_interval * 2
-
-        if jnp.isnan(current_loss) or jnp.isinf(current_loss):
-            is_anomaly = True
-            anomaly_reason = "NaN or Inf loss"
-        elif len(loss_history) > loss_history_size:
-            recent_mean = np.mean(loss_history[-loss_history_size:])
-            recent_std = np.std(loss_history[-loss_history_size:])
-            if current_loss > recent_mean + 3 * recent_std and recent_std > 1e-6:
-                is_anomaly = True
-                anomaly_reason = f"Spike: {current_loss:.6f} vs recent {recent_mean:.6f}\u00b1{recent_std:.6f}"
-
-        if is_anomaly:
-            # import pickle
-            anomaly_file = anomaly_dir / f"step_{step:06d}_{current_loss:.6f}.pkl"
-            pbar.write(f"\u26a0\ufe0f  ANOMALY DETECTED at step {step}: {anomaly_reason}")
-            pbar.write(f"   Saving data to {anomaly_file}")
-
-            # batch_cpu = jax.device_get(batch)
-            # anomaly_data = {
-            #     "step": step,
-            #     "loss": current_loss,
-            #     "loss_history": loss_history[-20:],
-            #     "reason": anomaly_reason,
-            #     "observation": batch_cpu[0],
-            #     "actions": batch_cpu[1],
-            #     "info": jax.device_get(info),
-            # }
-
-            # with open(anomaly_file, "wb") as f:
-            #     pickle.dump(anomaly_data, f)
-            # pbar.write("   \u2713 Anomaly data saved!")
-
-        stats_interval = 1000
-        if step > 0 and step % stats_interval == 0 and len(loss_history) > 10:
-            # import pickle
-            stats_dir = config.checkpoint_dir / "periodic_stats"
-            stats_dir.mkdir(exist_ok=True)
-
-            # batch_cpu = jax.device_get(batch)
-            # stats_file = stats_dir / f"step_{step:06d}_{current_loss:.6f}.pkl"
-
-            # pbar.write(f"\n\U0001f4ca Saving periodic statistics at step {step} to {stats_file}")
-
-            # stats_data = {
-            #     "step": step,
-            #     "loss": current_loss,
-            #     "loss_history": loss_history.copy(),
-            #     "reason": f"Periodic stats at step {step}",
-            #     "observation": batch_cpu[0],
-            #     "actions": batch_cpu[1],
-            #     "info": jax.device_get(info),
-            # }
-
-            # with open(stats_file, "wb") as f:
-            #     pickle.dump(stats_data, f)
-            # pbar.write("   \u2713 Statistics data saved!")
+        data_start = time.perf_counter()
+        batch = next(data_iter)
+        data_next_s = time.perf_counter() - data_start
+        timing_stats["data_next_s"] += data_next_s
+        timing_stats["data_next_max_s"] = max(timing_stats["data_next_max_s"], data_next_s)
+        if hasattr(data_loader, "pop_timing"):
+            loader_timing = data_loader.pop_timing()
+            for key, value in loader_timing.items():
+                if key.endswith("_max_s"):
+                    timing_stats[key] = max(timing_stats.get(key, 0.0), value)
+                else:
+                    timing_stats[key] = timing_stats.get(key, 0.0) + value
 
         if step % config.log_interval == 0:
+            log_start = time.perf_counter()
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
             reduced_info = {k: round(float(v), 6) for k, v in reduced_info.items()}
+            log_sync_s = time.perf_counter() - log_start
+            timing_stats["log_sync_s"] += log_sync_s
+
+            timing_stats["loop_wall_s"] += time.perf_counter() - loop_start
+            timing_stats["count"] += 1
+            if config.log_perf_metrics:
+                timing_count = max(timing_stats["count"], 1)
+                perf_info = {}
+                for key in sorted(timing_stats):
+                    if key == "count":
+                        continue
+                    metric_key = f"perf/{key}"
+                    if key.endswith("_max_s") or key == "log_sync_s":
+                        perf_info[metric_key] = round(timing_stats[key], 6)
+                    else:
+                        perf_info[metric_key] = round(timing_stats[key] / timing_count, 6)
+                reduced_info.update(perf_info)
+            timing_stats = dict.fromkeys(timing_stats, 0.0)
+
             info_str = ", ".join(f"{k}={v:.6f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
             infos = []
-        batch = next(data_iter)
+        else:
+            timing_stats["loop_wall_s"] += time.perf_counter() - loop_start
+            timing_stats["count"] += 1
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
             _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)

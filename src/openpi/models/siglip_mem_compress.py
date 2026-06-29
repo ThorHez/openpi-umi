@@ -219,9 +219,26 @@ class Encoder1DBlockCurrentOnlyMemory(nn.Module):
             deterministic=deterministic,
             dtype=self.dtype_mm,
         )
-
+        history_ln = nn.LayerNorm(name="HistoryLayerNorm_0", dtype=self.dtype_mm)
+        history_attn = nn.MultiHeadDotProductAttention(
+            name="HistoryMultiHeadDotProductAttention_0",
+            num_heads=self.num_heads,
+            kernel_init=nn.initializers.xavier_uniform(),
+            deterministic=deterministic,
+            dtype=self.dtype_mm,
+        )
         y_cur = ln1(x_cur)
+
+        history_out_proj = nn.Dense(
+            y_cur.shape[-1],
+            name="HistoryOutProj",
+            kernel_init=nn.initializers.normal(stddev=1e-4),
+            bias_init=nn.initializers.zeros,
+            dtype=self.dtype_mm,
+        )
+
         y_spatial = out["sa"] = attn(y_cur, y_cur)
+        out["y_spatial"] = y_spatial
 
         gate_logit = self.param(
             "history_memory_gate_logit",
@@ -236,22 +253,27 @@ class Encoder1DBlockCurrentOnlyMemory(nn.Module):
                 raise ValueError(f"history_gate_fixed must be in [0, 1], got {self.history_gate_fixed}")
             gate = jnp.asarray(self.history_gate_fixed, dtype=y_spatial.dtype)
 
-        def memory_branch(_):
-            # Cross-attend only to compressed history. Current-frame spatial
-            # attention has already been computed by y_spatial, so we do not
-            # concatenate y_cur into K/V again.
-            y_mem = ln1(hist_mem)
-            mem_update = attn(y_cur, y_mem)
-            y = y_spatial + gate * mem_update
-            return y, mem_update, gate
-
-        def spatial_branch(_):
-            return y_spatial, jnp.zeros_like(y_spatial), jnp.asarray(0.0, dtype=y_spatial.dtype)
-
         # Avoid tracing attention with an empty K/V length when M == 0.
         if hist_mem.shape[1] == 0:
-            y, mem_update, gate_value = spatial_branch(None)
+            mem_update = jnp.zeros_like(y_spatial)
+            y = y_spatial
+            gate_value = jnp.asarray(0.0, dtype=y_spatial.dtype)
         else:
+            # Cross-attend only to compressed history. Keep Flax module calls
+            # outside lax.cond so parameter creation cannot leak tracers.
+            y_mem = history_ln(hist_mem)
+            mem_update = history_attn(y_cur, y_mem)
+
+            # Zero-init adapter: start as no-op, then learn useful residual.
+            mem_update = history_out_proj(mem_update)
+
+            def memory_branch(_):
+                y = y_spatial + gate * mem_update
+                return y, mem_update, gate
+
+            def spatial_branch(_):
+                return y_spatial, jnp.zeros_like(y_spatial), jnp.asarray(0.0, dtype=y_spatial.dtype)
+
             y, mem_update, gate_value = jax.lax.cond(
                 jnp.asarray(use_memory, dtype=jnp.bool_),
                 memory_branch,

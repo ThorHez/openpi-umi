@@ -10,6 +10,7 @@ samples from different datasets and each sample has the correct per-sample mask.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Literal
 
 import jax
@@ -63,6 +64,10 @@ class MultiDataLoaderImpl(_data_loader.DataLoader):
     ):
         self._data_configs = data_configs
         self._data_loader = data_loader
+        self._timing = {
+            "obs_from_dict_s": 0.0,
+            "obs_from_dict_max_s": 0.0,
+        }
 
     def data_config(self) -> _config.DataConfig:
         return self._data_configs[0]
@@ -70,9 +75,20 @@ class MultiDataLoaderImpl(_data_loader.DataLoader):
     def data_configs(self) -> list[_config.DataConfig]:
         return self._data_configs
 
+    def pop_timing(self) -> dict[str, float]:
+        timing = dict(self._timing)
+        self._timing = dict.fromkeys(self._timing, 0.0)
+        timing.update(self._data_loader.pop_timing())
+        return timing
+
     def __iter__(self):
         for batch in self._data_loader:
-            yield _model.Observation.from_dict(batch), batch["actions"]
+            obs_start = time.perf_counter()
+            observation = _model.Observation.from_dict(batch)
+            obs_from_dict_s = time.perf_counter() - obs_start
+            self._timing["obs_from_dict_s"] += obs_from_dict_s
+            self._timing["obs_from_dict_max_s"] = max(self._timing["obs_from_dict_max_s"], obs_from_dict_s)
+            yield observation, batch["actions"]
 
 
 def create_multi_data_loader(
