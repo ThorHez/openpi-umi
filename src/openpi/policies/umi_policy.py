@@ -420,6 +420,89 @@ class WBCD_V4_Bimanual_Horizon1_Compute_Norm_Stats(transforms.DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class Shellgame_Compute_Norm_Stats(transforms.DataTransformFn):
+    """
+    This class is used to convert inputs to the model to the expected format. It is used for both training and inference.
+    """
+
+    def __call__(self, data: dict) -> dict:
+        # right hand data
+        robot0_eef_pos = data["robot0_eef_pos"][0:1]
+        robot0_eef_rot_axis_angle = data["robot0_eef_rot_axis_angle"][0:1]
+        robot0_gripper_width = data["robot0_gripper_width"][0:1]
+        # robot0_eef_pos_wrt_start = data["robot0_eef_pos_wrt_start"]
+        # robot0_eef_rot_axis_angle_wrt_start = data["robot0_eef_rot_axis_angle_wrt_start"]
+        #robot0_eef_pos_wrt1 = data["robot0_eef_pos_wrt1"]
+        #robot0_eef_rot_axis_angle_wrt1 = data["robot0_eef_rot_axis_angle_wrt1"]
+        # right_wrist_0_rgb_0 = data["right_wrist_0_rgb_0"]
+
+        # bimanual data
+        # left hand data
+        # robot1_eef_pos = data["robot1_eef_pos"]
+        # robot1_eef_rot_axis_angle = data["robot1_eef_rot_axis_angle"]
+        # robot1_gripper_width = data["robot1_gripper_width"]
+        # robot1_eef_pos_wrt_start = data["robot1_eef_pos_wrt_start"]
+        # robot1_eef_rot_axis_angle_wrt_start = data["robot1_eef_rot_axis_angle_wrt_start"]
+        #robot1_eef_pos_wrt0 = data["robot1_eef_pos_wrt0"]
+        #robot1_eef_rot_axis_angle_wrt0 = data["robot1_eef_rot_axis_angle_wrt0"]
+        # left_wrist_0_rgb_0 = data["left_wrist_0_rgb_0"]
+        
+        # base_0_rgb_1 = data["base_0_rgb_1"]
+
+        # actions = data["actions"].reshape(16, 10)
+        actions = data["actions"]
+
+        # assert left_wrist_0_rgb_0.shape == (3, 224, 224)
+        # assert right_wrist_0_rgb_0.shape == (3, 224, 224)
+        # assert base_0_rgb_1.shape == (3, 224, 224)
+        assert robot0_eef_pos.shape == (1, 3)
+        assert robot0_eef_rot_axis_angle.shape == (1, 6)
+        assert robot0_gripper_width.shape == (1, 1)
+        # assert robot0_eef_pos_wrt_start.shape == (2, 3)
+        # assert robot0_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        #assert robot0_eef_pos_wrt1.shape == (2, 3)
+        #assert robot0_eef_rot_axis_angle_wrt1.shape == (2, 6)
+        # assert robot1_eef_pos.shape == (2, 3)
+        # assert robot1_eef_rot_axis_angle.shape == (2, 6)
+        # assert robot1_gripper_width.shape == (2, 1)
+        # assert robot1_eef_pos_wrt_start.shape == (2, 3)
+        # assert robot1_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        #assert robot1_eef_pos_wrt0.shape == (2, 3)
+        #assert robot1_eef_rot_axis_angle_wrt0.shape == (2, 6)
+        # assert actions.shape == (16, 20)
+
+        state = np.concatenate([robot0_eef_pos,
+                                # robot0_eef_pos_wrt_start,
+                                robot0_eef_rot_axis_angle,
+                                # robot0_eef_rot_axis_angle_wrt_start,
+                                #robot0_eef_pos_wrt1,
+                                #robot0_eef_rot_axis_angle_wrt1,
+                                robot0_gripper_width,
+                                # robot1_eef_pos,
+                                # robot1_eef_pos_wrt_start,
+                                # robot1_eef_rot_axis_angle,
+                                # robot1_eef_rot_axis_angle_wrt_start,
+                                #robot1_eef_pos_wrt0,
+                                #robot1_eef_rot_axis_angle_wrt0,
+                                # robot1_gripper_width,
+                                ], axis=-1)
+        data["state"] = state
+        data["image"] = {
+            "base_0_rgb": _parse_image(np.zeros((3, 224, 224)).astype(np.uint8)),
+            "left_wrist_0_rgb": _parse_image(np.zeros((3, 224, 224)).astype(np.uint8)),
+            "right_wrist_0_rgb": _parse_image(np.zeros((3, 224, 224)).astype(np.uint8)),
+        }
+        data["image_mask"] = {
+            "base_0_rgb": np.False_,
+            "left_wrist_0_rgb": np.False_,
+            "right_wrist_0_rgb": np.False_,
+        }
+        data["actions"] = actions
+        # print(f"prompt: {data['prompt']}")
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
 class UmiInputsV4_Bimanual_Horizon2(transforms.DataTransformFn):
     """
     This class is used to convert inputs to the model to the expected format. It is used for both training and inference.

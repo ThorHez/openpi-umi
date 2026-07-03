@@ -294,6 +294,83 @@ class UmiInputsV4_Bimanual_HeadView_Depth_Video(_transforms.DataTransformFn):
         return data
 
 
+@dataclasses.dataclass(frozen=True)
+class UmiInputsV4_Shellgame_Video(_transforms.DataTransformFn):
+    """Pi0Mem video twin of ``UmiInputsV4_Bimanual_HeadView_Depth_Horizon1``.
+
+    Reads four stacked video tensors:
+        - ``left_wrist_0_rgb_0_video``    (T, 3, 224, 224) uint8/float
+        - ``right_wrist_0_rgb_0_video``   (T, 3, 224, 224) uint8/float
+        - ``base_0_rgb_0_video``          (T, 3, 224, 224) uint8/float
+        - ``base_0_depth_0_video``        (T, 224, 224, 3) uint8 (after
+                                          per-frame depth-to-3ch conversion
+                                          applied earlier in the pipeline)
+
+    Builds the same 38-d concatenated bimanual state used elsewhere and
+    emits a 4-stream ``data["image"]`` / ``data["image_mask"]`` dict.
+
+    Pi0Mem dispatches over whatever image keys are in ``obs.images`` (its
+    ``inputs_spec`` only declares 3 streams but the params are independent
+    of the obs structure — only the encoder needs lazy_init, which uses
+    one sample frame).
+    """
+
+    num_frames: int
+
+    def _build_shellgame_state(self, data: dict) -> np.ndarray:
+        return np.concatenate(
+            [
+                data["robot0_eef_pos"],
+                data["robot0_eef_pos_wrt_start"],
+                data["robot0_eef_rot_axis_angle"],
+            ],
+        )
+
+    def __call__(self, data: dict) -> dict:
+        wrist_video = _parse_video(data["left_wrist_0_rgb_0_video"])
+        base_video = _parse_video(data["left_wrist_0_rgb_1_video"])
+        # right_video = _parse_video(data["right_wrist_0_rgb_0_video"])
+        # base_rgb_video = _parse_video(data["base_0_rgb_0_video"])
+        # base_depth_video = _parse_video(data["base_0_depth_0_video"])
+
+        actions = data["actions"]
+
+        T = self.num_frames
+        for name, video in [
+            ("wrist_video", wrist_video),
+            ("base_video", base_video),
+            # ("base_0_rgb_0_video", base_rgb_video),
+            # ("base_0_depth_0_video", base_depth_video),
+        ]:
+            assert video.shape == (T, 224, 224, 3), (
+                f"{name} shape {video.shape} != (T={T}, 224, 224, 3)"
+            )
+        assert actions.shape == (16, 20), f"actions shape {actions.shape} != (16, 20)"
+
+        data["state"] = self._build_shellgame_state(data)
+
+        data["image"] = {
+            # "base_0_rgb": base_rgb_video,
+            # "base_0_depth": base_depth_video,
+            # "left_wrist_0_rgb": left_video,
+            # "right_wrist_0_rgb": right_video,
+            "base_rgb": base_video,
+            "wrist_rgb": wrist_video
+        }
+        data["image_mask"] = {
+            # "base_0_rgb": np.True_,
+            # "base_0_depth": np.True_,
+            # "left_wrist_0_rgb": np.True_,
+            # "right_wrist_0_rgb": np.True_,
+
+
+            "base_rgb": np.True_,
+            "wrist_rgb": np.True_
+        }
+        data["actions"] = actions
+        return data
+
+
 # ---------------------------------------------------------------------------
 # Pi0Mem data loader
 # ---------------------------------------------------------------------------
