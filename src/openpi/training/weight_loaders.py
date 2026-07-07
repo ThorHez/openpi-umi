@@ -188,6 +188,81 @@ class CheckpointWeightLoaderWithMemoryCompress(WeightLoader):
 
 
 @dataclasses.dataclass(frozen=True)
+class CheckpointWeightLoaderWithMemoryPF(WeightLoader):
+    """Loads weights into a Pi0MemPF (past-future temporal bottleneck) model.
+
+    Supports two checkpoint flavors:
+
+    1. **Pretrained Pi0/Pi0.5 SigLIP checkpoint** (e.g. ``pi05_base``): every
+       PF-specific parameter falls back to the model's initialization.
+    2. **Trained Pi0MemCompress checkpoint**: the ``HistoryResampler_0``
+       parameters are transparently remapped onto the PF Unified Temporal
+       Resampler so the already-trained history compressor is reused:
+
+       - ``.../HistoryResampler_0/{memory_queries, current_condition_*, out_ln}``
+         -> ``.../UTR_0/<same>``
+       - ``.../HistoryResampler_0/{query_ln_l, history_ln_l, CrossAttention_l,
+         MlpLayerNorm_l, MlpBlock_l}`` -> ``.../UTR_0/ResamplerCore_0/<same>``
+
+       The per-block history branch (``HistoryLayerNorm_0``,
+       ``HistoryMultiHeadDotProductAttention_0``, ``HistoryOutProj``,
+       ``history_memory_gate_logit``) already shares names with Pi0MemCompress
+       and loads directly. Because the PF direction-specific pieces
+       (``past_role_embedding`` zero-init, ``past_out_proj`` identity-init)
+       are no-ops at initialization, the PF history path reproduces the
+       compress checkpoint exactly at step 0.
+
+    Parameters that never exist in either checkpoint flavor (UTR future path,
+    per-block Future* branch, ``future_memory_gate_logit``, the Future Latent
+    Prior Encoder, alignment projections) always fall back to the model's
+    initialization.
+    """
+
+    params_path: str
+
+    # HistoryResampler leaves that move into the shared ResamplerCore scope.
+    _CORE_PREFIXES = ("query_ln_", "history_ln_", "CrossAttention_", "MlpLayerNorm_", "MlpBlock_")
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
+
+        flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
+        if any("/HistoryResampler_0/" in k for k in flat_loaded):
+            remapped = {}
+            n_core = n_other = 0
+            for k, v in flat_loaded.items():
+                if "/HistoryResampler_0/" in k:
+                    prefix, rest = k.split("/HistoryResampler_0/", 1)
+                    if rest.startswith(self._CORE_PREFIXES):
+                        k = f"{prefix}/UTR_0/ResamplerCore_0/{rest}"
+                        n_core += 1
+                    else:
+                        k = f"{prefix}/UTR_0/{rest}"
+                        n_other += 1
+                remapped[k] = v
+            logger.info(
+                "Pi0MemPF loader: remapped HistoryResampler_0 -> UTR_0 "
+                "(%d core leaves, %d query/condition/out leaves).",
+                n_core,
+                n_other,
+            )
+            loaded_params = flax.traverse_util.unflatten_dict(remapped, sep="/")
+
+        return _merge_params(
+            loaded_params,
+            params,
+            missing_regex=(
+                r".*(lora|UTR_0|"
+                r"HistoryLayerNorm_0|HistoryMultiHeadDotProductAttention_0|HistoryOutProj|"
+                r"history_memory_gate_logit|"
+                r"FutureLayerNorm_0|FutureMultiHeadDotProductAttention_0|FutureOutProj|"
+                r"future_memory_gate_logit|"
+                r"FuturePrior|align_proj).*"
+            ),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class CheckpointWeightLoaderIgnoreGripperHead(WeightLoader):
     """Loads a gripper-head checkpoint into a standard Pi0/Pi0.5 model, ignoring the extra head."""
 

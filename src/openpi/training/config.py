@@ -32,6 +32,7 @@ import openpi.transforms as _transforms
 import openpi.models.pi0_discrete as pi0_discrete
 import openpi.models.pi0_mem as pi0_mem
 import openpi.models.pi0_mem_compress as pi0_mem_compress
+import openpi.models.pi0_mem_pf as pi0_mem_pf
 import openpi.models.pi0_value as pi0_value
 from openpi.transforms import make_bool_mask
 from openpi.models.pi0_discrete import CheckpointWeightLoaderWithDiscreteHead
@@ -1732,6 +1733,11 @@ class LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(DataConfigFactory):
     frame_stride: int = 1
     # Behavior near the start of an episode: 'repeat' first valid frame, or 'zero' pad.
     padding_mode: str = "repeat"
+    # Number of FUTURE frames appended after the current frame (Pi0MemPF
+    # past-future bottleneck training). 0 keeps the original past-only clips.
+    num_future_frames: int = 0
+    # Stride (in raw dataset rows) between consecutive future frames.
+    future_frame_stride: int = 1
     # Single-frame image keys to expand into video (look up history in the underlying
     # LeRobot dataset). Must match keys actually stored in the dataset.
     image_keys: tuple[str, ...] = ("left_wrist_0_rgb_0", "right_wrist_0_rgb_0")
@@ -1742,6 +1748,11 @@ class LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(DataConfigFactory):
         "state":   make_bool_mask(6, -12, 3, -7, 6, -12, 3, -7),
     }
 
+    @property
+    def total_frames(self) -> int:
+        """Clip length per image stream: past+current plus optional future frames."""
+        return self.num_frames + self.num_future_frames
+
     def video_frame_config(self):
         """VideoFrameConfig consumed by the Pi0Mem training script's data loader."""
         from openpi.training.mem.video_dataset import VideoFrameConfig
@@ -1751,6 +1762,8 @@ class LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(DataConfigFactory):
             num_frames=self.num_frames,
             frame_stride=self.frame_stride,
             padding_mode=self.padding_mode,
+            num_future_frames=self.num_future_frames,
+            future_frame_stride=self.future_frame_stride,
         )
 
     def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -1765,12 +1778,13 @@ class LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(DataConfigFactory):
         from openpi import transforms_video as _transforms_video
 
         # The per-frame image keys produced by VideoFrameDataset are
-        #   "<image_key>_<t>" for t in [0, num_frames).
+        #   "<image_key>_<t>" for t in [0, total_frames), laid out as
+        #   [oldest_past, ..., current, future...] (future only for Pi0MemPF).
         # The repack mapping keeps those keys (they will be stacked next).
         per_frame_keys = {
             f"{k}_{t}": f"{k}_{t}"
             for k in self.image_keys
-            for t in range(self.num_frames)
+            for t in range(self.total_frames)
         }
         repack_transform = _transforms.Group(
             inputs=[
@@ -1804,10 +1818,10 @@ class LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(DataConfigFactory):
             inputs=[
                 _transforms_video.BuildVideoTensor(
                     image_keys=tuple(self.image_keys),
-                    num_frames=self.num_frames,
+                    num_frames=self.total_frames,
                     output_keys={k: f"{k}_video" for k in self.image_keys},
                 ),
-                _config_pi0_mem.UmiInputsV4_Bimanual_Video(num_frames=self.num_frames),
+                _config_pi0_mem.UmiInputsV4_Bimanual_Video(num_frames=self.total_frames),
             ],
         )
 
@@ -4762,6 +4776,96 @@ _CONFIGS = [
         # the memory-aware loader so those new params fall back to the
         # model's random init instead of failing pytree-structure validation.
         weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=25_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=24,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=5_000,
+    ),
+    # =====================================================================
+    # Pi0MemPF (Past-Future Temporal Bottleneck) twin of the fold-clothes
+    # Pi0MemCompress config directly above.
+    #
+    # Same dataset / schedule / batch, but:
+    #   - clips carry num_future_frames=8 future frames after the current one
+    #     (layout [oldest_past ... current, future...]; data factory must use
+    #     matching num_future_frames / future_frame_stride),
+    #   - the visual backbone is openpi.models.siglip_pf (shared UTR compresses
+    #     past -> Hmem and future -> Zpost; dual gated GTCA injection),
+    #   - a Future Latent Prior Encoder predicts Zprior from current + Hmem +
+    #     language + state, trained with prior/posterior dual-branch action
+    #     losses plus latent alignment/regularization,
+    #   - inference (sample_actions) keeps only the prior branch and needs NO
+    #     future frames.
+    # Launch:
+    #   XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/mem/train_pi0_mem_pf.py \
+    #     pi0_mem_pf_umi_32d_30k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322 \
+    #     --exp-name=my_experiment [--overwrite | --resume]
+    # =====================================================================
+    TrainConfig(
+        name="pi0_mem_pf_umi_32d_30k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322",
+        model=pi0_mem_pf.Pi0MemPFConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+            # Past side (identical to the compress twin).
+            num_frames=16,
+            memory_every=4,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=20.0,
+            diversity_weight=0.01,
+            # Future side.
+            num_future_frames=8,
+            future_latent_tokens=64,
+            future_gate_fixed=1.0,
+            prior_encoder_depth=2,
+            lambda_prior=1.0,
+            lambda_post=1.0,
+            lambda_align=1.0,
+            lambda_reg=1e-4,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                    num_future_frames=8,
+                    future_frame_stride=4,
+                )
+            ],
+        ),
+        # PF-aware loader: falls back to init for UTR / Future* / FuturePrior /
+        # gate params, and transparently remaps HistoryResampler_0 -> UTR_0
+        # when pointed at a trained Pi0MemCompress checkpoint instead of
+        # pi05_base (recommended: reuse your trained history compressor).
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryPF(
             "gs://openpi-assets/checkpoints/pi05_base/params"
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(

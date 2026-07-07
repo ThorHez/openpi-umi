@@ -21,15 +21,28 @@ class VideoFrameConfig:
 
     Args:
         image_keys: List of image keys to expand (e.g., ['left_wrist_0_rgb', 'right_wrist_0_rgb'])
-        num_frames: Number of frames to load per key (temporal horizon)
-        frame_stride: Stride between consecutive frames (default: 1)
-        padding_mode: How to handle start of episode: 'repeat' or 'zero'
+        num_frames: Number of past+current frames to load per key (temporal horizon).
+            The current frame is always the LAST of these.
+        frame_stride: Stride between consecutive past frames (default: 1)
+        padding_mode: How to handle episode boundaries: 'repeat' or 'zero'
+        num_future_frames: Number of future frames appended AFTER the current
+            frame (default 0, i.e. past-only — the original behavior). The
+            resulting per-key frame layout is
+            ``[oldest_past, ..., current, future_1, ..., future_F]``.
+        future_frame_stride: Stride between consecutive future frames.
     """
 
     image_keys: tuple[str, ...]
     num_frames: int = 2
     frame_stride: int = 1
     padding_mode: str = "repeat"
+    num_future_frames: int = 0
+    future_frame_stride: int = 1
+
+    @property
+    def total_frames(self) -> int:
+        """Total frames emitted per image key (past + current + future)."""
+        return self.num_frames + self.num_future_frames
 
 
 def _parse_image(image) -> np.ndarray:
@@ -159,22 +172,35 @@ class VideoFrameDataset(_data_loader.Dataset):
             except Exception:
                 pass
 
-        # Compute target indices for historical frames
+        # Compute target indices for historical (and optionally future) frames
         num_frames = self._config.num_frames
         stride = self._config.frame_stride
+        num_future = self._config.num_future_frames
+        future_stride = self._config.future_frame_stride
+        total_frames = self._config.total_frames
 
-        # We want to load: current, current-stride, current-2*stride, ...
-        # Then reverse so that index 0 is the oldest, last is current
+        # Past+current: current, current-stride, current-2*stride, ...
+        # reversed so that index 0 is the oldest and index num_frames-1 is
+        # current. Future frames (if any) are appended after the current one:
+        # [oldest_past, ..., current, current+fs, current+2*fs, ...]
         target_indices = [
             current_index - i * stride for i in range(num_frames - 1, -1, -1)
         ]
+        target_indices += [
+            current_index + (j + 1) * future_stride for j in range(num_future)
+        ]
 
         # ------------------------------------------------------------------
-        # Fetch each unique historical row at most once and cache it.
+        # Fetch each unique offset row at most once and cache it.
         # The current index is intentionally NOT fetched here — we reuse
         # the already-loaded ``data`` from ``self._dataset[index]`` instead.
+        # Indices past the end of the dataset are treated as missing (they
+        # fall back to padding below), same as negative past indices.
         # ------------------------------------------------------------------
-        unique_offset_indices = sorted({idx for idx in target_indices if idx >= 0 and idx != current_index})
+        num_rows = len(self._hf_dataset)
+        unique_offset_indices = sorted(
+            {idx for idx in target_indices if 0 <= idx < num_rows and idx != current_index}
+        )
         rows_cache: dict[int, dict | None] = {}
 
         try:
@@ -211,7 +237,7 @@ class VideoFrameDataset(_data_loader.Dataset):
             frames: list[np.ndarray | None] = []
 
             for idx in target_indices:
-                if idx < 0:
+                if idx < 0 or idx >= num_rows:
                     frames.append(None)
                     continue
                 # Reuse the already-loaded current frame to avoid an extra
@@ -238,18 +264,29 @@ class VideoFrameDataset(_data_loader.Dataset):
                     zero_frame = np.zeros_like(template)
                 else:
                     zero_frame = np.zeros((224, 224, 3), dtype=np.uint8)
-                frames = [zero_frame] * num_frames
+                frames = [zero_frame] * total_frames
             else:
-                first_valid = valid_frames[0]
+                template = valid_frames[0]
                 filled_frames = []
-                for f in frames:
-                    if f is None:
-                        if self._config.padding_mode == "repeat":
-                            filled_frames.append(first_valid)
-                        else:  # zero
-                            filled_frames.append(np.zeros_like(first_valid))
-                    else:
+                for i, f in enumerate(frames):
+                    if f is not None:
                         filled_frames.append(f)
+                        continue
+                    if self._config.padding_mode != "repeat":  # zero
+                        filled_frames.append(np.zeros_like(template))
+                        continue
+                    # 'repeat': fill with the nearest valid frame. For leading
+                    # (past) gaps the nearest valid frame is the first valid
+                    # one (identical to the original past-only behavior); for
+                    # trailing (future) gaps past the episode end it is the
+                    # last valid frame (usually the current one).
+                    prev_valid = next(
+                        (frames[j] for j in range(i - 1, -1, -1) if frames[j] is not None), None
+                    )
+                    next_valid = next(
+                        (frames[j] for j in range(i + 1, len(frames)) if frames[j] is not None), None
+                    )
+                    filled_frames.append(prev_valid if prev_valid is not None else next_valid)
                 frames = filled_frames
 
             for i, frame in enumerate(frames):
