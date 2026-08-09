@@ -1,0 +1,66 @@
+{
+  "experiment": "frame59_history_to_frame60_75_absolute_joint_actions",
+  "input": {
+    "query_frame": 59,
+    "history_num_frames": 31,
+    "history_frame_stride": 2,
+    "supervised_raw_action_frames": [60, 75],
+    "action_horizon": 16,
+    "valid_action_dimensions": 8,
+    "action_semantics": "7 absolute joint positions + gripper"
+  },
+  "evaluation": {
+    "episodes": 24,
+    "balanced_target_slots": {
+      "left": 8,
+      "middle": 8,
+      "right": 8
+    },
+    "reference_trajectory_endpoint_accuracy": 1.0
+  },
+  "results": {
+    "pi0_flow_baseline": {
+      "cup_endpoint_accuracy": 0.2916666666666667,
+      "cup_reach_any_rate": 1.0,
+      "mean_endpoint_distance_m": 0.01110819733973282,
+      "mean_joint_mse": 0.013625114395154014
+    },
+    "pi0_flow_action_expert_step300": {
+      "val_action_loss": 0.03720716014504433,
+      "cup_endpoint_accuracy": 0.2916666666666667,
+      "cup_reach_any_rate": 0.9583333333333334,
+      "mean_endpoint_distance_m": 0.01024063941440545,
+      "mean_joint_mse": 0.0138429610062758,
+      "predicted_slot_rates": {
+        "left": 0.08333333333333333,
+        "middle": 0.5,
+        "right": 0.4166666666666667
+      }
+    },
+    "direct_head_only_step300": {
+      "val_action_loss": 0.057672929018735886,
+      "cup_endpoint_accuracy": 0.3333333333333333,
+      "cup_reach_any_rate": 1.0,
+      "mean_endpoint_distance_m": 0.012160708002435664,
+      "mean_joint_mse": 0.009223820060166569,
+      "predicted_slot_rates": {
+        "left": 0.0,
+        "middle": 1.0,
+        "right": 0.0
+      }
+    },
+    "joint_history_reader_direct_step300": {
+      "val_action_loss": 0.056513261049985886,
+      "cup_endpoint_accuracy": 0.3333333333333333,
+      "cup_reach_any_rate": 1.0,
+      "mean_endpoint_distance_m": 0.014275572243301818,
+      "mean_joint_mse": 0.009184713931366181,
+      "predicted_slot_rates": {
+        "left": 0.0,
+        "middle": 1.0,
+        "right": 0.0
+      }
+    }
+  },
+  "conclusion": "All learned variants reach a cup, but none selects the target above chance. Direct regression converges to the conditional-mean middle-cup trajectory, even when the optimized history encoder and memory reader are jointly trainable. The remaining bottleneck is semantic credit assignment from action-only regression, not absolute-joint controllability."
+}

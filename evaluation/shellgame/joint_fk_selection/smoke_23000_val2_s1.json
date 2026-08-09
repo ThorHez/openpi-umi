@@ -1,0 +1,130 @@
+{
+  "checkpoint_dir": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_mem_compress_evan_shellgame_openpi_joint_260727/my_experiment/23000",
+  "config": "pi0_mem_compress_evan_shellgame_openpi_joint_260727",
+  "dataset_root": "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/shellgame_absolute_joint_dataset",
+  "samples": [
+    {
+      "clipped_joint_values": 0,
+      "endpoint_correct": true,
+      "endpoint_cup": "left",
+      "endpoint_distances_m": {
+        "left": 0.007097171153873205,
+        "middle": 0.09828579425811768,
+        "right": 0.10773052275180817
+      },
+      "endpoint_eef_xyz_m": [
+        -0.0011780585628002882,
+        -0.0019846928771585226,
+        1.0789384841918945
+      ],
+      "episode": "episode_002914",
+      "joint_mse": 0.0007906699320301414,
+      "min_path_cup": "left",
+      "min_path_distances_m": {
+        "left": 0.003470977768301964,
+        "middle": 0.0971839502453804,
+        "right": 0.10181800276041031
+      },
+      "sample_index": 0,
+      "target_cup": "left",
+      "vote_correct": true,
+      "vote_cup": "left",
+      "votes": {
+        "left": 6,
+        "middle": 0,
+        "right": 0
+      }
+    },
+    {
+      "clipped_joint_values": 0,
+      "endpoint_correct": true,
+      "endpoint_cup": "middle",
+      "endpoint_distances_m": {
+        "left": 0.11017994582653046,
+        "middle": 0.005086767952889204,
+        "right": 0.11335837841033936
+      },
+      "endpoint_eef_xyz_m": [
+        -0.0034691598266363144,
+        0.0033768981229513884,
+        1.0808687210083008
+      ],
+      "episode": "episode_003190",
+      "joint_mse": 0.0013795896666124463,
+      "min_path_cup": "middle",
+      "min_path_distances_m": {
+        "left": 0.11017994582653046,
+        "middle": 0.0036760836374014616,
+        "right": 0.10690025240182877
+      },
+      "sample_index": 0,
+      "target_cup": "middle",
+      "vote_correct": true,
+      "vote_cup": "middle",
+      "votes": {
+        "left": 0,
+        "middle": 6,
+        "right": 0
+      }
+    }
+  ],
+  "split": {
+    "selected_episode_ids": [
+      2914,
+      3190
+    ],
+    "split_seed": 42,
+    "val_ratio": 0.1
+  },
+  "summary": {
+    "clipped_joint_values": 0,
+    "endpoint_confusion": {
+      "left": {
+        "left": 1
+      },
+      "middle": {
+        "middle": 1
+      }
+    },
+    "episode_endpoint_consistency_rate": 1.0,
+    "episode_endpoint_majority_accuracy": 1.0,
+    "episode_results": [
+      {
+        "endpoint_majority_correct": true,
+        "endpoint_majority_cup": "left",
+        "episode": "episode_002914",
+        "num_unique_endpoint_cups": 1,
+        "target_cup": "left",
+        "vote_majority_correct": true,
+        "vote_majority_cup": "left"
+      },
+      {
+        "endpoint_majority_correct": true,
+        "endpoint_majority_cup": "middle",
+        "episode": "episode_003190",
+        "num_unique_endpoint_cups": 1,
+        "target_cup": "middle",
+        "vote_majority_correct": true,
+        "vote_majority_cup": "middle"
+      }
+    ],
+    "episode_vote_majority_accuracy": 1.0,
+    "mean_endpoint_nearest_distance_m": 0.006091969553381205,
+    "mean_predicted_joint_mse": 0.0010851297993212938,
+    "num_episodes": 2,
+    "num_predictions": 2,
+    "reference_endpoint_accuracy": 1.0,
+    "reference_fk_endpoint_rmse_m": 7.201631644358129e-08,
+    "reference_vote_accuracy": 1.0,
+    "sample_endpoint_accuracy": 1.0,
+    "sample_vote_accuracy_all": 1.0,
+    "sample_vote_accuracy_decided": 1.0,
+    "sample_vote_decision_rate": 1.0,
+    "sample_vote_decisions": 2,
+    "samples_per_episode": 1,
+    "target_distribution": {
+      "left": 1,
+      "middle": 1
+    }
+  }
+}

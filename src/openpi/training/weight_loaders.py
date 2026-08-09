@@ -182,7 +182,7 @@ class CheckpointWeightLoaderWithMemoryCompress(WeightLoader):
             missing_regex=(
                 r".*(lora|HistoryResampler|HistoryLayerNorm_0|"
                 r"HistoryMultiHeadDotProductAttention_0|HistoryOutProj|"
-                r"history_memory_gate_logit).*"
+                r"history_memory_gate_logit|HistoryClassifier).*"
             ),
         )
 

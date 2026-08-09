@@ -1,0 +1,41 @@
+{
+  "experiment": "frame0 base image -> initial_ball_cup frozen-SigLIP linear probe",
+  "source_checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_mem_compress_evan_shellgame_openpi_joint_260727/my_experiment_30f_s2_6gpu/23000/params",
+  "dataset": "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/shellgame_lerobot_absolute_joint",
+  "input": {
+    "stream": "base_rgb",
+    "frame_index": 0,
+    "frames": 1,
+    "resolution": [224, 224],
+    "siglip_variant": "So400m/14",
+    "wrist_used": false,
+    "prompt_used": false,
+    "robot_state_used": false,
+    "action_used": false,
+    "augmentation_used": false
+  },
+  "label": {
+    "metadata_key": "initial_ball_cup",
+    "classes": ["left", "middle", "right"]
+  },
+  "split": {
+    "method": "held-out episodes",
+    "train_samples": 5400,
+    "validation_samples": 600
+  },
+  "optimization": {
+    "steps": 300,
+    "batch_size": 60,
+    "trainable_parameters": 887043,
+    "backbone_frozen": true
+  },
+  "validation": [
+    {"step": 50, "accuracy": 1.0, "cross_entropy": 0.062531},
+    {"step": 100, "accuracy": 1.0, "cross_entropy": 0.006197},
+    {"step": 150, "accuracy": 1.0, "cross_entropy": 0.001011},
+    {"step": 200, "accuracy": 1.0, "cross_entropy": 0.000700},
+    {"step": 250, "accuracy": 1.0, "cross_entropy": 0.000533},
+    {"step": 300, "accuracy": 1.0, "cross_entropy": 0.000302237073580424}
+  ],
+  "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_frame0_initial_cup_probe_260807/frame0_initial_cup_linear_260807/299"
+}

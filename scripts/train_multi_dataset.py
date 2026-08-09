@@ -17,9 +17,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# Avoid / or overlay filling up: use $HOME/tmp for temp files if TMPDIR not set.
+# Keep Hugging Face / JAX / OpenPI caches and temp files off the small root disk.
+# Must be set before importing OpenPI / LeRobot / datasets / JAX.
+_CACHE_HOME = Path("/data2/hzl_workspace_for_pi/.cache")
+os.environ.setdefault("XDG_CACHE_HOME", str(_CACHE_HOME))
+os.environ.setdefault("OPENPI_DATA_HOME", str(_CACHE_HOME / "openpi"))
+os.environ.setdefault("HF_HOME", str(_CACHE_HOME / "huggingface"))
+os.environ.setdefault("HF_DATASETS_CACHE", str(_CACHE_HOME / "huggingface" / "datasets"))
+os.environ.setdefault("TRANSFORMERS_CACHE", str(_CACHE_HOME / "huggingface" / "transformers"))
 if "TMPDIR" not in os.environ:
-    _tmp = Path(os.environ.get("HOME", "/root")) / "tmp"
+    _tmp = _CACHE_HOME / "tmp"
     _tmp.mkdir(parents=True, exist_ok=True)
     os.environ["TMPDIR"] = os.environ["TEMP"] = os.environ["TMP"] = str(_tmp)
 
@@ -101,7 +108,10 @@ def main(config: _config.TrainConfig, *, data_loader=None):
             f"Batch size {config.batch_size} must be divisible by the number of devices {jax.device_count()}."
         )
 
-    jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
+    jax.config.update(
+        "jax_compilation_cache_dir",
+        str(_CACHE_HOME / "jax"),
+    )
 
     rng = jax.random.key(config.seed)
     train_rng, init_rng = jax.random.split(rng)

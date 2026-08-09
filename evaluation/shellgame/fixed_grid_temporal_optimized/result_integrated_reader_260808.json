@@ -1,0 +1,66 @@
+{
+  "experiment": "fixed_grid_temporal_optimized_integrated_reader_260808",
+  "date": "2026-08-08",
+  "architecture": {
+    "history_input": "30 x 256 SigLIP patch-embedding tokens",
+    "spatial_reduction": "parameter-free fixed 2x2 grid average pooling: 16x16 -> 8x8 (K=64)",
+    "temporal_model": "two width-256, 8-head factorized temporal/spatial Transformer blocks",
+    "final_memory": "128 learned memory tokens projected to width 1152",
+    "current_frame": "normal pretrained 27-layer SigLIP path",
+    "reader": "current tokens cross-attend to history every 4 SigLIP layers with fixed gate 1.0"
+  },
+  "initialization": {
+    "fixed_grid_history_source": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_one_swap_fixed_grid_staged_joint_probe_260808/one_swap_fixed_grid_stage3_joint_260808/199/params",
+    "mapped_fixed_grid_leaves": "82/82",
+    "reader_training": "freeze K64/M128 history encoder; train Pi0 history readers and current-token diagnostic readout"
+  },
+  "one_swap_validation": {
+    "samples": 600,
+    "random_baseline_accuracy": 0.3333333333,
+    "majority_baseline_accuracy": 0.3483333333,
+    "step_50_accuracy": 1.0,
+    "step_100_accuracy": 1.0,
+    "step_150_accuracy": 1.0,
+    "step_200_accuracy": 1.0,
+    "step_250_accuracy": 1.0,
+    "final_accuracy": 1.0,
+    "final_classifier_loss": 0.0000011418249535684783
+  },
+  "causal_history_ablation": {
+    "normal_history_accuracy": 1.0,
+    "shuffle_history_across_episodes_accuracy": 0.3383333333333333,
+    "shuffle_history_classifier_loss": 9.865791015625,
+    "zero_history_accuracy": 0.34833333333333333,
+    "zero_history_classifier_loss": 4.55073974609375,
+    "interpretation": "The integrated reader uses episode-specific history. Wrong-donor and absent history both remove the 100% result and return accuracy to chance/baseline."
+  },
+  "history_encoder_microbenchmark_batch6": {
+    "hardware": "cuda:0",
+    "original": {
+      "parameters": 16869584,
+      "attention_score_elements": 188743680,
+      "latency_ms_mean": 3.2493093912489712,
+      "peak_bytes_in_use": 1809871104
+    },
+    "fixed_grid": {
+      "parameters": 3533952,
+      "attention_score_elements": 29122560,
+      "latency_ms_mean": 1.845138124190271,
+      "peak_bytes_in_use": 295704832
+    },
+    "ratios": {
+      "parameter_reduction": 4.773565916326916,
+      "attention_score_reduction": 6.478260869565218,
+      "steady_state_speedup": 1.760994715640792,
+      "measured_peak_memory_reduction": 6.120528019608876
+    }
+  },
+  "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_fixed_grid_integrated_reader_ce_260808/integrated_reader_k64_m128_e4_260808/299/params",
+  "scope_limit": "This proves semantic one-swap tracking survives K64/M128 compression and is readable through the real Pi0 visual memory reader. It does not yet establish action-loss or closed-loop robot success.",
+  "source_files": [
+    "/data2/hzl_workspace_for_pi_mem/openpi-umi/src/openpi/models/siglip_mem_fixed_grid_temporal.py",
+    "/data2/hzl_workspace_for_pi_mem/openpi-umi/src/openpi/models/pi0_mem_fixed_grid_temporal.py",
+    "/data2/hzl_workspace_for_pi_mem/openpi-umi/examples/shellgame/train_one_swap_fixed_grid_integrated_probe.py",
+    "/data2/hzl_workspace_for_pi_mem/openpi-umi/examples/shellgame/benchmark_history_encoders.py"
+  ]
+}

@@ -18,6 +18,21 @@ Mitigations: Use --max-frames to cap samples (e.g. 50000); ensure config has a l
 batch_size (e.g. 512) and num_workers (e.g. 8).
 """
 
+import os
+from pathlib import Path
+
+# Keep generated caches and temporary files off the small root disk.
+_CACHE_HOME = Path("/data2/hzl_workspace_for_pi/.cache")
+os.environ.setdefault("XDG_CACHE_HOME", str(_CACHE_HOME))
+os.environ.setdefault("OPENPI_DATA_HOME", str(_CACHE_HOME / "openpi"))
+os.environ.setdefault("HF_HOME", str(_CACHE_HOME / "huggingface"))
+os.environ.setdefault("HF_DATASETS_CACHE", str(_CACHE_HOME / "huggingface" / "datasets"))
+os.environ.setdefault("TRANSFORMERS_CACHE", str(_CACHE_HOME / "huggingface" / "transformers"))
+
+if "TMPDIR" not in os.environ:
+    _tmp = _CACHE_HOME / "tmp"
+    os.environ["TMPDIR"] = os.environ["TEMP"] = os.environ["TMP"] = str(_tmp)
+
 import numpy as np
 import tqdm
 import tyro

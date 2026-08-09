@@ -454,20 +454,21 @@ class Encoder1DBlockCurrentOnlyMemoryPF(nn.Module):
         )
         y_cur = ln1(x_cur)
 
-        history_out_proj = nn.Dense(
-            y_cur.shape[-1],
-            name="HistoryOutProj",
-            kernel_init=nn.initializers.normal(stddev=1e-4),
-            bias_init=nn.initializers.zeros,
-            dtype=self.dtype_mm,
-        )
-        future_out_proj = nn.Dense(
-            y_cur.shape[-1],
-            name="FutureOutProj",
-            kernel_init=nn.initializers.normal(stddev=1e-4),
-            bias_init=nn.initializers.zeros,
-            dtype=self.dtype_mm,
-        )
+        # Baseline experiment (kept for easy restoration):
+        # history_out_proj = nn.Dense(
+        #     y_cur.shape[-1],
+        #     name="HistoryOutProj",
+        #     kernel_init=nn.initializers.normal(stddev=1e-4),
+        #     bias_init=nn.initializers.zeros,
+        #     dtype=self.dtype_mm,
+        # )
+        # future_out_proj = nn.Dense(
+        #     y_cur.shape[-1],
+        #     name="FutureOutProj",
+        #     kernel_init=nn.initializers.normal(stddev=1e-4),
+        #     bias_init=nn.initializers.zeros,
+        #     dtype=self.dtype_mm,
+        # )
 
         y_spatial = out["sa"] = attn(y_cur, y_cur)
         out["y_spatial"] = y_spatial
@@ -511,8 +512,11 @@ class Encoder1DBlockCurrentOnlyMemoryPF(nn.Module):
             # outside lax.cond so parameter creation cannot leak tracers.
             y_mem = history_ln(hist_mem)
             mem_update = history_attn(y_cur, y_mem)
-            # Zero-ish-init adapter: start as no-op, then learn useful residual.
-            mem_update = history_out_proj(mem_update)
+            # Baseline experiment:
+            # mem_update = history_out_proj(mem_update)
+            # Fixed-scale identity ablation: remove the trainable near-zero
+            # projection while keeping history injection conservative.
+            mem_update = jnp.asarray(1.0, dtype=mem_update.dtype) * mem_update
 
             def memory_branch(_):
                 return hist_gate * mem_update, mem_update, hist_gate
@@ -535,7 +539,10 @@ class Encoder1DBlockCurrentOnlyMemoryPF(nn.Module):
         else:
             y_fut = future_ln(fut_mem)
             fut_update = future_attn(y_cur, y_fut)
-            fut_update = future_out_proj(fut_update)
+            # Baseline experiment:
+            # fut_update = future_out_proj(fut_update)
+            # Match the history ablation with the same fixed identity scale.
+            fut_update = jnp.asarray(1.0, dtype=fut_update.dtype) * fut_update
 
             def future_branch(_):
                 return fut_gate * fut_update, fut_update, fut_gate

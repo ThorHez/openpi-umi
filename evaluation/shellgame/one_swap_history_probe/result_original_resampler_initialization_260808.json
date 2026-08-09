@@ -1,0 +1,69 @@
+{
+  "question": "Does the original flatten-then-cross-attention history path mainly fail because it lacks a good initialization?",
+  "data": {
+    "dataset_episodes": 6000,
+    "train_episodes": 5400,
+    "validation_episodes": 600,
+    "history_frames": [0, 29],
+    "current_frame": 30,
+    "label": "after_first_swap_ball_cup",
+    "classes": ["left", "middle", "right"]
+  },
+  "student_path": "30x256 frozen SigLIP patches -> flatten -> original HistoryResampler(128 tokens) -> original 27 memory-reader branches -> attention-pooling classifier",
+  "teacher": {
+    "path": "fixed-grid spatial compression -> temporal transformer -> 128 memory tokens",
+    "validation_accuracy": 1.0
+  },
+  "distillation": {
+    "steps": 300,
+    "objective": "mean token cosine loss + 0.1 * token MSE",
+    "final_total_loss": 0.2173966765,
+    "final_cosine_loss": 0.1821121573,
+    "final_mean_token_cosine_similarity": 0.8178878427,
+    "final_mse": 0.3528452516
+  },
+  "downstream_after_distillation": {
+    "frozen_resampler_reader_training": {
+      "steps": 300,
+      "final_validation_accuracy": 0.305,
+      "final_validation_cross_entropy": 1.1023234049
+    },
+    "reader_then_low_lr_joint_training": {
+      "steps": 200,
+      "peak_lr": 0.00003,
+      "final_validation_accuracy": 0.3466666667,
+      "final_validation_cross_entropy": 1.1014499919
+    },
+    "direct_fair_joint_training": {
+      "steps": 300,
+      "peak_lr": 0.0003,
+      "step_100_validation_accuracy": 0.3466666667,
+      "step_200_validation_accuracy": 0.3466666667,
+      "final_validation_accuracy": 0.305,
+      "final_validation_cross_entropy": 1.1013535563
+    }
+  },
+  "random_initialization_fair_control": {
+    "steps": 300,
+    "peak_lr": 0.0003,
+    "step_100_validation_accuracy": 0.3466666667,
+    "step_200_validation_accuracy": 0.575,
+    "final_validation_accuracy": 0.6866666667,
+    "final_validation_cross_entropy": 0.6934581502
+  },
+  "successful_model_history_ablations": {
+    "normal": {
+      "validation_accuracy": 0.6866666667,
+      "validation_cross_entropy": 0.6934581502
+    },
+    "shuffle_history_across_batch_keep_current_frame": {
+      "validation_accuracy": 0.3733333333,
+      "validation_cross_entropy": 1.7432686361
+    },
+    "reverse_history_time_keep_current_frame": {
+      "validation_accuracy": 0.3116666667,
+      "validation_cross_entropy": 1.9443066406
+    }
+  },
+  "conclusion": "The original path is trainable and learns order-sensitive episode history, but dense teacher-memory cosine/MSE initialization is harmful rather than helpful under the matched 300-step CE budget. Good initialization in general is not ruled out; this specific token-matching initialization target is rejected."
+}

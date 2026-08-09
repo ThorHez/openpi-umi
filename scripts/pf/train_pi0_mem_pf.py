@@ -154,6 +154,32 @@ def gate_param_metrics(params, needle: str, prefix: str):
     }
 
 
+def gate_config_metrics(config: _config.TrainConfig):
+    """Expose fixed-gate config so raw sigmoid(logit) metrics are not misread."""
+    history_fixed = getattr(config.model, "history_gate_fixed", None)
+    future_fixed = getattr(config.model, "future_gate_fixed", None)
+
+    def _one(value):
+        if value is None:
+            return (
+                jnp.asarray(0.0, dtype=jnp.float32),
+                jnp.asarray(jnp.nan, dtype=jnp.float32),
+            )
+        return (
+            jnp.asarray(1.0, dtype=jnp.float32),
+            jnp.asarray(float(value), dtype=jnp.float32),
+        )
+
+    hist_is_fixed, hist_value = _one(history_fixed)
+    fut_is_fixed, fut_value = _one(future_fixed)
+    return {
+        "gate_history/is_fixed": hist_is_fixed,
+        "gate_history/fixed_value": hist_value,
+        "gate_future/is_fixed": fut_is_fixed,
+        "gate_future/fixed_value": fut_value,
+    }
+
+
 def new_pf_param_grad_metrics(grads):
     """Gradient norms for the PF-specific parameter groups.
 
@@ -228,20 +254,35 @@ def latent_collapse_metrics(latent, prefix: str, eps=1e-6):
 
     if m <= 1:
         offdiag_mean = jnp.asarray(0.0, dtype=jnp.float32)
+        offdiag_max = jnp.asarray(0.0, dtype=jnp.float32)
         centered_offdiag_mean = jnp.asarray(0.0, dtype=jnp.float32)
+        centered_offdiag_max = jnp.asarray(0.0, dtype=jnp.float32)
     else:
         eye = jnp.eye(m, dtype=jnp.bool_)[None, :, :]
         denom = b * m * (m - 1)
 
         normed = latent / (jnp.linalg.norm(latent, axis=-1, keepdims=True) + eps)
         sim = jnp.einsum("bmd,bnd->bmn", normed, normed)
-        offdiag = jnp.where(eye, 0.0, sim)
-        offdiag_mean = jnp.sum(jnp.abs(offdiag)) / jnp.maximum(denom, 1)
+        offdiag_abs = jnp.where(eye, 0.0, jnp.abs(sim))
+        offdiag_mean = jnp.sum(offdiag_abs) / jnp.maximum(denom, 1)
+        offdiag_max = jnp.max(offdiag_abs)
 
         z = centered / (jnp.linalg.norm(centered, axis=-1, keepdims=True) + eps)
         sim_c = jnp.einsum("bmd,bnd->bmn", z, z)
-        offdiag_c = jnp.where(eye, 0.0, sim_c)
-        centered_offdiag_mean = jnp.sum(jnp.abs(offdiag_c)) / jnp.maximum(denom, 1)
+        offdiag_c_abs = jnp.where(eye, 0.0, jnp.abs(sim_c))
+        centered_offdiag_mean = jnp.sum(offdiag_c_abs) / jnp.maximum(denom, 1)
+        centered_offdiag_max = jnp.max(offdiag_c_abs)
+
+    token_mean = jnp.mean(latent, axis=1)  # [B, D]
+    batch_var = jnp.mean(jnp.var(token_mean, axis=0))
+    if b <= 1:
+        inter_sample_cosine = jnp.asarray(0.0, dtype=jnp.float32)
+    else:
+        sample_normed = token_mean / (jnp.linalg.norm(token_mean, axis=-1, keepdims=True) + eps)
+        sample_sim = jnp.einsum("bd,ed->be", sample_normed, sample_normed)
+        sample_eye = jnp.eye(b, dtype=jnp.bool_)
+        sample_offdiag = jnp.where(sample_eye, 0.0, jnp.abs(sample_sim))
+        inter_sample_cosine = jnp.sum(sample_offdiag) / jnp.maximum(b * (b - 1), 1)
 
     return {
         f"{prefix}/norm_mean": jnp.mean(token_norm),
@@ -249,7 +290,11 @@ def latent_collapse_metrics(latent, prefix: str, eps=1e-6):
         f"{prefix}/token_var_mean": token_var,
         f"{prefix}/token_centered_var": centered_var,
         f"{prefix}/cosine_offdiag_mean": offdiag_mean,
+        f"{prefix}/cosine_offdiag_max": offdiag_max,
         f"{prefix}/centered_cosine_offdiag_mean": centered_offdiag_mean,
+        f"{prefix}/centered_cosine_offdiag_max": centered_offdiag_max,
+        f"{prefix}/batch_var_mean": batch_var,
+        f"{prefix}/inter_sample_cosine_mean": inter_sample_cosine,
     }
 
 
@@ -267,19 +312,26 @@ def prior_posterior_alignment_metrics(z_prior, z_post, eps=1e-6):
     p = z_prior / (jnp.linalg.norm(z_prior, axis=-1, keepdims=True) + eps)
     q = z_post / (jnp.linalg.norm(z_post, axis=-1, keepdims=True) + eps)
     cosine = jnp.sum(p * q, axis=-1)  # [B, M]
+    shuffled_cosine = jnp.sum(p * jnp.roll(q, shift=1, axis=0), axis=-1)
 
     l2 = jnp.linalg.norm(z_prior - z_post, axis=-1)
     prior_norm = jnp.mean(jnp.linalg.norm(z_prior, axis=-1))
     post_norm = jnp.mean(jnp.linalg.norm(z_post, axis=-1))
+    cosine_mean = jnp.mean(cosine)
+    shuffled_cosine_mean = jnp.mean(shuffled_cosine)
 
     return {
-        "align/latent_cosine_mean": jnp.mean(cosine),
+        "align/latent_cosine_mean": cosine_mean,
+        "align/latent_cosine_std": jnp.std(cosine),
+        "align/latent_cosine_min": jnp.min(cosine),
+        "align/shuffled_latent_cosine_mean": shuffled_cosine_mean,
+        "align/latent_cosine_margin": cosine_mean - shuffled_cosine_mean,
         "align/latent_l2_mean": jnp.mean(l2),
         "align/post_to_prior_norm_ratio": post_norm / (prior_norm + eps),
     }
 
 
-def temporal_branch_activation_metrics(encoder_auxes, eps: float = 1e-6):
+def temporal_branch_activation_metrics(encoder_auxes, prefix: str = "memory", eps: float = 1e-6):
     """Residual-magnitude monitors for BOTH gated branches (history + future).
 
     Extends the compress-side ``memory_branch_activation_metrics`` with the
@@ -316,15 +368,23 @@ def temporal_branch_activation_metrics(encoder_auxes, eps: float = 1e-6):
 
     zero = jnp.asarray(0.0, dtype=jnp.float32)
     if not mem_norms:
-        return {
-            "memory/mem_update_norm": zero,
-            "memory/fut_update_norm": zero,
-            "memory/y_spatial_norm": zero,
-            "memory/mem_update_to_spatial_ratio": zero,
-            "memory/fut_update_to_spatial_ratio": zero,
-            "gate_history/effective_mean": zero,
-            "gate_future/effective_mean": zero,
+        metrics = {
+            f"{prefix}/mem_update_norm": zero,
+            f"{prefix}/fut_update_norm": zero,
+            f"{prefix}/y_spatial_norm": zero,
+            f"{prefix}/mem_update_to_spatial_ratio": zero,
+            f"{prefix}/fut_update_to_spatial_ratio": zero,
+            f"{prefix}/gate_history_effective_mean": zero,
+            f"{prefix}/gate_future_effective_mean": zero,
         }
+        if prefix == "memory":
+            metrics.update(
+                {
+                    "gate_history/effective_mean": zero,
+                    "gate_future/effective_mean": zero,
+                }
+            )
+        return metrics
 
     mem_w = jnp.stack(mem_active)
     fut_w = jnp.stack(fut_active)
@@ -339,14 +399,83 @@ def temporal_branch_activation_metrics(encoder_auxes, eps: float = 1e-6):
     hist_gate_mean = jnp.sum(jnp.stack(hist_gate_values) * mem_w) / mem_denom
     fut_gate_mean = jnp.sum(jnp.stack(fut_gate_values) * fut_w) / fut_denom
 
+    metrics = {
+        f"{prefix}/mem_update_norm": mem_norm,
+        f"{prefix}/fut_update_norm": fut_norm,
+        f"{prefix}/y_spatial_norm": spatial_mem,
+        f"{prefix}/mem_update_to_spatial_ratio": mem_norm / (spatial_mem + eps),
+        f"{prefix}/fut_update_to_spatial_ratio": fut_norm / (spatial_fut + eps),
+        f"{prefix}/gate_history_effective_mean": hist_gate_mean,
+        f"{prefix}/gate_future_effective_mean": fut_gate_mean,
+    }
+    if prefix == "memory":
+        metrics.update(
+            {
+                "gate_history/effective_mean": hist_gate_mean,
+                "gate_future/effective_mean": fut_gate_mean,
+            }
+        )
+    return metrics
+
+
+def frame_validity_metrics(observation: _model.Observation, num_frames: int, num_future_frames: int):
+    """Frame-level validity monitors from VideoFrameDataset metadata."""
+    zero = jnp.asarray(0.0, dtype=jnp.float32)
+    one = jnp.asarray(1.0, dtype=jnp.float32)
+    if observation.frame_valid_masks is None:
+        return {
+            "data/history_valid_rate": one,
+            "data/future_valid_rate": one if num_future_frames > 0 else zero,
+            "data/future_padded_rate": zero,
+            "data/full_future_sample_rate": one if num_future_frames > 0 else zero,
+        }
+
+    masks = [jnp.asarray(mask, dtype=jnp.float32) for mask in observation.frame_valid_masks.values()]
+    if not masks:
+        return {
+            "data/history_valid_rate": one,
+            "data/future_valid_rate": one if num_future_frames > 0 else zero,
+            "data/future_padded_rate": zero,
+            "data/full_future_sample_rate": one if num_future_frames > 0 else zero,
+        }
+
+    stacked = jnp.stack(masks, axis=0)  # [streams, B, T]
+    history_valid = stacked[..., :num_frames]
+    history_valid_rate = jnp.mean(history_valid)
+    if num_future_frames <= 0:
+        future_valid_rate = zero
+        full_future_sample_rate = zero
+    else:
+        future_valid = stacked[..., num_frames : num_frames + num_future_frames]
+        future_valid_rate = jnp.mean(future_valid)
+        full_future_sample_rate = jnp.mean(jnp.all(future_valid > 0.5, axis=(0, 2)).astype(jnp.float32))
     return {
-        "memory/mem_update_norm": mem_norm,
-        "memory/fut_update_norm": fut_norm,
-        "memory/y_spatial_norm": spatial_mem,
-        "memory/mem_update_to_spatial_ratio": mem_norm / (spatial_mem + eps),
-        "memory/fut_update_to_spatial_ratio": fut_norm / (spatial_fut + eps),
-        "gate_history/effective_mean": hist_gate_mean,
-        "gate_future/effective_mean": fut_gate_mean,
+        "data/history_valid_rate": history_valid_rate,
+        "data/future_valid_rate": future_valid_rate,
+        "data/future_padded_rate": one - future_valid_rate,
+        "data/full_future_sample_rate": full_future_sample_rate,
+    }
+
+
+def horizon_loss_metrics(loss_prior_by_t, loss_post_by_t, eps: float = 1e-6):
+    """Compact per-horizon monitors without logging every action step."""
+    prior = jnp.asarray(loss_prior_by_t, dtype=jnp.float32)
+    post = jnp.asarray(loss_post_by_t, dtype=jnp.float32)
+    horizon = prior.shape[-1]
+    first = 0
+    mid = horizon // 2
+    last = horizon - 1
+    return {
+        "loss_horizon/prior_first": jnp.mean(prior[..., first]),
+        "loss_horizon/prior_mid": jnp.mean(prior[..., mid]),
+        "loss_horizon/prior_last": jnp.mean(prior[..., last]),
+        "loss_horizon/post_first": jnp.mean(post[..., first]),
+        "loss_horizon/post_mid": jnp.mean(post[..., mid]),
+        "loss_horizon/post_last": jnp.mean(post[..., last]),
+        "loss_horizon/advantage_first": jnp.mean(prior[..., first] - post[..., first]),
+        "loss_horizon/advantage_mid": jnp.mean(prior[..., mid] - post[..., mid]),
+        "loss_horizon/advantage_last": jnp.mean(prior[..., last] - post[..., last]),
+        "loss_horizon/advantage_ratio": jnp.mean((prior - post) / (prior + eps)),
     }
 
 
@@ -583,6 +712,8 @@ def train_step(
         aux_out = {
             "loss_prior": loss_prior,
             "loss_post": loss_post,
+            "loss_prior_by_t": chunked_prior,
+            "loss_post_by_t": aux["loss_post"],
             "align_loss": align_loss,
             "reg_loss": reg_loss,
             "diversity_loss": div_loss,
@@ -590,6 +721,7 @@ def train_step(
             "future_post": aux["future_post"],
             "future_prior": aux["future_prior"],
             "encoder_auxes": aux["encoder_auxes"],
+            "post_encoder_auxes": aux["post_encoder_auxes"],
             "current_frame_corrupt_sample_rate": use_corrupt,
             "current_frame_dropout_rate": corruption_metrics["current_frame_dropout_rate"],
             "current_frame_mask_rate": corruption_metrics["current_frame_mask_rate"],
@@ -632,9 +764,20 @@ def train_step(
         "loss_prior": aux["loss_prior"],
         "loss_post": aux["loss_post"],
         "loss_post_minus_prior": aux["loss_post"] - aux["loss_prior"],
+        "posterior_advantage": aux["loss_prior"] - aux["loss_post"],
+        "posterior_advantage_ratio": (aux["loss_prior"] - aux["loss_post"]) / (aux["loss_prior"] + 1e-6),
+        "prior_to_post_ratio": aux["loss_prior"] / (aux["loss_post"] + 1e-6),
         "align_loss": aux["align_loss"],
         "reg_loss": aux["reg_loss"],
+        "reg/prior_norm_sq_mean": jnp.mean(jnp.square(jnp.asarray(aux["future_prior"], dtype=jnp.float32))),
+        "reg/post_norm_sq_mean": jnp.mean(jnp.square(jnp.asarray(aux["future_post"], dtype=jnp.float32))),
         "diversity_loss": aux["diversity_loss"],
+        "diversity_zpost_loss": memory_diversity_loss(aux["future_post"]),
+        "loss_weighted/prior": lambda_prior * aux["loss_prior"],
+        "loss_weighted/post": lambda_post * aux["loss_post"],
+        "loss_weighted/align": lambda_align * aux["align_loss"],
+        "loss_weighted/reg": lambda_reg * aux["reg_loss"],
+        "loss_weighted/diversity": diversity_weight * aux["diversity_loss"],
         "lambda_prior": jnp.asarray(lambda_prior, dtype=jnp.float32),
         "lambda_post": jnp.asarray(lambda_post, dtype=jnp.float32),
         "lambda_align": jnp.asarray(lambda_align, dtype=jnp.float32),
@@ -653,11 +796,15 @@ def train_step(
     info.update(new_pf_param_grad_metrics(grads))
     info.update(gate_param_metrics(new_params, "history_memory_gate_logit", "gate_history"))
     info.update(gate_param_metrics(new_params, "future_memory_gate_logit", "gate_future"))
-    info.update(temporal_branch_activation_metrics(aux["encoder_auxes"]))
+    info.update(gate_config_metrics(config))
+    info.update(temporal_branch_activation_metrics(aux["encoder_auxes"], "memory"))
+    info.update(temporal_branch_activation_metrics(aux["post_encoder_auxes"], "memory_post"))
     info.update(latent_collapse_metrics(aux["history_mem"], "memory/hist"))
     info.update(latent_collapse_metrics(aux["future_post"], "memory/zpost"))
     info.update(latent_collapse_metrics(aux["future_prior"], "memory/zprior"))
     info.update(prior_posterior_alignment_metrics(aux["future_prior"], aux["future_post"]))
+    info.update(horizon_loss_metrics(aux["loss_prior_by_t"], aux["loss_post_by_t"]))
+    info.update(frame_validity_metrics(observation, config.model.num_frames, config.model.num_future_frames))
 
     return new_state, info
 
@@ -673,38 +820,55 @@ def main(config: _config.TrainConfig):
             f"{type(config.model).__name__}. Use scripts/mem/train_pi0_mem_compress.py "
             "for the history-only Pi0MemCompress variant."
         )
+    # The model owns the PF temporal sampling layout. Data factories only own
+    # dataset-specific details; all frame/stride fields are injected here so
+    # multi-dataset PF training has exactly one temporal source.
+    def _with_model_frame_layout(factory, label):
+        if not hasattr(factory, "video_frame_config"):
+            raise ValueError(
+                f"train_pi0_mem_pf requires Pi0Mem-aware DataConfigFactory "
+                f"(must expose .video_frame_config()); {label} is {type(factory).__name__}."
+            )
+        field_names = {field.name for field in dataclasses.fields(factory)}
+        missing = {"num_frames", "frame_stride", "num_future_frames", "future_frame_stride"} - field_names
+        if missing:
+            raise ValueError(
+                f"{label} is Pi0Mem-aware but cannot accept PF temporal field(s): "
+                f"{sorted(missing)}."
+            )
+        return dataclasses.replace(
+            factory,
+            num_frames=config.model.num_frames,
+            frame_stride=config.model.frame_stride,
+            num_future_frames=config.model.num_future_frames,
+            future_frame_stride=config.model.future_frame_stride,
+        )
+
+    if isinstance(config.data, _config.MultiDataConfigFactory):
+        if not config.data.datasets:
+            raise ValueError("train_pi0_mem_pf requires MultiDataConfigFactory.datasets to be non-empty.")
+        config = dataclasses.replace(
+            config,
+            data=dataclasses.replace(
+                config.data,
+                datasets=[
+                    _with_model_frame_layout(child, f"datasets[{i}]")
+                    for i, child in enumerate(config.data.datasets)
+                ],
+            ),
+        )
+    else:
+        config = dataclasses.replace(
+            config,
+            data=_with_model_frame_layout(config.data, "config.data"),
+        )
+
     if config.model.num_future_frames <= 0:
         logging.warning(
             "num_future_frames=0: the posterior path sees no future frames; "
             "Zpost is all-zeros and lambda_post/lambda_align supervise nothing "
             "meaningful. This is only sensible for ablations."
         )
-    # The data side is the shared Pi0Mem video pipeline; every factory must be
-    # Pi0Mem-aware AND configured with the same future-frame layout.
-    def _check_factory(factory, label):
-        if not hasattr(factory, "video_frame_config"):
-            raise ValueError(
-                f"train_pi0_mem_pf requires Pi0Mem-aware DataConfigFactory "
-                f"(must expose .video_frame_config()); {label} is {type(factory).__name__}."
-            )
-        vfc = factory.video_frame_config()
-        expected_total = config.model.num_frames + config.model.num_future_frames
-        if vfc.total_frames != expected_total:
-            raise ValueError(
-                f"{label}: video_frame_config yields total_frames={vfc.total_frames} "
-                f"(num_frames={vfc.num_frames} + num_future_frames={vfc.num_future_frames}) "
-                f"but the model expects {expected_total} "
-                f"(model.num_frames={config.model.num_frames} + "
-                f"model.num_future_frames={config.model.num_future_frames})."
-            )
-
-    if isinstance(config.data, _config.MultiDataConfigFactory):
-        if not config.data.datasets:
-            raise ValueError("train_pi0_mem_pf requires MultiDataConfigFactory.datasets to be non-empty.")
-        for i, child in enumerate(config.data.datasets):
-            _check_factory(child, f"datasets[{i}]")
-    else:
-        _check_factory(config.data, "config.data")
 
     # === Everything below mirrors scripts/mem/train_pi0_mem_compress.py.main. ===
 

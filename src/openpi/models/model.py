@@ -36,11 +36,11 @@ class ModelType(enum.Enum):
 
 
 # The model always expects these images
-IMAGE_KEYS = (
-    "base_0_rgb",
-    "left_wrist_0_rgb",
-    "right_wrist_0_rgb",
-)
+# IMAGE_KEYS = (
+#     "base_0_rgb",
+#     "left_wrist_0_rgb",
+#     "right_wrist_0_rgb",
+# )
 # IMAGE_KEYS = (
 #     "left_wrist_0_rgb",
 #     "right_wrist_0_rgb",
@@ -51,6 +51,10 @@ IMAGE_KEYS = (
 #     "right_wrist_0_rgb",
 #     "right_wrist_1_rgb",
 # )
+IMAGE_KEYS = (
+    "base_rgb",
+    "wrist_rgb",
+)
 
 
 DEPTH_KEYS = (
@@ -130,6 +134,10 @@ class Observation(Generic[ArrayT]):
     # Per-sample action loss mask for mixed-dataset training (e.g. single-arm / bimanual).
     action_loss_mask: at.Float[ArrayT, "*b ad"] | None = None
 
+    # Optional frame-level validity for video observations, keyed like images.
+    # Shape is [*b, T]; False means VideoFrameDataset padded/repeated that slot.
+    frame_valid_masks: dict[str, at.Bool[ArrayT, "*b t"]] | None = None
+
     # Value model fields (for Pi0Advantage / advantage estimation).
     step_index: at.Float[ArrayT, "*b"] | None = None
     episode_T: at.Float[ArrayT, "*b"] | None = None
@@ -164,6 +172,7 @@ class Observation(Generic[ArrayT]):
             token_ar_mask=data.get("token_ar_mask"),
             token_loss_mask=data.get("token_loss_mask"),
             action_loss_mask=data.get("action_loss_mask"),
+            frame_valid_masks=data.get("frame_valid_mask"),
             # Hybrid model (Pi0.5 + FAST) specific fields
             fast_tokenized_prompt=data.get("fast_tokenized_prompt"),
             fast_tokenized_prompt_mask=data.get("fast_tokenized_prompt_mask"),
@@ -185,6 +194,7 @@ class Observation(Generic[ArrayT]):
         result = dataclasses.asdict(self)
         result["image"] = result.pop("images")
         result["image_mask"] = result.pop("image_masks")
+        result["frame_valid_mask"] = result.pop("frame_valid_masks")
         return result
 
 
@@ -312,6 +322,7 @@ def preprocess_observation(
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
         action_loss_mask=observation.action_loss_mask,
+        frame_valid_masks=observation.frame_valid_masks,
         fast_tokenized_prompt=observation.fast_tokenized_prompt,
         fast_tokenized_prompt_mask=observation.fast_tokenized_prompt_mask,
         fast_token_ar_mask=observation.fast_token_ar_mask,

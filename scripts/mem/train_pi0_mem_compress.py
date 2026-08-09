@@ -40,6 +40,8 @@ if "TMPDIR" not in os.environ:
 
 import dataclasses
 import functools
+import importlib
+import json
 import logging
 import platform
 import sys
@@ -55,6 +57,7 @@ import jax.experimental
 import jax.numpy as jnp
 import numpy as np
 import optax
+import torch
 import tqdm_loggable.auto as tqdm
 import wandb
 
@@ -63,6 +66,8 @@ import openpi.shared.array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.checkpoints as _checkpoints
 import openpi.training.config as _config
+import openpi.training.data_loader as _data_loader
+import openpi.training.multi_data_loader as _multi_data_loader
 import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
@@ -194,6 +199,11 @@ def new_memory_param_grad_metrics(grads):
     resampler_cross_attn = select("HistoryResampler", "CrossAttention")
     resampler_mlp = select("HistoryResampler", "MlpBlock")
 
+    # Diagnostic classifier. Keep this separate from the resampler metrics so
+    # a nonzero head gradient cannot hide a disconnected memory branch.
+    history_classifier = select("HistoryClassifier")
+    history_classifier_head = select("HistoryClassifierHead")
+
     # New gates inside current-frame blocks.
     history_gate = select("history_memory_gate_logit")
     history_cross_attn = select("HistoryMultiHeadDotProductAttention_0")
@@ -206,6 +216,8 @@ def new_memory_param_grad_metrics(grads):
         "grad/current_condition_l2": _global_l2_norm(current_condition),
         "grad/resampler_cross_attn_l2": _global_l2_norm(resampler_cross_attn),
         "grad/resampler_mlp_l2": _global_l2_norm(resampler_mlp),
+        "grad/history_classifier_l2": _global_l2_norm(history_classifier),
+        "grad/history_classifier_head_l2": _global_l2_norm(history_classifier_head),
         "grad/history_gate_l2": _global_l2_norm(history_gate),
         "grad/history_cross_attn_l2": _global_l2_norm(history_cross_attn),
         "grad/history_out_proj_l2": _global_l2_norm(history_out_proj),
@@ -595,11 +607,14 @@ def init_train_state(
     logging.info("=" * 60)
 
     trainable_flat = traverse_util.flatten_dict(trainable_params_shape.to_pure_dict())
-    gate_paths = [
-        "/".join(k)
-        for k in trainable_flat
-        if "history_memory_gate_logit" in "/".join(k)
-    ]
+    gate_paths = []
+    for key_path in trainable_flat:
+        # NNX Sequential modules use integer path components (e.g. the
+        # diagnostic classifier's layer 0/1), so paths cannot be joined until
+        # every component is stringified.
+        path = "/".join(map(str, key_path))
+        if "history_memory_gate_logit" in path:
+            gate_paths.append(path)
     if gate_paths:
         logging.info("Trainable history gate paths:")
         for path in gate_paths:
@@ -640,6 +655,8 @@ def train_step(
     rng: at.KeyArrayLike,
     state: training_utils.TrainState,
     batch: tuple[_model.Observation, _model.Actions],
+    *,
+    class_labels_by_episode: at.Array | None = None,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     model = nnx.merge(state.model_def, state.params)
     model.train()
@@ -656,6 +673,41 @@ def train_step(
     current_frame_corrupt_sample_on = current_frame_corrupt_sample_prob > 0.0 and current_frame_corruption_on
     current_frame_corrupt_loss_weight = float(getattr(config.model, "current_frame_corrupt_loss_weight", 0.0))
     current_frame_index = int(getattr(config.model, "current_frame_index", -1))
+    classifier_config = config.shellgame_memory_classifier
+    classifier_on = bool(classifier_config.enabled)
+    classifier_weight = float(classifier_config.loss_weight)
+    action_loss_weight = float(classifier_config.action_loss_weight) if classifier_on else 1.0
+
+    def classification_loss_and_metrics(logits, observation):
+        zero = jnp.asarray(0.0, dtype=jnp.float32)
+        if not classifier_on:
+            return zero, zero, zero
+        if class_labels_by_episode is None:
+            raise ValueError("Memory classifier is enabled but no episode label table was provided.")
+        if observation.episode_index is None or observation.frame_index is None:
+            raise ValueError("Memory classifier requires episode_index and frame_index in every batch.")
+
+        episode_index = jnp.asarray(observation.episode_index, dtype=jnp.int32)
+        frame_index = jnp.asarray(observation.frame_index, dtype=jnp.int32)
+        episode_valid = (episode_index >= 0) & (episode_index < class_labels_by_episode.shape[0])
+        safe_episode_index = jnp.clip(episode_index, 0, class_labels_by_episode.shape[0] - 1)
+        labels = class_labels_by_episode[safe_episode_index]
+        valid = (
+            episode_valid
+            & (labels >= 0)
+            & (frame_index >= classifier_config.min_frame_index)
+            & (frame_index <= classifier_config.max_frame_index)
+        )
+        valid_f = valid.astype(jnp.float32)
+        valid_count = jnp.sum(valid_f)
+        safe_labels = jnp.maximum(labels, 0)
+        per_sample_loss = optax.softmax_cross_entropy_with_integer_labels(logits, safe_labels)
+        classifier_loss = jnp.sum(per_sample_loss * valid_f) / jnp.maximum(valid_count, 1.0)
+        accuracy = jnp.sum((jnp.argmax(logits, axis=-1) == safe_labels) * valid_f) / jnp.maximum(
+            valid_count, 1.0
+        )
+        valid_fraction = valid_count / valid_f.size
+        return classifier_loss, accuracy, valid_fraction
 
     def loss_fn(model, rng, observation, actions):
         sample_rng, corrupt_rng, loss_rng = jax.random.split(rng, 3)
@@ -688,10 +740,19 @@ def train_step(
                 for key, value in corruption_metrics.items()
             }
 
-        chunked_loss, aux = model.compute_loss_with_memory_aux(
-            loss_rng, observation, actions, train=True
-        )
-        action_loss = jnp.mean(chunked_loss)
+        if classifier_on and action_loss_weight == 0.0:
+            history_class_logits, aux = model.compute_history_classification(
+                loss_rng,
+                observation,
+                train=not classifier_config.disable_train_augmentation,
+            )
+            action_loss = zero
+        else:
+            chunked_loss, aux = model.compute_loss_with_memory_aux(
+                loss_rng, observation, actions, train=True
+            )
+            action_loss = jnp.mean(chunked_loss)
+            history_class_logits = aux["history_class_logits"] if classifier_on else None
         normalized_action_loss = action_loss
         current_frame_corrupt_action_loss = jnp.where(use_corrupt.astype(jnp.bool_), action_loss, zero)
 
@@ -700,7 +761,18 @@ def train_step(
         else:
             div_loss = jnp.asarray(0.0, dtype=action_loss.dtype)
 
-        total_loss = normalized_action_loss + diversity_weight * div_loss
+        if classifier_on:
+            classifier_loss, classifier_accuracy, classifier_valid_fraction = classification_loss_and_metrics(
+                history_class_logits, observation
+            )
+        else:
+            classifier_loss = classifier_accuracy = classifier_valid_fraction = zero
+
+        total_loss = (
+            action_loss_weight * normalized_action_loss
+            + diversity_weight * div_loss
+            + classifier_weight * classifier_loss
+        )
 
         aux_out = {
             "history_mem": aux["history_mem"],
@@ -708,6 +780,9 @@ def train_step(
             "action_loss": action_loss,
             "normalized_action_loss": normalized_action_loss,
             "diversity_loss": div_loss,
+            "history_classifier_loss": classifier_loss,
+            "history_classifier_accuracy": classifier_accuracy,
+            "history_classifier_valid_fraction": classifier_valid_fraction,
             "current_frame_corrupt_action_loss": current_frame_corrupt_action_loss,
             "current_frame_corrupt_sample_rate": use_corrupt,
             "current_frame_dropout_rate": corruption_metrics["current_frame_dropout_rate"],
@@ -754,6 +829,11 @@ def train_step(
         "normalized_action_loss": aux["normalized_action_loss"],
         "diversity_loss": aux["diversity_loss"],
         "diversity_weight": jnp.asarray(diversity_weight, dtype=jnp.float32),
+        "action_loss_weight": jnp.asarray(action_loss_weight, dtype=jnp.float32),
+        "history_classifier_loss": aux["history_classifier_loss"],
+        "history_classifier_accuracy": aux["history_classifier_accuracy"],
+        "history_classifier_valid_fraction": aux["history_classifier_valid_fraction"],
+        "history_classifier_weight": jnp.asarray(classifier_weight, dtype=jnp.float32),
         "current_frame_corrupt_action_loss": aux["current_frame_corrupt_action_loss"],
         "current_frame_corrupt_loss_weight": jnp.asarray(current_frame_corrupt_loss_weight, dtype=jnp.float32),
         "current_frame_corrupt_sample_prob": jnp.asarray(current_frame_corrupt_sample_prob, dtype=jnp.float32),
@@ -777,6 +857,514 @@ def train_step(
     )
 
     return new_state, info
+
+
+def _episode_split_indices(dataset, val_ratio: float, seed: int) -> tuple[list[int], list[int]]:
+    """Split a Pi0Mem dataset by episode, preventing temporal leakage."""
+    current = dataset
+    hf_dataset = None
+    while current is not None:
+        hf_dataset = getattr(current, "_hf_dataset", None)
+        if hf_dataset is not None:
+            break
+        current = getattr(current, "_dataset", None)
+
+    if hf_dataset is None or "episode_index" not in getattr(hf_dataset, "column_names", ()):
+        raise ValueError(
+            "Validation splitting requires an episode_index column. "
+            "A frame-level random split is intentionally not used because adjacent "
+            "video frames would leak between training and validation."
+        )
+
+    episode_indices = np.asarray(hf_dataset["episode_index"], dtype=np.int64)
+    if episode_indices.shape != (len(dataset),):
+        raise ValueError(
+            f"episode_index has shape {episode_indices.shape}, but dataset length is {len(dataset)}."
+        )
+
+    episodes = np.unique(episode_indices)
+    if len(episodes) < 2:
+        raise ValueError("Validation requires at least two episodes.")
+
+    rng = np.random.default_rng(seed)
+    shuffled_episodes = rng.permutation(episodes)
+    num_val_episodes = min(max(1, round(len(episodes) * val_ratio)), len(episodes) - 1)
+    val_episodes = shuffled_episodes[:num_val_episodes]
+    val_mask = np.isin(episode_indices, val_episodes)
+    train_indices = np.flatnonzero(~val_mask).tolist()
+    val_indices = np.flatnonzero(val_mask).tolist()
+    return train_indices, val_indices
+
+
+def _filter_memory_classifier_frame_range(
+    dataset,
+    indices: list[int],
+    classifier_config: _config.ShellgameMemoryClassifierConfig,
+) -> list[int]:
+    """Keep only rows carrying meaningful labels for classification-only runs."""
+    if not classifier_config.enabled or classifier_config.action_loss_weight != 0.0:
+        return indices
+    current = dataset
+    hf_dataset = None
+    while current is not None:
+        hf_dataset = getattr(current, "_hf_dataset", None)
+        if hf_dataset is not None:
+            break
+        current = getattr(current, "_dataset", None)
+    if hf_dataset is None or "frame_index" not in getattr(hf_dataset, "column_names", ()):
+        raise ValueError("Classification-only frame filtering requires a frame_index column.")
+    frame_indices = np.asarray(hf_dataset["frame_index"], dtype=np.int64)
+    selected = np.asarray(indices, dtype=np.int64)
+    keep = (
+        (frame_indices[selected] >= classifier_config.min_frame_index)
+        & (frame_indices[selected] <= classifier_config.max_frame_index)
+    )
+    filtered = selected[keep].tolist()
+    if not filtered:
+        raise ValueError("Memory-classifier frame range selected no dataset rows.")
+    return filtered
+
+
+def _select_balanced_memory_classifier_indices(
+    dataset,
+    indices: list[int],
+    classifier_config: _config.ShellgameMemoryClassifierConfig,
+    class_labels_by_episode: at.Array,
+    seed: int,
+) -> list[int]:
+    """Select a deterministic, class-balanced subset for an overfit probe."""
+    samples_per_class = classifier_config.overfit_samples_per_class
+    if samples_per_class <= 0:
+        return indices
+
+    current = dataset
+    hf_dataset = None
+    while current is not None:
+        hf_dataset = getattr(current, "_hf_dataset", None)
+        if hf_dataset is not None:
+            break
+        current = getattr(current, "_dataset", None)
+    if hf_dataset is None or "episode_index" not in getattr(hf_dataset, "column_names", ()):
+        raise ValueError("Balanced overfit selection requires an episode_index column.")
+
+    selected = np.asarray(indices, dtype=np.int64)
+    episode_indices = np.asarray(hf_dataset["episode_index"], dtype=np.int64)[selected]
+    labels_by_episode = np.asarray(jax.device_get(class_labels_by_episode), dtype=np.int32)
+    if np.any(episode_indices < 0) or np.any(episode_indices >= labels_by_episode.shape[0]):
+        raise ValueError("Overfit subset contains an episode_index without a classifier label.")
+    sample_labels = labels_by_episode[episode_indices]
+
+    rng = np.random.default_rng(seed)
+    balanced = []
+    for class_index, class_name in enumerate(classifier_config.classes):
+        candidates = selected[sample_labels == class_index]
+        if candidates.size < samples_per_class:
+            raise ValueError(
+                f"Requested {samples_per_class} overfit samples for class {class_name!r}, "
+                f"but only {candidates.size} are available."
+            )
+        balanced.extend(rng.permutation(candidates)[:samples_per_class].tolist())
+    return rng.permutation(np.asarray(balanced, dtype=np.int64)).tolist()
+
+
+def _make_split_torch_loaders(
+    config: _config.TrainConfig,
+    data_sharding: jax.sharding.Sharding,
+    train_dataset,
+    val_dataset,
+):
+    local_batch_size = config.batch_size // jax.process_count()
+    if len(train_dataset) < local_batch_size or len(val_dataset) < local_batch_size:
+        raise ValueError(
+            "Both dataset splits must contain at least one full local batch: "
+            f"train={len(train_dataset)}, val={len(val_dataset)}, "
+            f"local_batch_size={local_batch_size}. Increase --val-ratio or reduce --batch-size."
+        )
+
+    train_loader = _data_loader.TorchDataLoader(
+        train_dataset,
+        local_batch_size=local_batch_size,
+        sharding=data_sharding,
+        shuffle=True,
+        num_workers=config.num_workers,
+        seed=config.seed,
+        prefetch_factor=2 if config.num_workers > 0 else None,
+    )
+    # Validation is deterministic and intentionally uses no worker prefetching.
+    val_loader = _data_loader.TorchDataLoader(
+        val_dataset,
+        local_batch_size=local_batch_size,
+        sharding=data_sharding,
+        shuffle=False,
+        num_workers=0,
+        seed=config.seed,
+    )
+    return train_loader, val_loader
+
+
+def create_train_val_data_loaders(
+    config: _config.TrainConfig,
+    data_sharding: jax.sharding.Sharding,
+    class_labels_by_episode: at.Array | None = None,
+):
+    """Build Pi0Mem-aware train/validation loaders with episode-level splits."""
+    if not 0.0 < config.val_ratio < 1.0:
+        raise ValueError(f"val_ratio must be in (0, 1); got {config.val_ratio}.")
+
+    if isinstance(config.data, _config.MultiDataConfigFactory):
+        all_configs = config.data.create_all(config.assets_dirs, config.model)
+        weights = config.data.weights or [1.0] * len(all_configs)
+        if len(weights) != len(all_configs):
+            raise ValueError(
+                f"MultiDataConfigFactory has {len(all_configs)} datasets but {len(weights)} weights."
+            )
+        train_datasets = []
+        val_datasets = []
+
+        for index, (data_config, child) in enumerate(
+            zip(all_configs, config.data.datasets, strict=True)
+        ):
+            if data_config.rlds_data_dir is not None:
+                raise ValueError("Validation splitting is not supported for RLDS datasets.")
+            dataset = _config_pi0_mem._build_pi0_mem_dataset(  # noqa: SLF001
+                data_config,
+                child.video_frame_config(),
+                action_horizon=config.model.action_horizon,
+                skip_norm_stats=False,
+            )
+            classifier_config = config.shellgame_memory_classifier
+            if classifier_config.overfit_samples_per_class > 0:
+                if class_labels_by_episode is None:
+                    raise ValueError("Balanced overfit selection requires classifier labels.")
+                eligible_indices = _filter_memory_classifier_frame_range(
+                    dataset, list(range(len(dataset))), classifier_config
+                )
+                train_indices = _select_balanced_memory_classifier_indices(
+                    dataset,
+                    eligible_indices,
+                    classifier_config,
+                    class_labels_by_episode,
+                    config.seed + index,
+                )
+                if not classifier_config.overfit_same_samples_for_validation:
+                    raise ValueError(
+                        "The overfit probe currently requires "
+                        "overfit_same_samples_for_validation=True."
+                    )
+                val_indices = list(train_indices)
+                logging.info(
+                    "Dataset %d balanced overfit subset: %d classes x %d samples = %d",
+                    index,
+                    len(classifier_config.classes),
+                    classifier_config.overfit_samples_per_class,
+                    len(train_indices),
+                )
+            else:
+                train_indices, val_indices = _episode_split_indices(
+                    dataset, config.val_ratio, config.seed + index
+                )
+                train_indices = _filter_memory_classifier_frame_range(
+                    dataset, train_indices, classifier_config
+                )
+                val_indices = _filter_memory_classifier_frame_range(
+                    dataset, val_indices, classifier_config
+                )
+            train_datasets.append(torch.utils.data.Subset(dataset, train_indices))
+            val_datasets.append(torch.utils.data.Subset(dataset, val_indices))
+            logging.info(
+                "Dataset %d episode split: train=%d, val=%d samples",
+                index,
+                len(train_indices),
+                len(val_indices),
+            )
+
+        use_weights = len(set(weights)) > 1
+        train_concat = _multi_data_loader.WeightedConcatDataset(
+            train_datasets, weights=weights if use_weights else None
+        )
+        val_concat = _multi_data_loader.WeightedConcatDataset(val_datasets)
+        train_torch, val_torch = _make_split_torch_loaders(
+            config, data_sharding, train_concat, val_concat
+        )
+        if use_weights:
+            index_weights = torch.tensor(
+                train_concat.get_dataset_weights_for_sampler(), dtype=torch.double
+            )
+            train_torch = _data_loader.TorchDataLoader(
+                train_concat,
+                local_batch_size=config.batch_size // jax.process_count(),
+                sharding=data_sharding,
+                sampler=torch.utils.data.WeightedRandomSampler(
+                    index_weights, num_samples=len(train_concat), replacement=True
+                ),
+                num_workers=config.num_workers,
+                seed=config.seed,
+                prefetch_factor=2 if config.num_workers > 0 else None,
+            )
+        return (
+            _multi_data_loader.MultiDataLoaderImpl(all_configs, train_torch),
+            _multi_data_loader.MultiDataLoaderImpl(all_configs, val_torch),
+        )
+
+    data_config = config.data.create(config.assets_dirs, config.model)
+    if data_config.rlds_data_dir is not None:
+        raise ValueError("Validation splitting is not supported for RLDS datasets.")
+    dataset = _config_pi0_mem._build_pi0_mem_dataset(  # noqa: SLF001
+        data_config,
+        config.data.video_frame_config(),
+        action_horizon=config.model.action_horizon,
+        skip_norm_stats=False,
+    )
+    classifier_config = config.shellgame_memory_classifier
+    if classifier_config.overfit_samples_per_class > 0:
+        if class_labels_by_episode is None:
+            raise ValueError("Balanced overfit selection requires classifier labels.")
+        eligible_indices = _filter_memory_classifier_frame_range(
+            dataset, list(range(len(dataset))), classifier_config
+        )
+        train_indices = _select_balanced_memory_classifier_indices(
+            dataset,
+            eligible_indices,
+            classifier_config,
+            class_labels_by_episode,
+            config.seed,
+        )
+        if not classifier_config.overfit_same_samples_for_validation:
+            raise ValueError(
+                "The overfit probe currently requires overfit_same_samples_for_validation=True."
+            )
+        val_indices = list(train_indices)
+    else:
+        train_indices, val_indices = _episode_split_indices(dataset, config.val_ratio, config.seed)
+        train_indices = _filter_memory_classifier_frame_range(
+            dataset, train_indices, classifier_config
+        )
+        val_indices = _filter_memory_classifier_frame_range(
+            dataset, val_indices, classifier_config
+        )
+    train_subset = torch.utils.data.Subset(dataset, train_indices)
+    val_subset = torch.utils.data.Subset(dataset, val_indices)
+    train_torch, val_torch = _make_split_torch_loaders(
+        config, data_sharding, train_subset, val_subset
+    )
+    logging.info(
+        "Episode-level dataset split: train=%d, val=%d samples (val_ratio=%s)",
+        len(train_indices),
+        len(val_indices),
+        config.val_ratio,
+    )
+    return (
+        _data_loader.DataLoaderImpl(data_config, train_torch),
+        _data_loader.DataLoaderImpl(data_config, val_torch),
+    )
+
+
+@at.typecheck
+def eval_step(
+    config: _config.TrainConfig,
+    rng: at.KeyArrayLike,
+    state: training_utils.TrainState,
+    batch: tuple[_model.Observation, _model.Actions],
+    *,
+    class_labels_by_episode: at.Array | None = None,
+) -> dict[str, at.Array]:
+    """Run one gradient-free validation step using clean observations."""
+    params = state.ema_params if state.ema_params is not None else state.params
+    model = nnx.merge(state.model_def, params)
+    model.eval()
+    observation, actions = batch
+    classifier_config = config.shellgame_memory_classifier
+    classifier_on = bool(classifier_config.enabled)
+    classifier_weight = float(classifier_config.loss_weight)
+    action_loss_weight = float(classifier_config.action_loss_weight) if classifier_on else 1.0
+    zero = jnp.asarray(0.0, dtype=jnp.float32)
+
+    if classifier_on and action_loss_weight == 0.0:
+        history_class_logits, aux = model.compute_history_classification(
+            rng, observation, train=False
+        )
+        action_loss = zero
+    else:
+        chunked_loss, aux = model.compute_loss_with_memory_aux(
+            rng, observation, actions, train=False
+        )
+        action_loss = jnp.mean(chunked_loss)
+        history_class_logits = aux["history_class_logits"] if classifier_on else None
+
+    diversity_loss = memory_diversity_loss(aux["history_mem"])
+    diversity_weight = float(getattr(config.model, "diversity_weight", 0.0))
+    if classifier_on:
+        if class_labels_by_episode is None:
+            raise ValueError("Memory classifier is enabled but no episode label table was provided.")
+        if observation.episode_index is None or observation.frame_index is None:
+            raise ValueError("Memory classifier requires episode_index and frame_index in every batch.")
+        episode_index = jnp.asarray(observation.episode_index, dtype=jnp.int32)
+        frame_index = jnp.asarray(observation.frame_index, dtype=jnp.int32)
+        episode_valid = (episode_index >= 0) & (episode_index < class_labels_by_episode.shape[0])
+        safe_episode_index = jnp.clip(episode_index, 0, class_labels_by_episode.shape[0] - 1)
+        labels = class_labels_by_episode[safe_episode_index]
+        valid = (
+            episode_valid
+            & (labels >= 0)
+            & (frame_index >= classifier_config.min_frame_index)
+            & (frame_index <= classifier_config.max_frame_index)
+        )
+        valid_f = valid.astype(jnp.float32)
+        valid_count = jnp.sum(valid_f)
+        safe_labels = jnp.maximum(labels, 0)
+        per_sample_loss = optax.softmax_cross_entropy_with_integer_labels(history_class_logits, safe_labels)
+        classifier_loss_sum = jnp.sum(per_sample_loss * valid_f)
+        classifier_correct_count = jnp.sum(
+            (jnp.argmax(history_class_logits, axis=-1) == safe_labels) * valid_f
+        )
+        classifier_loss = classifier_loss_sum / jnp.maximum(valid_count, 1.0)
+        classifier_accuracy = classifier_correct_count / jnp.maximum(valid_count, 1.0)
+        classifier_valid_fraction = valid_count / valid_f.size
+    else:
+        classifier_loss = classifier_accuracy = classifier_valid_fraction = zero
+        classifier_loss_sum = classifier_correct_count = valid_count = zero
+
+    total_loss = (
+        action_loss_weight * action_loss
+        + diversity_weight * diversity_loss
+        + classifier_weight * classifier_loss
+    )
+    return {
+        "val/loss": total_loss,
+        "val/action_loss": action_loss,
+        "val/diversity_loss": diversity_loss,
+        "val/history_classifier_loss": classifier_loss,
+        "val/history_classifier_accuracy": classifier_accuracy,
+        "val/history_classifier_valid_fraction": classifier_valid_fraction,
+        "_val/history_classifier_loss_sum": classifier_loss_sum,
+        "_val/history_classifier_correct_count": classifier_correct_count,
+        "_val/history_classifier_valid_count": valid_count,
+    }
+
+
+def run_evaluation(
+    peval_step,
+    eval_rng: at.KeyArrayLike,
+    val_iter,
+    config: _config.TrainConfig,
+    mesh: jax.sharding.Mesh,
+    state: training_utils.TrainState,
+):
+    """Average validation metrics over ``config.eval_batches`` batches."""
+    eval_infos = []
+    for batch_index in range(config.eval_batches):
+        batch = next(val_iter)
+        batch_rng = jax.random.fold_in(eval_rng, batch_index)
+        with sharding.set_mesh(mesh):
+            eval_infos.append(peval_step(batch_rng, state, batch))
+
+    stacked_infos = jax.device_get(common_utils.stack_forest(eval_infos))
+    reduced = jax.tree.map(jnp.mean, stacked_infos)
+    classifier_config = config.shellgame_memory_classifier
+    if classifier_config.enabled:
+        valid_count = float(jnp.sum(stacked_infos["_val/history_classifier_valid_count"]))
+        loss_sum = float(jnp.sum(stacked_infos["_val/history_classifier_loss_sum"]))
+        correct_count = float(jnp.sum(stacked_infos["_val/history_classifier_correct_count"]))
+        classifier_loss = loss_sum / max(valid_count, 1.0)
+        classifier_accuracy = correct_count / max(valid_count, 1.0)
+        reduced["val/history_classifier_loss"] = classifier_loss
+        reduced["val/history_classifier_accuracy"] = classifier_accuracy
+        reduced["val/loss"] = (
+            classifier_config.action_loss_weight * float(reduced["val/action_loss"])
+            + float(getattr(config.model, "diversity_weight", 0.0)) * float(reduced["val/diversity_loss"])
+            + classifier_config.loss_weight * classifier_loss
+        )
+    return {
+        key: float(value)
+        for key, value in reduced.items()
+        if not key.startswith("_val/")
+    }
+
+
+def shellgame_cup_eval_step(
+    rng: at.KeyArrayLike,
+    state: training_utils.TrainState,
+    observation: _model.Observation,
+    *,
+    num_steps: int,
+):
+    """Sample joint chunks from current EMA weights for task-level FK eval."""
+    params = state.ema_params if state.ema_params is not None else state.params
+    model = nnx.merge(state.model_def, params)
+    model.eval()
+    return model.sample_actions(rng, observation, num_steps=num_steps)
+
+
+def _load_shellgame_cup_eval_module():
+    shellgame_dir = _SCRIPTS_DIR.parent / "examples" / "shellgame"
+    if str(shellgame_dir) not in sys.path:
+        sys.path.insert(0, str(shellgame_dir))
+    return importlib.import_module("training_cup_eval")
+
+
+def run_shellgame_cup_evaluation(
+    psample_actions,
+    evaluator,
+    mesh: jax.sharding.Mesh,
+    state: training_utils.TrainState,
+    *,
+    step: int,
+) -> dict[str, float]:
+    """Run fixed-noise sampling batches, then FK and cup classification."""
+    action_batches = []
+    for batch_index, observation, valid_size in evaluator.iter_batches():
+        with sharding.set_mesh(mesh):
+            normalized_actions = psample_actions(
+                evaluator.sample_rng(batch_index), state, observation
+            )
+        action_batches.append(np.asarray(jax.device_get(normalized_actions))[:valid_size])
+    metrics = evaluator.summarize(action_batches, step=step)
+    if len(action_batches) != evaluator.num_batches:
+        raise RuntimeError(
+            f"ShellGame cup eval produced {len(action_batches)} batches; "
+            f"expected {evaluator.num_batches}."
+        )
+    return metrics
+
+
+def load_episode_class_labels(config: _config.TrainConfig) -> jax.Array | None:
+    """Load a dense episode_index -> class-id lookup for the diagnostic head."""
+    classifier_config = config.shellgame_memory_classifier
+    if not classifier_config.enabled:
+        return None
+    metadata_path = Path(classifier_config.episodes_metadata_path).expanduser().resolve()
+    if not metadata_path.is_file():
+        raise FileNotFoundError(f"Memory-classifier episode metadata not found: {metadata_path}")
+    class_to_index = {name: index for index, name in enumerate(classifier_config.classes)}
+    records = []
+    with metadata_path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            episode_index = int(record["episode_index"])
+            label_name = str(record[classifier_config.label_key])
+            if label_name not in class_to_index:
+                raise ValueError(
+                    f"Unknown {classifier_config.label_key}={label_name!r} at "
+                    f"{metadata_path}:{line_number}; expected {tuple(class_to_index)}"
+                )
+            records.append((episode_index, class_to_index[label_name]))
+    if not records:
+        raise ValueError(f"No episode labels found in {metadata_path}")
+    labels = np.full(max(index for index, _ in records) + 1, -1, dtype=np.int32)
+    for episode_index, class_index in records:
+        if labels[episode_index] >= 0:
+            raise ValueError(f"Duplicate episode_index={episode_index} in {metadata_path}")
+        labels[episode_index] = class_index
+    counts = np.bincount(labels[labels >= 0], minlength=len(class_to_index))
+    logging.info(
+        "Loaded %d memory-classifier labels from %s: %s",
+        len(records),
+        metadata_path,
+        {name: int(counts[index]) for name, index in class_to_index.items()},
+    )
+    return jnp.asarray(labels)
 
 
 def main(config: _config.TrainConfig):
@@ -814,6 +1402,33 @@ def main(config: _config.TrainConfig):
             f"{type(config.data).__name__}."
         )
 
+    classifier_config = config.shellgame_memory_classifier
+    if classifier_config.enabled:
+        if config.model.history_classifier_num_classes != len(classifier_config.classes):
+            raise ValueError(
+                "history_classifier_num_classes must match shellgame_memory_classifier.classes: "
+                f"{config.model.history_classifier_num_classes} != {len(classifier_config.classes)}"
+            )
+        if classifier_config.min_frame_index > classifier_config.max_frame_index:
+            raise ValueError("Memory-classifier min_frame_index must not exceed max_frame_index.")
+        if classifier_config.overfit_samples_per_class < 0:
+            raise ValueError("overfit_samples_per_class must be nonnegative.")
+        if (
+            classifier_config.overfit_same_samples_for_validation
+            and classifier_config.overfit_samples_per_class == 0
+        ):
+            raise ValueError(
+                "overfit_same_samples_for_validation requires overfit_samples_per_class > 0."
+            )
+        if config.val_ratio <= 0.0:
+            raise ValueError("Memory-classifier diagnostics require an episode-held-out validation split.")
+    class_labels_by_episode = load_episode_class_labels(config)
+    if classifier_config.enabled:
+        logging.info(
+            "Memory-classifier stochastic train augmentation: %s",
+            not classifier_config.disable_train_augmentation,
+        )
+
     # === Everything below mirrors scripts/mem/train_pi0_mem.py.main verbatim. ===
     # The only swap is the model-config type check above; the data loader
     # factory is the same (Pi0MemCompress consumes the exact same video
@@ -841,13 +1456,47 @@ def main(config: _config.TrainConfig):
     )
     init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
 
-    # Pi0Mem-aware data loader: identical contract for Pi0MemCompress because
-    # the visual backbone change is invisible at the data-pipeline boundary.
-    data_loader = _config_pi0_mem.create_pi0_mem_data_loader(
-        config,
-        sharding=data_sharding,
-        shuffle=True,
-    )
+    use_val = config.val_ratio > 0.0
+    use_shellgame_cup_eval = config.shellgame_cup_eval.enabled
+    if use_val:
+        if config.eval_interval <= 0:
+            raise ValueError(f"eval_interval must be positive; got {config.eval_interval}.")
+        if config.eval_batches <= 0:
+            raise ValueError(f"eval_batches must be positive; got {config.eval_batches}.")
+    if use_shellgame_cup_eval:
+        if not use_val:
+            raise ValueError("shellgame_cup_eval.enabled requires val_ratio > 0.")
+        if config.shellgame_cup_eval.interval <= 0:
+            raise ValueError(
+                "shellgame_cup_eval.interval must be positive; "
+                f"got {config.shellgame_cup_eval.interval}."
+            )
+        if config.shellgame_cup_eval.batch_size % jax.device_count() != 0:
+            raise ValueError(
+                "shellgame_cup_eval.batch_size must be divisible by the global JAX device count "
+                f"({jax.device_count()}); got {config.shellgame_cup_eval.batch_size}."
+            )
+
+    # Pi0Mem-aware data loaders. The split is performed by episode rather than
+    # frame so neighboring/history frames cannot appear on opposite sides.
+    val_data_loader = None
+    if use_val:
+        data_loader, val_data_loader = create_train_val_data_loaders(
+            config, data_sharding, class_labels_by_episode
+        )
+        val_iter = iter(val_data_loader)
+        logging.info(
+            "Validation enabled: val_ratio=%s, eval_interval=%d, eval_batches=%d",
+            config.val_ratio,
+            config.eval_interval,
+            config.eval_batches,
+        )
+    else:
+        data_loader = _config_pi0_mem.create_pi0_mem_data_loader(
+            config,
+            sharding=data_sharding,
+            shuffle=True,
+        )
 
     data_iter = iter(data_loader)
     batch = next(data_iter)
@@ -860,12 +1509,43 @@ def main(config: _config.TrainConfig):
     if resuming:
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
 
+    shellgame_cup_evaluator = None
+    if use_shellgame_cup_eval:
+        cup_eval_module = _load_shellgame_cup_eval_module()
+        shellgame_cup_evaluator = cup_eval_module.ShellgameCupEvaluator(
+            config, config.shellgame_cup_eval
+        )
+
     ptrain_step = jax.jit(
-        functools.partial(train_step, config),
+        functools.partial(
+            train_step,
+            config,
+            class_labels_by_episode=class_labels_by_episode,
+        ),
         in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
         out_shardings=(train_state_sharding, replicated_sharding),
         donate_argnums=(1,),
     )
+    if use_val:
+        peval_step = jax.jit(
+            functools.partial(
+                eval_step,
+                config,
+                class_labels_by_episode=class_labels_by_episode,
+            ),
+            in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+            out_shardings=replicated_sharding,
+        )
+        best_val_loss = float("inf")
+    if use_shellgame_cup_eval:
+        pshellgame_cup_eval = jax.jit(
+            functools.partial(
+                shellgame_cup_eval_step,
+                num_steps=config.shellgame_cup_eval.num_sampling_steps,
+            ),
+            in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+            out_shardings=data_sharding,
+        )
 
     start_step = int(train_state.step)
     pbar = tqdm.tqdm(
@@ -941,11 +1621,66 @@ def main(config: _config.TrainConfig):
             timing_stats["loop_wall_s"] += time.perf_counter() - loop_start
             timing_stats["count"] += 1
 
+        if use_val and step % config.eval_interval == 0 and step > start_step:
+            eval_rng = jax.random.fold_in(train_rng, step)
+            val_metrics = run_evaluation(
+                peval_step, eval_rng, val_iter, config, mesh, train_state
+            )
+            val_str = ", ".join(f"{key}={value:.6f}" for key, value in val_metrics.items())
+            pbar.write(f"Step {step} [eval]: {val_str}")
+            wandb.log(val_metrics, step=step)
+            if val_metrics["val/loss"] < best_val_loss:
+                best_val_loss = val_metrics["val/loss"]
+                pbar.write(f"Step {step}: new best val/loss={best_val_loss:.6f}")
+
+        if (
+            use_shellgame_cup_eval
+            and step % config.shellgame_cup_eval.interval == 0
+            and step > start_step
+        ):
+            cup_metrics = run_shellgame_cup_evaluation(
+                pshellgame_cup_eval,
+                shellgame_cup_evaluator,
+                mesh,
+                train_state,
+                step=step,
+            )
+            cup_str = ", ".join(f"{key}={value:.6f}" for key, value in cup_metrics.items())
+            pbar.write(f"Step {step} [cup eval]: {cup_str}")
+            wandb.log(cup_metrics, step=step)
+
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
             _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
 
+    if use_val:
+        logging.info("Running final validation...")
+        final_metrics = run_evaluation(
+            peval_step,
+            jax.random.fold_in(train_rng, config.num_train_steps),
+            val_iter,
+            config,
+            mesh,
+            train_state,
+        )
+        wandb.log(final_metrics, step=config.num_train_steps)
+        logging.info("Final validation: %s; best val/loss=%.6f", final_metrics, best_val_loss)
+
+    if use_shellgame_cup_eval:
+        logging.info("Running final ShellGame cup-selection validation...")
+        final_cup_metrics = run_shellgame_cup_evaluation(
+            pshellgame_cup_eval,
+            shellgame_cup_evaluator,
+            mesh,
+            train_state,
+            step=config.num_train_steps,
+        )
+        wandb.log(final_cup_metrics, step=config.num_train_steps)
+        logging.info("Final ShellGame cup validation: %s", final_cup_metrics)
+
     logging.info("Waiting for checkpoint manager to finish")
     checkpoint_manager.wait_until_finished()
+    if shellgame_cup_evaluator is not None:
+        shellgame_cup_evaluator.close()
 
 
 if __name__ == "__main__":

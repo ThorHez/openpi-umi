@@ -34,6 +34,7 @@ from openpi.models import pi0_config
 import openpi.models.gemma as _gemma
 import openpi.models.siglip_mem_compress as _siglip_mem_compress
 from openpi.shared import array_typing as at
+import openpi.shared.nnx_utils as nnx_utils
 
 logger = logging.getLogger("openpi")
 
@@ -127,6 +128,9 @@ class Pi0MemCompressConfig(pi0_config.Pi0Config):
     # optimizer-state structure. Set to e.g. 10.0 for a new run if the gate
     # remains stuck near its initialization value.
     history_gate_lr_multiplier: float = 1.0
+    # Optional diagnostic head over pooled compressed-history tokens. A value
+    # of zero keeps the original model/checkpoint structure unchanged.
+    history_classifier_num_classes: int = 0
     # Gradient checkpointing policy for the SigLIP encoder. See
     # ``Pi0MemConfig.siglip_remat_policy`` for the trade-off discussion; the
     # current-frame-only carry already makes the compressed encoder cheaper
@@ -136,6 +140,11 @@ class Pi0MemCompressConfig(pi0_config.Pi0Config):
     @override
     def create(self, rng: at.KeyArrayLike) -> "Pi0MemCompress":
         return Pi0MemCompress(self, rngs=nnx.Rngs(rng))
+
+    def get_freeze_filter_history_classifier_probe(self) -> nnx.filterlib.Filter:
+        """Freeze everything except the resampler and diagnostic classifier."""
+        probe_params = nnx_utils.PathRegex(r".*(HistoryResampler_0|HistoryClassifier).*")
+        return nnx.Not(probe_params)
 
     @override
     def inputs_spec(self, *, batch_size: int = 1) -> tuple[_model.Observation, _model.Actions]:
@@ -224,7 +233,43 @@ class Pi0MemCompress(_model.BaseModel):
             self.action_time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
         self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
 
+        self.history_classifier_num_classes = config.history_classifier_num_classes
+        if self.history_classifier_num_classes > 0:
+            vision_width = _siglip_mem_compress.decode_variant("So400m/14")["width"]
+            # Preserve the learned memory-slot ordering in this diagnostic
+            # probe. HistoryResampler explicitly centers its output over the
+            # slot axis, so mean-pooling slots would produce an identically
+            # zero classifier input and block all gradients to the resampler.
+            # A linear readout over flattened, per-token-normalized memory is
+            # still deliberately simple: it only tests linear decodability.
+            # Keep the two modules explicitly named instead of using
+            # nnx.Sequential. Sequential stores integer path components,
+            # which the legacy Flax checkpoint merger cannot flatten.
+            self.HistoryClassifierNorm = nnx.LayerNorm(vision_width, rngs=rngs)
+            self.HistoryClassifierHead = nnx.Linear(
+                config.history_memory_tokens * vision_width,
+                self.history_classifier_num_classes,
+                rngs=rngs,
+            )
+
         self.deterministic = True
+
+    def _history_class_logits(self, obs: _model.Observation, encoder_auxes):
+        """Classify flattened memory slots after mask-weighting image streams."""
+        if self.history_classifier_num_classes <= 0:
+            return None
+        memories = []
+        stream_masks = []
+        for name, encoder_aux in zip(obs.images, encoder_auxes, strict=True):
+            memories.append(encoder_aux["history_mem"])
+            stream_masks.append(jnp.asarray(obs.image_masks[name], dtype=jnp.float32))
+        memory = jnp.stack(memories, axis=1)
+        masks = jnp.stack(stream_masks, axis=1)
+        denom = jnp.maximum(jnp.sum(masks, axis=1, keepdims=True), 1.0)
+        memory = jnp.sum(memory * masks[..., None, None], axis=1) / denom[..., None]
+        memory = self.HistoryClassifierNorm(memory)
+        flattened_memory = memory.reshape(memory.shape[0], -1)
+        return self.HistoryClassifierHead(flattened_memory)
 
     def _embed_prefix_with_history_mem(self, obs: _model.Observation):
         """Internal embed-prefix that also returns the compressed history memory.
@@ -438,8 +483,27 @@ class Pi0MemCompress(_model.BaseModel):
         else:
             loss_per_timestep = jnp.mean(squared_error, axis=-1)
 
-        aux = {"history_mem": history_mem, "encoder_auxes": encoder_auxes}
+        aux = {
+            "history_mem": history_mem,
+            "encoder_auxes": encoder_auxes,
+            "history_class_logits": self._history_class_logits(observation, encoder_auxes),
+        }
         return loss_per_timestep, aux
+
+    def compute_history_classification(
+        self,
+        rng: at.KeyArrayLike,
+        observation: _model.Observation,
+        *,
+        train: bool = False,
+    ):
+        """Run only the visual-history path and diagnostic classifier."""
+        observation = _model.preprocess_observation(rng, observation, train=train)
+        _, _, _, history_mem, encoder_auxes = self._embed_prefix_with_history_mem(observation)
+        logits = self._history_class_logits(observation, encoder_auxes)
+        if logits is None:
+            raise ValueError("history_classifier_num_classes must be positive")
+        return logits, {"history_mem": history_mem, "encoder_auxes": encoder_auxes}
 
     @override
     def sample_actions(
