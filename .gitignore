@@ -194,3 +194,5 @@ third_party/
 ablation/
 
 ablation_results/
+
+*.mp4
