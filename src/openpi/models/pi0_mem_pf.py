@@ -179,10 +179,16 @@ class Pi0MemPFConfig(pi0_mem_compress.Pi0MemCompressConfig):
     slot). New fields configure the future side.
     """
 
+    # Stride between consecutive past/current frames in raw dataset rows.
+    # Training injects this into the Pi0Mem-aware data factory.
+    frame_stride: int = 1
     # F: number of future frames appended after the current frame in the clip.
     # 0 disables the posterior path entirely (the model degenerates to a
     # compress-style history-only model plus a prior latent branch).
     num_future_frames: int = 0
+    # Stride between consecutive future frames in raw dataset rows.
+    # Training injects this into the Pi0Mem-aware data factory.
+    future_frame_stride: int = 1
     # Mz: number of latent tokens for Zpost / Zprior.
     future_latent_tokens: int = 64
     # Condition Zpost on the pooled current frame (CVAE-style posterior

@@ -1,0 +1,1974 @@
+{
+  "dataset_root": "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/shellgame_absolute_joint_dataset",
+  "episodes": [
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.010076803483907092,
+      "eef_replay_xy_rmse_m": 0.0059675722095874646,
+      "episode": "episode_000257",
+      "final_ball_cup": "middle",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.012182382103475862,
+      "joint_tracking_max_abs_rad": 0.12386465072631836,
+      "joint_tracking_rmse_rad": 0.023582818264713007,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.02381417527794838,
+        "5": 0.02958931028842926,
+        "6": 0.015754051506519318,
+        "7": 0.02126586250960827
+      },
+      "seed": 305690782,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.16830527782440186,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16830527782440186
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 8.680934115545824e-05
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.011604713364288187,
+      "eef_replay_xy_rmse_m": 0.009031902387527489,
+      "episode": "episode_000267",
+      "final_ball_cup": "right",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.017440237557949653,
+      "joint_tracking_max_abs_rad": 0.14584708213806152,
+      "joint_tracking_rmse_rad": 0.028049476872018236,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03455173969268799,
+        "5": 0.030859660357236862,
+        "6": 0.017856106162071228,
+        "7": 0.021839668974280357
+      },
+      "seed": 421980148,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.1681811809539795,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.1681811809539795
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 0.00019733779481612146
+    },
+    {
+      "cup_selection": "middle",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 30,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.010657002437845627,
+      "eef_replay_xy_rmse_m": 0.007157998627947996,
+      "episode": "episode_000308",
+      "final_ball_cup": "middle",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.013066823843832013,
+      "joint_tracking_max_abs_rad": 0.14324426651000977,
+      "joint_tracking_rmse_rad": 0.024946156566768584,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.028610017150640488,
+        "5": 0.028951367363333702,
+        "6": 0.015498124063014984,
+        "7": 0.020974798128008842
+      },
+      "seed": 743817307,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": 0.1682373285293579,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.1682373285293579
+      },
+      "target_cup": "middle",
+      "target_selection_min_xy_distance_m": 5.0405971705913544e-05
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.010515987406242341,
+      "eef_replay_xy_rmse_m": 0.0070272483231573766,
+      "episode": "episode_000641",
+      "final_ball_cup": "middle",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.013704898205578775,
+      "joint_tracking_max_abs_rad": 0.13894319534301758,
+      "joint_tracking_rmse_rad": 0.024898246356947158,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.027368133887648582,
+        "5": 0.02986583672463894,
+        "6": 0.01606643758714199,
+        "7": 0.021381931379437447
+      },
+      "seed": 1346531643,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.16838312149047852,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16838312149047852
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 0.00015115851419977844
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.011851134338718051,
+      "eef_replay_xy_rmse_m": 0.009680891602101994,
+      "episode": "episode_000776",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.018025679487903092,
+      "joint_tracking_max_abs_rad": 0.15295124053955078,
+      "joint_tracking_rmse_rad": 0.028977180318373607,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03728640079498291,
+        "5": 0.030313242226839066,
+        "6": 0.018033482134342194,
+        "7": 0.02166704274713993
+      },
+      "seed": 1525597912,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.16810357570648193,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16810357570648193
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 0.00016393340774811804
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.011794870380666391,
+      "eef_replay_xy_rmse_m": 0.009372970280180819,
+      "episode": "episode_001036",
+      "final_ball_cup": "right",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.01828358769696906,
+      "joint_tracking_max_abs_rad": 0.1448228359222412,
+      "joint_tracking_rmse_rad": 0.028738185049355592,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03565145283937454,
+        "5": 0.031293194741010666,
+        "6": 0.018999189138412476,
+        "7": 0.022125067189335823
+      },
+      "seed": 1697548670,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.16806459426879883,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16806459426879883
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 0.00014862898387946188
+    },
+    {
+      "cup_selection": "right",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 0,
+        "right": 30
+      },
+      "eef_replay_rmse_m": 0.011555667617312396,
+      "eef_replay_xy_rmse_m": 0.008852797403749732,
+      "episode": "episode_001178",
+      "final_ball_cup": "right",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.01763203968328977,
+      "joint_tracking_max_abs_rad": 0.1514890193939209,
+      "joint_tracking_rmse_rad": 0.028195398304182884,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.034586306661367416,
+        "5": 0.031111013144254684,
+        "6": 0.01837570033967495,
+        "7": 0.021975437179207802
+      },
+      "seed": 75588583,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": -0.002013683319091797,
+          "right": 0.1679452657699585
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.1679452657699585
+      },
+      "target_cup": "right",
+      "target_selection_min_xy_distance_m": 0.00019711237109731883
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.011975794516448457,
+      "eef_replay_xy_rmse_m": 0.009358035685622471,
+      "episode": "episode_001199",
+      "final_ball_cup": "right",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.016775556211184737,
+      "joint_tracking_max_abs_rad": 0.14982867240905762,
+      "joint_tracking_rmse_rad": 0.028167961833266846,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03612411022186279,
+        "5": 0.02970748208463192,
+        "6": 0.016544684767723083,
+        "7": 0.02127355895936489
+      },
+      "seed": 1939747997,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.1681196689605713,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.1681196689605713
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 0.0002303349319845438
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.012279550968646654,
+      "eef_replay_xy_rmse_m": 0.010207736404463328,
+      "episode": "episode_001269",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.02004047149750299,
+      "joint_tracking_max_abs_rad": 0.1479979157447815,
+      "joint_tracking_rmse_rad": 0.030845151451288643,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.039605479687452316,
+        "5": 0.032023847103118896,
+        "6": 0.021324127912521362,
+        "7": 0.022847115993499756
+      },
+      "seed": 1395077814,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.16800212860107422,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16800212860107422
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 9.781109838513657e-05
+    },
+    {
+      "cup_selection": "middle",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 30,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.010965158121047262,
+      "eef_replay_xy_rmse_m": 0.007262727326649742,
+      "episode": "episode_001566",
+      "final_ball_cup": "middle",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.01252234579655657,
+      "joint_tracking_max_abs_rad": 0.149092435836792,
+      "joint_tracking_rmse_rad": 0.025414787661766546,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.029926232993602753,
+        "5": 0.028933178633451462,
+        "6": 0.015418408438563347,
+        "7": 0.020958703011274338
+      },
+      "seed": 48910575,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": 0.16828203201293945,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16828203201293945
+      },
+      "target_cup": "middle",
+      "target_selection_min_xy_distance_m": 4.909734707325697e-05
+    },
+    {
+      "cup_selection": "middle",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 30,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.011482863775235498,
+      "eef_replay_xy_rmse_m": 0.008826701829748818,
+      "episode": "episode_001650",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.01789933753556999,
+      "joint_tracking_max_abs_rad": 0.1449737548828125,
+      "joint_tracking_rmse_rad": 0.02829876889690876,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03451599180698395,
+        "5": 0.031296342611312866,
+        "6": 0.018951108679175377,
+        "7": 0.02214024029672146
+      },
+      "seed": 525601619,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": 0.168212890625,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.168212890625
+      },
+      "target_cup": "middle",
+      "target_selection_min_xy_distance_m": 0.0001817824668250978
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.011956739495439931,
+      "eef_replay_xy_rmse_m": 0.009630935475405793,
+      "episode": "episode_001903",
+      "final_ball_cup": "right",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.017521454289877662,
+      "joint_tracking_max_abs_rad": 0.15680480003356934,
+      "joint_tracking_rmse_rad": 0.028784475402883626,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03731875121593475,
+        "5": 0.029954614117741585,
+        "6": 0.017174573615193367,
+        "7": 0.02140490710735321
+      },
+      "seed": 804464778,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.16798508167266846,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16798508167266846
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 0.00019731030624825507
+    },
+    {
+      "cup_selection": "right",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 0,
+        "right": 30
+      },
+      "eef_replay_rmse_m": 0.011495234331610907,
+      "eef_replay_xy_rmse_m": 0.00902289379427072,
+      "episode": "episode_002036",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.01745891285696088,
+      "joint_tracking_max_abs_rad": 0.15311598777770996,
+      "joint_tracking_rmse_rad": 0.028049649326036957,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03485306352376938,
+        "5": 0.030538851395249367,
+        "6": 0.017834318801760674,
+        "7": 0.021692145615816116
+      },
+      "seed": 958254026,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": -0.002013683319091797,
+          "right": 0.1679220199584961
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.1679220199584961
+      },
+      "target_cup": "right",
+      "target_selection_min_xy_distance_m": 0.00018835760420188308
+    },
+    {
+      "cup_selection": "middle",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 30,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.01199662520113848,
+      "eef_replay_xy_rmse_m": 0.009282308720722868,
+      "episode": "episode_002227",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.01627803633980369,
+      "joint_tracking_max_abs_rad": 0.15504097938537598,
+      "joint_tracking_rmse_rad": 0.027856820904002436,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03581361472606659,
+        "5": 0.0293143168091774,
+        "6": 0.01599687896668911,
+        "7": 0.021041592583060265
+      },
+      "seed": 728327637,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": 0.1679142713546753,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.1679142713546753
+      },
+      "target_cup": "middle",
+      "target_selection_min_xy_distance_m": 0.00021637440659105778
+    },
+    {
+      "cup_selection": "middle",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 30,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.010331043676710427,
+      "eef_replay_xy_rmse_m": 0.006452370910411133,
+      "episode": "episode_002382",
+      "final_ball_cup": "middle",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.012170178232420432,
+      "joint_tracking_max_abs_rad": 0.13474178314208984,
+      "joint_tracking_rmse_rad": 0.024140522112680335,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.02571762539446354,
+        "5": 0.02944071777164936,
+        "6": 0.015709882602095604,
+        "7": 0.02119140513241291
+      },
+      "seed": 696005677,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": 0.16843795776367188,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16843795776367188
+      },
+      "target_cup": "middle",
+      "target_selection_min_xy_distance_m": 8.04709707153961e-05
+    },
+    {
+      "cup_selection": "right",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 0,
+        "right": 30
+      },
+      "eef_replay_rmse_m": 0.010659816751131763,
+      "eef_replay_xy_rmse_m": 0.006715162415373722,
+      "episode": "episode_002477",
+      "final_ball_cup": "middle",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.012370523103841938,
+      "joint_tracking_max_abs_rad": 0.13790655136108398,
+      "joint_tracking_rmse_rad": 0.02456708009963629,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.026892397552728653,
+        "5": 0.029224850237369537,
+        "6": 0.017260299995541573,
+        "7": 0.021097993478178978
+      },
+      "seed": 670662212,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": -0.002013683319091797,
+          "right": 0.16372954845428467
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16372954845428467
+      },
+      "target_cup": "right",
+      "target_selection_min_xy_distance_m": 0.000222405738895759
+    },
+    {
+      "cup_selection": "middle",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 30,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.011936597529688685,
+      "eef_replay_xy_rmse_m": 0.009464603024953371,
+      "episode": "episode_002606",
+      "final_ball_cup": "right",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.017397583628255397,
+      "joint_tracking_max_abs_rad": 0.15459179878234863,
+      "joint_tracking_rmse_rad": 0.028626245311287175,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03663323447108269,
+        "5": 0.03027781844139099,
+        "6": 0.01733304001390934,
+        "7": 0.021547159180045128
+      },
+      "seed": 657652854,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": 0.1680612564086914,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.1680612564086914
+      },
+      "target_cup": "middle",
+      "target_selection_min_xy_distance_m": 0.0002146394399460405
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.01075239725940448,
+      "eef_replay_xy_rmse_m": 0.007795451527558681,
+      "episode": "episode_002683",
+      "final_ball_cup": "right",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.015979132290817516,
+      "joint_tracking_max_abs_rad": 0.13706326484680176,
+      "joint_tracking_rmse_rad": 0.026201076381469037,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03013654053211212,
+        "5": 0.030277272686362267,
+        "6": 0.01768714189529419,
+        "7": 0.021717805415391922
+      },
+      "seed": 485246102,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.16817069053649902,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16817069053649902
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 0.00018815249495673925
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.012202166379840737,
+      "eef_replay_xy_rmse_m": 0.00968127500042414,
+      "episode": "episode_002725",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.016446825122474727,
+      "joint_tracking_max_abs_rad": 0.1676335334777832,
+      "joint_tracking_rmse_rad": 0.028453003103501733,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03744300827383995,
+        "5": 0.029120584949851036,
+        "6": 0.015715334564447403,
+        "7": 0.02098994515836239
+      },
+      "seed": 373926388,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.16791796684265137,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16791796684265137
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 7.109695434337482e-05
+    },
+    {
+      "cup_selection": "middle",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 30,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.012254037782229247,
+      "eef_replay_xy_rmse_m": 0.00961009381615342,
+      "episode": "episode_002730",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.017151224146127925,
+      "joint_tracking_max_abs_rad": 0.15495705604553223,
+      "joint_tracking_rmse_rad": 0.028623130975603914,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03713913634419441,
+        "5": 0.02959275059401989,
+        "6": 0.017480121925473213,
+        "7": 0.021302122622728348
+      },
+      "seed": 1835078344,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": 0.16115593910217285,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16115593910217285
+      },
+      "target_cup": "middle",
+      "target_selection_min_xy_distance_m": 0.0002188782236771658
+    },
+    {
+      "cup_selection": "right",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 0,
+        "right": 30
+      },
+      "eef_replay_rmse_m": 0.010668379726021707,
+      "eef_replay_xy_rmse_m": 0.006785314040168361,
+      "episode": "episode_002765",
+      "final_ball_cup": "middle",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.012266104613059669,
+      "joint_tracking_max_abs_rad": 0.13922381401062012,
+      "joint_tracking_rmse_rad": 0.024802249015581406,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.02782207727432251,
+        "5": 0.029313722625374794,
+        "6": 0.015569208189845085,
+        "7": 0.02111699990928173
+      },
+      "seed": 1668249400,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": -0.002013683319091797,
+          "right": 0.16838502883911133
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16838502883911133
+      },
+      "target_cup": "right",
+      "target_selection_min_xy_distance_m": 0.00015465928299818188
+    },
+    {
+      "cup_selection": "right",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 0,
+        "right": 30
+      },
+      "eef_replay_rmse_m": 0.01066344563285975,
+      "eef_replay_xy_rmse_m": 0.006671478303630894,
+      "episode": "episode_002823",
+      "final_ball_cup": "middle",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.01270884436161758,
+      "joint_tracking_max_abs_rad": 0.1356508731842041,
+      "joint_tracking_rmse_rad": 0.024817236221888063,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.0274493470788002,
+        "5": 0.029649054631590843,
+        "6": 0.015790831297636032,
+        "7": 0.02126782387495041
+      },
+      "seed": 1707513094,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": -0.002013683319091797,
+          "right": 0.16841113567352295
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16841113567352295
+      },
+      "target_cup": "right",
+      "target_selection_min_xy_distance_m": 1.974773476831615e-05
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.011054657091818897,
+      "eef_replay_xy_rmse_m": 0.008601206350773431,
+      "episode": "episode_002943",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.019020729215073407,
+      "joint_tracking_max_abs_rad": 0.13831424713134766,
+      "joint_tracking_rmse_rad": 0.02885157360570401,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03377247229218483,
+        "5": 0.03196088224649429,
+        "6": 0.022830940783023834,
+        "7": 0.023433424532413483
+      },
+      "seed": 1610920690,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.1682952642440796,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.1682952642440796
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 0.0001599280076334253
+    },
+    {
+      "cup_selection": "right",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 0,
+        "right": 30
+      },
+      "eef_replay_rmse_m": 0.011112678139208954,
+      "eef_replay_xy_rmse_m": 0.007320107611578659,
+      "episode": "episode_003089",
+      "final_ball_cup": "middle",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.013061347917156447,
+      "joint_tracking_max_abs_rad": 0.1480271816253662,
+      "joint_tracking_rmse_rad": 0.025761451253733764,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03064185380935669,
+        "5": 0.029131034389138222,
+        "6": 0.015536298975348473,
+        "7": 0.021039534360170364
+      },
+      "seed": 948660583,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": -0.002013683319091797,
+          "right": 0.16819047927856445
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16819047927856445
+      },
+      "target_cup": "right",
+      "target_selection_min_xy_distance_m": 9.963988122763112e-05
+    },
+    {
+      "cup_selection": "right",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 0,
+        "right": 30
+      },
+      "eef_replay_rmse_m": 0.011519305603210081,
+      "eef_replay_xy_rmse_m": 0.008629971801529272,
+      "episode": "episode_003197",
+      "final_ball_cup": "right",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.01670766982207901,
+      "joint_tracking_max_abs_rad": 0.15033435821533203,
+      "joint_tracking_rmse_rad": 0.02735162110126085,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.033381763845682144,
+        "5": 0.030402814969420433,
+        "6": 0.017039040103554726,
+        "7": 0.021547548472881317
+      },
+      "seed": 1105750726,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": -0.002013683319091797,
+          "right": 0.16788828372955322
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16788828372955322
+      },
+      "target_cup": "right",
+      "target_selection_min_xy_distance_m": 0.0002326744288438931
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.010243876803510446,
+      "eef_replay_xy_rmse_m": 0.006497493664257046,
+      "episode": "episode_003212",
+      "final_ball_cup": "middle",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.012543595142144346,
+      "joint_tracking_max_abs_rad": 0.1367650032043457,
+      "joint_tracking_rmse_rad": 0.024169840949364422,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.025554656982421875,
+        "5": 0.02962045557796955,
+        "6": 0.01584395207464695,
+        "7": 0.02127927541732788
+      },
+      "seed": 206583997,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.16836035251617432,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16836035251617432
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 0.00015183945652097464
+    },
+    {
+      "cup_selection": "right",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 0,
+        "right": 30
+      },
+      "eef_replay_rmse_m": 0.011338147461523193,
+      "eef_replay_xy_rmse_m": 0.0089842726836483,
+      "episode": "episode_003580",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.017715532801821268,
+      "joint_tracking_max_abs_rad": 0.15047359466552734,
+      "joint_tracking_rmse_rad": 0.028115902313138492,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03431500867009163,
+        "5": 0.0308538805693388,
+        "6": 0.019042018800973892,
+        "7": 0.02210821397602558
+      },
+      "seed": 271809338,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": -0.002013683319091797,
+          "right": 0.16808748245239258
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16808748245239258
+      },
+      "target_cup": "right",
+      "target_selection_min_xy_distance_m": 0.00015276673366315663
+    },
+    {
+      "cup_selection": "right",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 0,
+        "right": 30
+      },
+      "eef_replay_rmse_m": 0.01074954694763157,
+      "eef_replay_xy_rmse_m": 0.006944273260811372,
+      "episode": "episode_003758",
+      "final_ball_cup": "middle",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.012946724267046255,
+      "joint_tracking_max_abs_rad": 0.1406400203704834,
+      "joint_tracking_rmse_rad": 0.024958014478377144,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.02764064259827137,
+        "5": 0.029543591663241386,
+        "6": 0.01734495535492897,
+        "7": 0.02124055102467537
+      },
+      "seed": 1046080832,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": -0.002013683319091797,
+          "right": 0.16352498531341553
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16352498531341553
+      },
+      "target_cup": "right",
+      "target_selection_min_xy_distance_m": 9.048023639479652e-05
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.012640468401061006,
+      "eef_replay_xy_rmse_m": 0.010260453934975195,
+      "episode": "episode_003779",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.017071797409536023,
+      "joint_tracking_max_abs_rad": 0.16976428031921387,
+      "joint_tracking_rmse_rad": 0.02931003632446815,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03968265652656555,
+        "5": 0.02884616330265999,
+        "6": 0.015626246109604836,
+        "7": 0.020899226889014244
+      },
+      "seed": 1431826001,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.1679593324661255,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.1679593324661255
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 0.00022350158542394638
+    },
+    {
+      "cup_selection": "middle",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 30,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.0117875560565276,
+      "eef_replay_xy_rmse_m": 0.00937545520744763,
+      "episode": "episode_003911",
+      "final_ball_cup": "right",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.016671746259877333,
+      "joint_tracking_max_abs_rad": 0.15880227088928223,
+      "joint_tracking_rmse_rad": 0.02806174592328176,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03608980029821396,
+        "5": 0.029494967311620712,
+        "6": 0.016301287338137627,
+        "7": 0.02116483822464943
+      },
+      "seed": 565776281,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": 0.16793155670166016,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16793155670166016
+      },
+      "target_cup": "middle",
+      "target_selection_min_xy_distance_m": 0.00019292629440315068
+    },
+    {
+      "cup_selection": "right",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 0,
+        "right": 30
+      },
+      "eef_replay_rmse_m": 0.010221037917335094,
+      "eef_replay_xy_rmse_m": 0.006309568494849375,
+      "episode": "episode_004012",
+      "final_ball_cup": "middle",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.01245657206929632,
+      "joint_tracking_max_abs_rad": 0.13033342361450195,
+      "joint_tracking_rmse_rad": 0.023941710252136386,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.025087995454669,
+        "5": 0.029461277648806572,
+        "6": 0.01574956811964512,
+        "7": 0.021201392635703087
+      },
+      "seed": 1724385486,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": -0.002013683319091797,
+          "right": 0.1683875322341919
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.1683875322341919
+      },
+      "target_cup": "right",
+      "target_selection_min_xy_distance_m": 4.305802576709539e-05
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.010950590924395502,
+      "eef_replay_xy_rmse_m": 0.008414506691056414,
+      "episode": "episode_004061",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.01808251808992678,
+      "joint_tracking_max_abs_rad": 0.14399147033691406,
+      "joint_tracking_rmse_rad": 0.027869645324016288,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03244076296687126,
+        "5": 0.031586479395627975,
+        "6": 0.02065729908645153,
+        "7": 0.02267451584339142
+      },
+      "seed": 1203828713,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.16785681247711182,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16785681247711182
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 0.0001652634091442451
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.011186234513072359,
+      "eef_replay_xy_rmse_m": 0.008459945689582473,
+      "episode": "episode_004244",
+      "final_ball_cup": "right",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.01780839626558293,
+      "joint_tracking_max_abs_rad": 0.139967679977417,
+      "joint_tracking_rmse_rad": 0.027784240799250157,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03269170969724655,
+        "5": 0.031620390713214874,
+        "6": 0.01949586346745491,
+        "7": 0.022345514968037605
+      },
+      "seed": 649306029,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.16807913780212402,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16807913780212402
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 0.00014637030835729092
+    },
+    {
+      "cup_selection": "middle",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 30,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.011358187054228249,
+      "eef_replay_xy_rmse_m": 0.007566916073742924,
+      "episode": "episode_004317",
+      "final_ball_cup": "middle",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.012977280378817839,
+      "joint_tracking_max_abs_rad": 0.1526784896850586,
+      "joint_tracking_rmse_rad": 0.025894204707627443,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.031391385942697525,
+        "5": 0.02845986746251583,
+        "6": 0.01684713177382946,
+        "7": 0.020769702270627022
+      },
+      "seed": 924530228,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": 0.16345608234405518,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16345608234405518
+      },
+      "target_cup": "middle",
+      "target_selection_min_xy_distance_m": 0.00010246029705740511
+    },
+    {
+      "cup_selection": "middle",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 30,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.01136325330316904,
+      "eef_replay_xy_rmse_m": 0.009279212767116029,
+      "episode": "episode_004373",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.019738165458622284,
+      "joint_tracking_max_abs_rad": 0.14199471473693848,
+      "joint_tracking_rmse_rad": 0.029783876878497078,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.035924676805734634,
+        "5": 0.03231484815478325,
+        "6": 0.02304237335920334,
+        "7": 0.023519331589341164
+      },
+      "seed": 1233159190,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": 0.16824638843536377,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16824638843536377
+      },
+      "target_cup": "middle",
+      "target_selection_min_xy_distance_m": 0.00015347653243225068
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.011834769031429571,
+      "eef_replay_xy_rmse_m": 0.00914460009113285,
+      "episode": "episode_004626",
+      "final_ball_cup": "right",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.016506414849633225,
+      "joint_tracking_max_abs_rad": 0.1537609100341797,
+      "joint_tracking_rmse_rad": 0.027863461033352296,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03537387028336525,
+        "5": 0.029759861528873444,
+        "6": 0.01637488789856434,
+        "7": 0.021261438727378845
+      },
+      "seed": 1203954813,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.1680697202682495,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.1680697202682495
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 0.00022307057224679738
+    },
+    {
+      "cup_selection": "middle",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 30,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.012392201505558755,
+      "eef_replay_xy_rmse_m": 0.010254733124679451,
+      "episode": "episode_004812",
+      "final_ball_cup": "right",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.018045742710338052,
+      "joint_tracking_max_abs_rad": 0.1556103229522705,
+      "joint_tracking_rmse_rad": 0.029426244005652344,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.038473352789878845,
+        "5": 0.03047247603535652,
+        "6": 0.017196252942085266,
+        "7": 0.02159785106778145
+      },
+      "seed": 178609099,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": 0.16802191734313965,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16802191734313965
+      },
+      "target_cup": "middle",
+      "target_selection_min_xy_distance_m": 0.00022436300059780478
+    },
+    {
+      "cup_selection": "right",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 0,
+        "right": 30
+      },
+      "eef_replay_rmse_m": 0.011942979461697657,
+      "eef_replay_xy_rmse_m": 0.009399129748321085,
+      "episode": "episode_004841",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.017350624745039452,
+      "joint_tracking_max_abs_rad": 0.15308618545532227,
+      "joint_tracking_rmse_rad": 0.028289169779429,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03566867113113403,
+        "5": 0.03054092265665531,
+        "6": 0.016978470608592033,
+        "7": 0.021594345569610596
+      },
+      "seed": 324474109,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": -0.002013683319091797,
+          "right": 0.1679534912109375
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.1679534912109375
+      },
+      "target_cup": "right",
+      "target_selection_min_xy_distance_m": 0.0002561957808211446
+    },
+    {
+      "cup_selection": "middle",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 30,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.012035800033188774,
+      "eef_replay_xy_rmse_m": 0.009735574961409053,
+      "episode": "episode_004858",
+      "final_ball_cup": "right",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.017213241498098057,
+      "joint_tracking_max_abs_rad": 0.1607818603515625,
+      "joint_tracking_rmse_rad": 0.028719602835155015,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03753740340471268,
+        "5": 0.029634209349751472,
+        "6": 0.016603082418441772,
+        "7": 0.02122359164059162
+      },
+      "seed": 900522446,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": 0.16803550720214844,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16803550720214844
+      },
+      "target_cup": "middle",
+      "target_selection_min_xy_distance_m": 0.0002034688222920522
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.010915597594699164,
+      "eef_replay_xy_rmse_m": 0.007168883629570249,
+      "episode": "episode_004916",
+      "final_ball_cup": "middle",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.012650063753660236,
+      "joint_tracking_max_abs_rad": 0.1440269947052002,
+      "joint_tracking_rmse_rad": 0.02507497182277205,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.028891602531075478,
+        "5": 0.028731785714626312,
+        "6": 0.01693987101316452,
+        "7": 0.020914798602461815
+      },
+      "seed": 1344356155,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.1628124713897705,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.1628124713897705
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 5.20050925842952e-05
+    },
+    {
+      "cup_selection": "right",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 0,
+        "right": 30
+      },
+      "eef_replay_rmse_m": 0.012293129463060716,
+      "eef_replay_xy_rmse_m": 0.010167693865723743,
+      "episode": "episode_005068",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.017808300228369302,
+      "joint_tracking_max_abs_rad": 0.15321803092956543,
+      "joint_tracking_rmse_rad": 0.029161891032591047,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03835245966911316,
+        "5": 0.029883945360779762,
+        "6": 0.01694173738360405,
+        "7": 0.021334713324904442
+      },
+      "seed": 25631634,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": -0.002013683319091797,
+          "right": 0.16802310943603516
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16802310943603516
+      },
+      "target_cup": "right",
+      "target_selection_min_xy_distance_m": 0.00021358189405873418
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.010258681840877783,
+      "eef_replay_xy_rmse_m": 0.00630481223294565,
+      "episode": "episode_005142",
+      "final_ball_cup": "middle",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.01213244669300441,
+      "joint_tracking_max_abs_rad": 0.13189482688903809,
+      "joint_tracking_rmse_rad": 0.02402813102345953,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.025262074545025826,
+        "5": 0.029545431956648827,
+        "6": 0.01572052389383316,
+        "7": 0.021228807047009468
+      },
+      "seed": 1872312342,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.16849923133850098,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16849923133850098
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 0.0002529908961150795
+    },
+    {
+      "cup_selection": "right",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 0,
+        "right": 30
+      },
+      "eef_replay_rmse_m": 0.01061971570908965,
+      "eef_replay_xy_rmse_m": 0.006790640496960129,
+      "episode": "episode_005284",
+      "final_ball_cup": "middle",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.01241461008058903,
+      "joint_tracking_max_abs_rad": 0.1398913860321045,
+      "joint_tracking_rmse_rad": 0.024695635443042138,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.027646051719784737,
+        "5": 0.029194647446274757,
+        "6": 0.015574557706713676,
+        "7": 0.021069088950753212
+      },
+      "seed": 92166427,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": -0.002013683319091797,
+          "right": 0.16833198070526123
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16833198070526123
+      },
+      "target_cup": "right",
+      "target_selection_min_xy_distance_m": 0.00011122014984721318
+    },
+    {
+      "cup_selection": "right",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 0,
+        "right": 30
+      },
+      "eef_replay_rmse_m": 0.012041869483338883,
+      "eef_replay_xy_rmse_m": 0.010089784571919202,
+      "episode": "episode_005442",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.019208835512119576,
+      "joint_tracking_max_abs_rad": 0.1546156406402588,
+      "joint_tracking_rmse_rad": 0.030126885773727016,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03901452198624611,
+        "5": 0.03129631280899048,
+        "6": 0.019386976957321167,
+        "7": 0.022176602855324745
+      },
+      "seed": 103394768,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": -0.002013683319091797,
+          "right": 0.16800594329833984
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16800594329833984
+      },
+      "target_cup": "right",
+      "target_selection_min_xy_distance_m": 0.00015858201368246228
+    },
+    {
+      "cup_selection": "right",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 0,
+        "right": 30
+      },
+      "eef_replay_rmse_m": 0.011565471064375166,
+      "eef_replay_xy_rmse_m": 0.009179516765644933,
+      "episode": "episode_005533",
+      "final_ball_cup": "right",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.017603394756079617,
+      "joint_tracking_max_abs_rad": 0.15430784225463867,
+      "joint_tracking_rmse_rad": 0.028260847511080094,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03516535460948944,
+        "5": 0.030605632811784744,
+        "6": 0.018305784091353416,
+        "7": 0.021837711334228516
+      },
+      "seed": 1491709253,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": -0.002013683319091797,
+          "right": 0.16796839237213135
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16796839237213135
+      },
+      "target_cup": "right",
+      "target_selection_min_xy_distance_m": 0.00015784561401233077
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.011621045754406855,
+      "eef_replay_xy_rmse_m": 0.009344331989869127,
+      "episode": "episode_005839",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.018344078219978882,
+      "joint_tracking_max_abs_rad": 0.14316248893737793,
+      "joint_tracking_rmse_rad": 0.028873307733444476,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03617159649729729,
+        "5": 0.030889037996530533,
+        "6": 0.0193684920668602,
+        "7": 0.022111976519227028
+      },
+      "seed": 1266370000,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.16807925701141357,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16807925701141357
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 0.00012104899360565469
+    },
+    {
+      "cup_selection": "right",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 0,
+        "right": 30
+      },
+      "eef_replay_rmse_m": 0.01148747830249708,
+      "eef_replay_xy_rmse_m": 0.008757724053049965,
+      "episode": "episode_005872",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.016657833696546075,
+      "joint_tracking_max_abs_rad": 0.15417146682739258,
+      "joint_tracking_rmse_rad": 0.027701704303889872,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.034444473683834076,
+        "5": 0.030162671580910683,
+        "6": 0.01710198074579239,
+        "7": 0.021506380289793015
+      },
+      "seed": 2031591092,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": -0.002013683319091797,
+          "right": 0.16815781593322754
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16815781593322754
+      },
+      "target_cup": "right",
+      "target_selection_min_xy_distance_m": 0.0001767907670000568
+    },
+    {
+      "cup_selection": "middle",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 30,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.011954778262944925,
+      "eef_replay_xy_rmse_m": 0.009503140936506534,
+      "episode": "episode_005901",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.017336063320517427,
+      "joint_tracking_max_abs_rad": 0.14689326286315918,
+      "joint_tracking_rmse_rad": 0.028143828003940226,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03542439267039299,
+        "5": 0.030399015173316002,
+        "6": 0.01691989228129387,
+        "7": 0.021551046520471573
+      },
+      "seed": 1011033761,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": 0.16806554794311523,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16806554794311523
+      },
+      "target_cup": "middle",
+      "target_selection_min_xy_distance_m": 0.0002531378995627165
+    },
+    {
+      "cup_selection": "right",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 0,
+        "right": 30
+      },
+      "eef_replay_rmse_m": 0.01104320021624295,
+      "eef_replay_xy_rmse_m": 0.0075947904234183955,
+      "episode": "episode_005942",
+      "final_ball_cup": "middle",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.012725140430257284,
+      "joint_tracking_max_abs_rad": 0.15552043914794922,
+      "joint_tracking_rmse_rad": 0.02568573452847082,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.031011613085865974,
+        "5": 0.028593776747584343,
+        "6": 0.015230766497552395,
+        "7": 0.020807597786188126
+      },
+      "seed": 49758726,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": -0.002013683319091797,
+          "right": 0.16834092140197754
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16834092140197754
+      },
+      "target_cup": "right",
+      "target_selection_min_xy_distance_m": 0.00011936802911804989
+    },
+    {
+      "cup_selection": "middle",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 30,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.011540135455107839,
+      "eef_replay_xy_rmse_m": 0.009084300397782661,
+      "episode": "episode_005968",
+      "final_ball_cup": "right",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.01724422047180789,
+      "joint_tracking_max_abs_rad": 0.1532764434814453,
+      "joint_tracking_rmse_rad": 0.02809907830175426,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.035246603190898895,
+        "5": 0.030270671471953392,
+        "6": 0.01756599172949791,
+        "7": 0.021597903221845627
+      },
+      "seed": 975031796,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": 0.16815900802612305,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16815900802612305
+      },
+      "target_cup": "middle",
+      "target_selection_min_xy_distance_m": 0.00017785407544579357
+    }
+  ],
+  "sample_seed": 260806,
+  "summary": {
+    "cup_selection_accuracy_all": 1.0,
+    "cup_selection_accuracy_decided": 1.0,
+    "cup_selection_correct": 50,
+    "cup_selection_decisions": 50,
+    "gripper_mode": "measured_width",
+    "joint_damping_ratio": 1.0,
+    "joint_kp": 50.0,
+    "mean_eef_replay_rmse_m": 0.011374968471432836,
+    "mean_eef_replay_xy_rmse_m": 0.00846043021260223,
+    "mean_initial_joint_max_abs_error_rad": 0.0,
+    "mean_initial_target_pos_error_m": 0.0,
+    "mean_joint_tracking_mae_rad": 0.015907305293361772,
+    "mean_joint_tracking_rmse_rad": 0.02722079954945554,
+    "num_episodes": 50,
+    "success_rate": 1.0,
+    "successes": 50
+  }
+}

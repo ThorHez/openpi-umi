@@ -86,6 +86,30 @@ def _batch_item(values, position: int):
         return values
 
 
+def _image_key_candidates(img_key: str) -> tuple[str, ...]:
+    """Possible dataset column / sample keys for a configured image stream."""
+    candidates = [img_key]
+    if img_key.startswith("observation."):
+        candidates.append(img_key[len("observation.") :])
+    else:
+        candidates.append(f"observation.{img_key}")
+    # LeRobot camera convention used by some datasets.
+    short = img_key.split(".")[-1]
+    candidates.append(f"observation.images.{short}")
+    if short != img_key:
+        candidates.append(f"observation.images.{img_key}")
+    # Preserve order while dropping duplicates.
+    return tuple(dict.fromkeys(candidates))
+
+
+def _resolve_image_source_key(img_key: str, available) -> str | None:
+    """Resolve ``img_key`` against a sample dict or HF column-name set."""
+    for candidate in _image_key_candidates(img_key):
+        if candidate in available:
+            return candidate
+    return None
+
+
 class VideoFrameDataset(_data_loader.Dataset):
     """Dataset wrapper that loads video frames dynamically.
 
@@ -125,10 +149,27 @@ class VideoFrameDataset(_data_loader.Dataset):
                 "VideoFrameDataset requires a LeRobotDataset with hf_dataset attribute"
             )
 
+        # Map configured output stream names -> actual keys present in the
+        # LeRobot / HF sample. Shellgame (and many LeRobot v2 datasets) store
+        # cameras as ``observation.<name>`` while configs often use bare
+        # ``<name>``; without this remap every frame is treated as missing and
+        # padded to zeros (which silently collapses past/future to identical
+        # blank images).
+        column_names = set(getattr(self._hf_dataset, "column_names", ()) or ())
+        self._source_keys: dict[str, str] = {}
+        for img_key in self._config.image_keys:
+            source = _resolve_image_source_key(img_key, column_names)
+            if source is None:
+                # Fall back to the configured name; __getitem__ may still find
+                # it on the transformed LeRobot sample even if HF columns differ.
+                source = img_key
+            self._source_keys[img_key] = source
+
         self._history_hf_dataset = self._hf_dataset
         try:
-            history_columns = list(dict.fromkeys(("episode_index", *self._config.image_keys)))
-            column_names = set(getattr(self._hf_dataset, "column_names", ()) or ())
+            history_columns = list(
+                dict.fromkeys(("episode_index", *self._source_keys.values()))
+            )
             if column_names and all(column in column_names for column in history_columns):
                 # Historical-frame lookup only needs episode_index and image streams.
                 # Keeping extra state/action/prompt columns out avoids unnecessary
@@ -232,8 +273,14 @@ class VideoFrameDataset(_data_loader.Dataset):
             except (IndexError, KeyError, Exception):
                 rows_cache[idx] = None
 
+        frame_valid_masks: dict[str, np.ndarray] = {}
+
         # Load frames for each image key, reusing the cached rows.
         for img_key in self._config.image_keys:
+            source_key = self._source_keys[img_key]
+            # LeRobot __getitem__ may expose a different key spelling than the
+            # raw HF columns (e.g. after a repack). Prefer the live sample.
+            current_source = _resolve_image_source_key(img_key, data) or source_key
             frames: list[np.ndarray | None] = []
 
             for idx in target_indices:
@@ -242,25 +289,38 @@ class VideoFrameDataset(_data_loader.Dataset):
                     continue
                 # Reuse the already-loaded current frame to avoid an extra
                 # row decode / image deserialization for the current step.
-                if idx == current_index and img_key in data and data[img_key] is not None:
-                    frames.append(_parse_image(data[img_key]))
+                if (
+                    idx == current_index
+                    and current_source in data
+                    and data[current_source] is not None
+                ):
+                    frames.append(_parse_image(data[current_source]))
                     continue
                 row = rows_cache.get(idx)
                 if row is None:
                     frames.append(None)
                     continue
-                frame = row.get(img_key)
+                frame = row.get(source_key)
+                if frame is None and source_key != current_source:
+                    frame = row.get(current_source)
+                if frame is None:
+                    # Last resort: any candidate present on this row.
+                    resolved = _resolve_image_source_key(img_key, row)
+                    frame = row.get(resolved) if resolved is not None else None
                 if frame is None:
                     frames.append(None)
                     continue
                 frames.append(_parse_image(frame))
 
+            valid_mask = np.asarray([frame is not None for frame in frames], dtype=np.bool_)
+            frame_valid_masks[img_key] = valid_mask
+
             # Handle padding for None frames
             valid_frames = [f for f in frames if f is not None]
             if not valid_frames:
                 # Create a zero frame
-                if img_key in data and data[img_key] is not None:
-                    template = _parse_image(data[img_key])
+                if current_source in data and data[current_source] is not None:
+                    template = _parse_image(data[current_source])
                     zero_frame = np.zeros_like(template)
                 else:
                     zero_frame = np.zeros((224, 224, 3), dtype=np.uint8)
@@ -292,6 +352,8 @@ class VideoFrameDataset(_data_loader.Dataset):
             for i, frame in enumerate(frames):
                 key = f"{img_key}_{i}"
                 data[key] = frame
+
+        data["video_frame_valid_mask"] = frame_valid_masks
 
         return data
 

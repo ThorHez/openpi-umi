@@ -1,0 +1,1594 @@
+{
+  "checkpoint_dir": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_mem_compress_evan_shellgame_openpi_joint_260727/my_experiment_30f_s2_6gpu/23000",
+  "classes": [
+    "left",
+    "middle",
+    "right"
+  ],
+  "config": "pi0_mem_compress_evan_shellgame_openpi_joint_260727",
+  "dataset_root": "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/shellgame_absolute_joint_dataset",
+  "feature_dimensions": {
+    "fused_prefix": 1048576,
+    "history_mem": 589824
+  },
+  "label_distribution": {
+    "train_final_slot": {
+      "left": 6,
+      "middle": 6,
+      "right": 6
+    },
+    "train_joint": {
+      "left->left": 2,
+      "left->middle": 2,
+      "left->right": 2,
+      "middle->left": 2,
+      "middle->middle": 2,
+      "middle->right": 2,
+      "right->left": 2,
+      "right->middle": 2,
+      "right->right": 2
+    },
+    "train_target_identity": {
+      "left": 6,
+      "middle": 6,
+      "right": 6
+    },
+    "val_donor_final_slot": {
+      "left": 5,
+      "middle": 2,
+      "right": 2
+    },
+    "val_donor_target_identity": {
+      "left": 2,
+      "middle": 3,
+      "right": 4
+    },
+    "val_final_slot": {
+      "left": 3,
+      "middle": 3,
+      "right": 3
+    },
+    "val_joint": {
+      "left->left": 1,
+      "left->middle": 1,
+      "left->right": 1,
+      "middle->left": 1,
+      "middle->middle": 1,
+      "middle->right": 1,
+      "right->left": 1,
+      "right->middle": 1,
+      "right->right": 1
+    },
+    "val_target_identity": {
+      "left": 3,
+      "middle": 3,
+      "right": 3
+    }
+  },
+  "modes": [
+    "normal",
+    "memory_off",
+    "shuffle_history",
+    "wrong_history",
+    "reveal_only",
+    "current_only"
+  ],
+  "probe_fit": {
+    "fused_prefix": {
+      "final_slot": {
+        "cv_accuracy_by_lambda": {
+          "0.0001": 0.4444444444444444,
+          "0.001": 0.38888888888888884,
+          "0.01": 0.3333333333333333,
+          "0.1": 0.3333333333333333,
+          "1": 0.3333333333333333,
+          "10": 0.3333333333333333,
+          "100": 0.3333333333333333,
+          "1e-05": 0.38888888888888884
+        },
+        "cv_best_accuracy": 0.4444444444444444,
+        "ridge_lambda": 0.0001,
+        "training_fit_accuracy": 1.0
+      },
+      "target_identity": {
+        "cv_accuracy_by_lambda": {
+          "0.0001": 0.5555555555555556,
+          "0.001": 0.4444444444444444,
+          "0.01": 0.4444444444444444,
+          "0.1": 0.4444444444444444,
+          "1": 0.38888888888888884,
+          "10": 0.3888888888888889,
+          "100": 0.4444444444444444,
+          "1e-05": 0.4444444444444444
+        },
+        "cv_best_accuracy": 0.5555555555555556,
+        "ridge_lambda": 0.0001,
+        "training_fit_accuracy": 1.0
+      }
+    },
+    "history_mem": {
+      "final_slot": {
+        "cv_accuracy_by_lambda": {
+          "0.0001": 0.16666666666666666,
+          "0.001": 0.16666666666666666,
+          "0.01": 0.16666666666666666,
+          "0.1": 0.16666666666666666,
+          "1": 0.16666666666666666,
+          "10": 0.16666666666666666,
+          "100": 0.2222222222222222,
+          "1e-05": 0.16666666666666666
+        },
+        "cv_best_accuracy": 0.2222222222222222,
+        "ridge_lambda": 100.0,
+        "training_fit_accuracy": 1.0
+      },
+      "target_identity": {
+        "cv_accuracy_by_lambda": {
+          "0.0001": 0.5555555555555556,
+          "0.001": 0.5555555555555556,
+          "0.01": 0.5555555555555556,
+          "0.1": 0.5555555555555556,
+          "1": 0.5,
+          "10": 0.4444444444444444,
+          "100": 0.4444444444444444,
+          "1e-05": 0.5555555555555556
+        },
+        "cv_best_accuracy": 0.5555555555555556,
+        "ridge_lambda": 1e-05,
+        "training_fit_accuracy": 1.0
+      }
+    }
+  },
+  "representations": [
+    "history_mem",
+    "fused_prefix"
+  ],
+  "samples": {
+    "current_only": [
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_000898",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_002682",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_002840",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003138",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003248",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003644",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_004710",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005198",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "middle"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005439",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "left"
+      }
+    ],
+    "memory_off": [
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_000898",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_002682",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_002840",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003138",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "middle"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003248",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003644",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_004710",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "middle"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005198",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005439",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "left"
+      }
+    ],
+    "normal": [
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_000898",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_002682",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_002840",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003138",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "middle"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003248",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003644",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_004710",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "middle"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005198",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005439",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "left"
+      }
+    ],
+    "reveal_only": [
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_000898",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_002682",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_002840",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003138",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003248",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003644",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_004710",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005198",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "middle"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005439",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "middle"
+          }
+        },
+        "target_identity": "left"
+      }
+    ],
+    "shuffle_history": [
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_000898",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "middle"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_002682",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_002840",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003138",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003248",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "middle",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003644",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_004710",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005198",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "middle"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005439",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "right"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "left"
+      }
+    ],
+    "wrong_history": [
+      {
+        "donor_episode": "episode_003138",
+        "donor_final_slot": "left",
+        "donor_target_identity": "middle",
+        "episode": "episode_000898",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": "episode_002840",
+        "donor_final_slot": "right",
+        "donor_target_identity": "right",
+        "episode": "episode_002682",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": "episode_003138",
+        "donor_final_slot": "left",
+        "donor_target_identity": "middle",
+        "episode": "episode_002840",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": "episode_005198",
+        "donor_final_slot": "middle",
+        "donor_target_identity": "right",
+        "episode": "episode_003138",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": "episode_003644",
+        "donor_final_slot": "left",
+        "donor_target_identity": "right",
+        "episode": "episode_003248",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": "episode_004710",
+        "donor_final_slot": "middle",
+        "donor_target_identity": "middle",
+        "episode": "episode_003644",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "middle"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": "episode_005439",
+        "donor_final_slot": "left",
+        "donor_target_identity": "left",
+        "episode": "episode_004710",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": "episode_005439",
+        "donor_final_slot": "left",
+        "donor_target_identity": "left",
+        "episode": "episode_005198",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "middle"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": "episode_002840",
+        "donor_final_slot": "right",
+        "donor_target_identity": "right",
+        "episode": "episode_005439",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "right"
+          }
+        },
+        "target_identity": "left"
+      }
+    ]
+  },
+  "split": {
+    "sample_seed": 260807,
+    "split_seed": 42,
+    "train_episode_ids": [
+      605,
+      853,
+      1344,
+      1892,
+      1914,
+      2201,
+      2252,
+      2793,
+      3140,
+      3601,
+      3609,
+      3759,
+      4553,
+      4589,
+      4642,
+      4926,
+      5774,
+      5866
+    ],
+    "val_episode_ids": [
+      898,
+      2682,
+      2840,
+      3138,
+      3248,
+      3644,
+      4710,
+      5198,
+      5439
+    ],
+    "val_ratio": 0.1
+  },
+  "summaries": {
+    "current_only": {
+      "fused_prefix": {
+        "final_slot": {
+          "accuracy": 0.3333333333333333,
+          "correct": 3,
+          "feature_cosine_vs_normal_mean": 0.8784830570220947,
+          "label_permutation_null_mean": 0.33333325386047363,
+          "label_permutation_null_p_ge_observed": 1.0,
+          "label_permutation_null_std": 8.940696716308594e-08,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.0,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 0,
+            "right": 9
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.3333333333333333,
+          "correct": 3,
+          "feature_cosine_vs_normal_mean": 0.8784830570220947,
+          "label_permutation_null_mean": 0.34999996423721313,
+          "label_permutation_null_p_ge_observed": 0.693069306930693,
+          "label_permutation_null_std": 0.1327533721923828,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.3333333333333333,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 6,
+            "right": 3
+          }
+        }
+      },
+      "history_mem": {
+        "final_slot": {
+          "accuracy": 0.3333333333333333,
+          "correct": 3,
+          "feature_cosine_vs_normal_mean": 0.822935163974762,
+          "label_permutation_null_mean": 0.3311110734939575,
+          "label_permutation_null_p_ge_observed": 0.7029702970297029,
+          "label_permutation_null_std": 0.08459052443504333,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.1111111111111111,
+          "predicted_distribution": {
+            "left": 1,
+            "middle": 8,
+            "right": 0
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "feature_cosine_vs_normal_mean": 0.822935163974762,
+          "label_permutation_null_mean": 0.328888863325119,
+          "label_permutation_null_p_ge_observed": 1.0,
+          "label_permutation_null_std": 0.09285592287778854,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.4444444444444444,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 1,
+            "right": 8
+          }
+        }
+      }
+    },
+    "memory_off": {
+      "fused_prefix": {
+        "final_slot": {
+          "accuracy": 0.3333333333333333,
+          "correct": 3,
+          "feature_cosine_vs_normal_mean": 0.7193982005119324,
+          "label_permutation_null_mean": 0.33333325386047363,
+          "label_permutation_null_p_ge_observed": 1.0,
+          "label_permutation_null_std": 8.940696716308594e-08,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.0,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 0,
+            "right": 9
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.3333333333333333,
+          "correct": 3,
+          "feature_cosine_vs_normal_mean": 0.7193982005119324,
+          "label_permutation_null_mean": 0.33333325386047363,
+          "label_permutation_null_p_ge_observed": 1.0,
+          "label_permutation_null_std": 8.940696716308594e-08,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 1.0,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 0,
+            "right": 9
+          }
+        }
+      },
+      "history_mem": {
+        "final_slot": {
+          "accuracy": 0.4444444444444444,
+          "correct": 4,
+          "feature_cosine_vs_normal_mean": 0.999744713306427,
+          "label_permutation_null_mean": 0.3266666531562805,
+          "label_permutation_null_p_ge_observed": 0.297029702970297,
+          "label_permutation_null_std": 0.0886385440826416,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.0,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 8,
+            "right": 1
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.5555555555555556,
+          "correct": 5,
+          "feature_cosine_vs_normal_mean": 0.999744713306427,
+          "label_permutation_null_mean": 0.34666669368743896,
+          "label_permutation_null_p_ge_observed": 0.16831683168316833,
+          "label_permutation_null_std": 0.1407914161682129,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.0,
+          "predicted_distribution": {
+            "left": 1,
+            "middle": 2,
+            "right": 6
+          }
+        }
+      }
+    },
+    "normal": {
+      "fused_prefix": {
+        "final_slot": {
+          "accuracy": 0.3333333333333333,
+          "correct": 3,
+          "feature_cosine_vs_normal_mean": null,
+          "label_permutation_null_mean": 0.33333325386047363,
+          "label_permutation_null_p_ge_observed": 1.0,
+          "label_permutation_null_std": 8.940696716308594e-08,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 0,
+            "right": 9
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.3333333333333333,
+          "correct": 3,
+          "feature_cosine_vs_normal_mean": null,
+          "label_permutation_null_mean": 0.33333325386047363,
+          "label_permutation_null_p_ge_observed": 1.0,
+          "label_permutation_null_std": 8.940696716308594e-08,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 9,
+            "right": 0
+          }
+        }
+      },
+      "history_mem": {
+        "final_slot": {
+          "accuracy": 0.4444444444444444,
+          "correct": 4,
+          "feature_cosine_vs_normal_mean": null,
+          "label_permutation_null_mean": 0.33666664361953735,
+          "label_permutation_null_p_ge_observed": 0.3465346534653465,
+          "label_permutation_null_std": 0.08951859921216965,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 8,
+            "right": 1
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.5555555555555556,
+          "correct": 5,
+          "feature_cosine_vs_normal_mean": null,
+          "label_permutation_null_mean": 0.31333333253860474,
+          "label_permutation_null_p_ge_observed": 0.09900990099009901,
+          "label_permutation_null_std": 0.1451946496963501,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "predicted_distribution": {
+            "left": 1,
+            "middle": 2,
+            "right": 6
+          }
+        }
+      }
+    },
+    "reveal_only": {
+      "fused_prefix": {
+        "final_slot": {
+          "accuracy": 0.3333333333333333,
+          "correct": 3,
+          "feature_cosine_vs_normal_mean": 0.896683931350708,
+          "label_permutation_null_mean": 0.33333325386047363,
+          "label_permutation_null_p_ge_observed": 1.0,
+          "label_permutation_null_std": 8.940696716308594e-08,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.0,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 0,
+            "right": 9
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.4444444444444444,
+          "correct": 4,
+          "feature_cosine_vs_normal_mean": 0.896683931350708,
+          "label_permutation_null_mean": 0.3266666531562805,
+          "label_permutation_null_p_ge_observed": 0.3069306930693069,
+          "label_permutation_null_std": 0.09002058953046799,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.8888888888888888,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 1,
+            "right": 8
+          }
+        }
+      },
+      "history_mem": {
+        "final_slot": {
+          "accuracy": 0.3333333333333333,
+          "correct": 3,
+          "feature_cosine_vs_normal_mean": 0.822476863861084,
+          "label_permutation_null_mean": 0.33333325386047363,
+          "label_permutation_null_p_ge_observed": 1.0,
+          "label_permutation_null_std": 8.940696716308594e-08,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.1111111111111111,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 9,
+            "right": 0
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "feature_cosine_vs_normal_mean": 0.822476863861084,
+          "label_permutation_null_mean": 0.32111114263534546,
+          "label_permutation_null_p_ge_observed": 0.8712871287128713,
+          "label_permutation_null_std": 0.1294766366481781,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.5555555555555556,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 2,
+            "right": 7
+          }
+        }
+      }
+    },
+    "shuffle_history": {
+      "fused_prefix": {
+        "final_slot": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "feature_cosine_vs_normal_mean": 0.7992343902587891,
+          "label_permutation_null_mean": 0.34111109375953674,
+          "label_permutation_null_p_ge_observed": 1.0,
+          "label_permutation_null_std": 0.0892423540353775,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.1111111111111111,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 1,
+            "right": 8
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.3333333333333333,
+          "correct": 3,
+          "feature_cosine_vs_normal_mean": 0.7992343902587891,
+          "label_permutation_null_mean": 0.32222220301628113,
+          "label_permutation_null_p_ge_observed": 0.6039603960396039,
+          "label_permutation_null_std": 0.14010578393936157,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.4444444444444444,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 5,
+            "right": 4
+          }
+        }
+      },
+      "history_mem": {
+        "final_slot": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "feature_cosine_vs_normal_mean": 0.8214246034622192,
+          "label_permutation_null_mean": 0.34111106395721436,
+          "label_permutation_null_p_ge_observed": 1.0,
+          "label_permutation_null_std": 0.09461422264575958,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.2222222222222222,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 8,
+            "right": 1
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "feature_cosine_vs_normal_mean": 0.8214246034622192,
+          "label_permutation_null_mean": 0.32111111283302307,
+          "label_permutation_null_p_ge_observed": 0.9207920792079208,
+          "label_permutation_null_std": 0.13868428766727448,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.5555555555555556,
+          "predicted_distribution": {
+            "left": 1,
+            "middle": 3,
+            "right": 5
+          }
+        }
+      }
+    },
+    "wrong_history": {
+      "fused_prefix": {
+        "final_slot": {
+          "accuracy": 0.3333333333333333,
+          "correct": 3,
+          "donor_label_accuracy": 0.2222222222222222,
+          "donor_label_correct": 2,
+          "feature_cosine_vs_normal_mean": 0.9938257932662964,
+          "label_permutation_null_mean": 0.33333325386047363,
+          "label_permutation_null_p_ge_observed": 1.0,
+          "label_permutation_null_std": 8.940696716308594e-08,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.0,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 0,
+            "right": 9
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.3333333333333333,
+          "correct": 3,
+          "donor_label_accuracy": 0.3333333333333333,
+          "donor_label_correct": 3,
+          "feature_cosine_vs_normal_mean": 0.9938164949417114,
+          "label_permutation_null_mean": 0.33333325386047363,
+          "label_permutation_null_p_ge_observed": 1.0,
+          "label_permutation_null_std": 8.940696716308594e-08,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.0,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 9,
+            "right": 0
+          }
+        }
+      },
+      "history_mem": {
+        "final_slot": {
+          "accuracy": 0.4444444444444444,
+          "correct": 4,
+          "donor_label_accuracy": 0.2222222222222222,
+          "donor_label_correct": 2,
+          "feature_cosine_vs_normal_mean": 0.8149496912956238,
+          "label_permutation_null_mean": 0.3288888931274414,
+          "label_permutation_null_p_ge_observed": 0.37623762376237624,
+          "label_permutation_null_std": 0.0980299785733223,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.0,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 8,
+            "right": 1
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "donor_label_accuracy": 0.5555555555555556,
+          "donor_label_correct": 5,
+          "feature_cosine_vs_normal_mean": 0.8149496912956238,
+          "label_permutation_null_mean": 0.32444441318511963,
+          "label_permutation_null_p_ge_observed": 0.8613861386138614,
+          "label_permutation_null_std": 0.13938134908676147,
+          "label_permutation_repeats": 100,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.6666666666666666,
+          "predicted_distribution": {
+            "left": 1,
+            "middle": 2,
+            "right": 6
+          }
+        }
+      }
+    }
+  }
+}

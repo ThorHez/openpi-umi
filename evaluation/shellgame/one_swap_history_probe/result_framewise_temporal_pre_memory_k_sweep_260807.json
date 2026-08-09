@@ -1,0 +1,80 @@
+{
+  "experiment": "one_swap_framewise_temporal_pre_memory_k_sweep_260807",
+  "date": "2026-08-07",
+  "question": "Does the one-swap failure come from the final 128-token memory compressor, or from the earlier learned-query per-frame spatial compression?",
+  "task": {
+    "history_frames": [0, 29],
+    "current_frame": 30,
+    "label_key": "after_first_swap_ball_cup",
+    "classes": ["left", "middle", "right"],
+    "train_samples": 5400,
+    "validation_samples": 600,
+    "validation_class_counts": {
+      "left": 208,
+      "middle": 209,
+      "right": 183
+    },
+    "random_baseline_accuracy": 0.3333333333,
+    "majority_baseline_accuracy": 0.3483333333
+  },
+  "controlled_architecture": {
+    "pipeline": "frozen SigLIP [B,30,256,1152] -> shared learned-query per-frame compressor [B,30,K,256] -> two factorized spatial/temporal Transformer blocks -> learned-query attention pooling classifier",
+    "final_memory_compressor": "bypassed",
+    "temporal_width": 256,
+    "temporal_depth": 2,
+    "temporal_heads": 8,
+    "training_steps": 500,
+    "warmup_steps": 50,
+    "peak_learning_rate": 0.0003,
+    "gradient_clip_norm": 10.0,
+    "batch_size": 12,
+    "fsdp_devices": 6,
+    "gpus": [0, 1, 2, 3, 4, 5]
+  },
+  "results": {
+    "learned_slots_k16": {
+      "trainable_parameters": 3471619,
+      "step_100": {"accuracy": 0.346667, "loss": 1.100155},
+      "step_200": {"accuracy": 0.35, "loss": 1.094921},
+      "step_300": {"accuracy": 0.348333, "loss": 1.099178},
+      "step_400": {"accuracy": 0.348333, "loss": 1.106357},
+      "final": {"accuracy": 0.305, "loss": 1.1041831462},
+      "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_one_swap_framewise_temporal_pre_memory_probe_260807/one_swap_framewise_temporal_pre_memory_k16_260807/499"
+    },
+    "learned_slots_k32": {
+      "trainable_parameters": 3475715,
+      "step_100": {"accuracy": 0.346667, "loss": 1.098086},
+      "step_200": {"accuracy": 0.351667, "loss": 1.097318},
+      "step_300": {"accuracy": 0.348333, "loss": 1.098259},
+      "step_400": {"accuracy": 0.348333, "loss": 1.105273},
+      "final": {"accuracy": 0.305, "loss": 1.1000543213},
+      "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_one_swap_framewise_temporal_pre_memory_probe_260807/one_swap_framewise_temporal_pre_memory_k32_260807/499"
+    },
+    "learned_slots_k64": {
+      "trainable_parameters": 3483907,
+      "step_100": {"accuracy": 0.346667, "loss": 1.094388},
+      "step_200": {"accuracy": 0.351667, "loss": 1.096733},
+      "step_300": {"accuracy": 0.348333, "loss": 1.100662},
+      "step_400": {"accuracy": 0.348333, "loss": 1.103598},
+      "final": {"accuracy": 0.305, "loss": 1.1034159342},
+      "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_one_swap_framewise_temporal_pre_memory_probe_260807/one_swap_framewise_temporal_pre_memory_k64_260807/499"
+    },
+    "raw_patch_grid_control": {
+      "description": "Same split and temporal classifier family, but preserves all 256 fixed-grid patch identities before temporal reasoning.",
+      "step_100": {"accuracy": 0.346667, "loss": 1.100321},
+      "step_200": {"accuracy": 0.445, "loss": 0.987989},
+      "step_300": {"accuracy": 0.911667, "loss": 0.181037},
+      "step_400": {"accuracy": 1.0, "loss": 0.000206},
+      "final": {"accuracy": 1.0, "loss": -0.0005570984},
+      "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_one_swap_temporal_transformer_probe_260807/one_swap_temporal_transformer_v2_260807/499"
+    }
+  },
+  "conclusion": {
+    "final_memory_compressor_is_primary_failure": false,
+    "insufficient_slot_count_is_primary_failure": false,
+    "evidence": "With the final memory compressor removed, K=16, K=32, and K=64 all remain at chance and have cross-entropy close to ln(3), while the fixed raw patch grid reaches 100% on the identical task and split.",
+    "likely_failure": "Independent learned-query compression does not guarantee that slot k has a stable spatial or object identity across frames. The following temporal Transformer therefore receives an ambiguous correspondence axis, and subtle motion evidence can also be pooled away before temporal interaction.",
+    "next_control": "Replace learned-query per-frame compression with fixed-grid spatial downsampling that preserves 2D cell identity, then run the same K=64 temporal/readout probe."
+  },
+  "source_file": "/data2/hzl_workspace_for_pi_mem/openpi-umi/examples/shellgame/train_one_swap_framewise_temporal_pre_memory_probe.py"
+}

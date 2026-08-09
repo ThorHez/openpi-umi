@@ -229,13 +229,13 @@ class Encoder1DBlockCurrentOnlyMemory(nn.Module):
         )
         y_cur = ln1(x_cur)
 
-        history_out_proj = nn.Dense(
-            y_cur.shape[-1],
-            name="HistoryOutProj",
-            kernel_init=nn.initializers.normal(stddev=1e-4),
-            bias_init=nn.initializers.zeros,
-            dtype=self.dtype_mm,
-        )
+        # history_out_proj = nn.Dense(
+        #     y_cur.shape[-1],
+        #     name="HistoryOutProj",
+        #     kernel_init=nn.initializers.normal(stddev=1e-4),
+        #     bias_init=nn.initializers.zeros,
+        #     dtype=self.dtype_mm,
+        # )
 
         y_spatial = out["sa"] = attn(y_cur, y_cur)
         out["y_spatial"] = y_spatial
@@ -265,7 +265,7 @@ class Encoder1DBlockCurrentOnlyMemory(nn.Module):
             mem_update = history_attn(y_cur, y_mem)
 
             # Zero-init adapter: start as no-op, then learn useful residual.
-            mem_update = history_out_proj(mem_update)
+            # mem_update = history_out_proj(mem_update)
 
             def memory_branch(_):
                 y = y_spatial + gate * mem_update

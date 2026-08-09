@@ -1,0 +1,78 @@
+{
+  "experiment": "frame59_final_slot_fixed_grid_integrated_probe",
+  "status": "stopped_by_user_during_step_250_validation",
+  "input": {
+    "query_frame": 59,
+    "num_frames": 31,
+    "frame_stride": 2,
+    "effective_history_raw_frames": [
+      "frame 1 repeated for the leading padded position",
+      "frames 1,3,5,...,57"
+    ],
+    "current_raw_frame": 59,
+    "label_key": "final_ball_cup",
+    "train_episodes": 5400,
+    "validation_episodes": 600
+  },
+  "dataset": {
+    "episodes": 6000,
+    "unique_ordered_three_swap_sequences": 216,
+    "initial_class_counts": {
+      "left": 2011,
+      "middle": 1967,
+      "right": 2022
+    },
+    "final_class_counts": {
+      "left": 2010,
+      "middle": 1990,
+      "right": 2000
+    }
+  },
+  "readout_only": {
+    "description": "Freeze the one-swap-pretrained fixed-grid history and Pi0 reader; train only a current-token classifier.",
+    "trainable_parameters": 299000,
+    "steps": 150,
+    "validation": {
+      "step_50_accuracy": 0.366667,
+      "step_100_accuracy": 0.375,
+      "final_accuracy": 0.375,
+      "final_classifier_loss": 1.1029615275
+    },
+    "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_final_slot_fixed_grid_readout_only_260808/final_slot_readout_31f_s2_k64_m128_e4_260808/149/params"
+  },
+  "joint_ce": {
+    "description": "Fine-tune the fixed-grid history, periodic Pi0 memory readers, and classifier together.",
+    "trainable_parameters": 147350000,
+    "requested_steps": 300,
+    "completed_training_steps": 250,
+    "peak_learning_rate": 0.0003,
+    "validation": {
+      "step_50_accuracy": 0.326667,
+      "step_100_accuracy": 0.346667,
+      "step_150_accuracy": 0.336667,
+      "step_200_accuracy": 0.36,
+      "step_250_accuracy": null
+    },
+    "checkpoint": null,
+    "note": "The run was interrupted during step-250 validation before its save interval, so no joint checkpoint was emitted."
+  },
+  "comparison_to_one_swap": {
+    "one_swap_input": "continuous raw frames 0..29 at stride 1; current frame 30",
+    "one_swap_label": "slot after swap_0",
+    "one_swap_validation_accuracy": 1.0,
+    "important_distribution_shift": "The learned 30-position temporal embedding saw reveal at positions 0..9, cover at 10..19, and swap_0 at 20..29. Under frame59/stride2 it sees about five positions per phase: reveal 0..5, cover 6..10, swap_0 11..15, swap_1 16..20, swap_2 21..25, settle 26..29.",
+    "optimization_difference": "The successful one-swap curriculum used separate 500-step temporal and 500-step memory stages followed by 200 low-LR joint steps. The three-swap diagnostic attempted a 150-step readout and a 300-step high-LR joint update over 147.35M parameters."
+  },
+  "conclusion": {
+    "frozen_one_swap_representation_decodes_final_slot": false,
+    "naive_short_joint_training_succeeds": false,
+    "architecture_capacity_proven_insufficient": false,
+    "most_likely_causes": [
+      "one-swap training learns a fixed phase-specific mapping rather than a reusable state-update operation",
+      "stride-2 sampling halves the observations per swap and changes apparent motion speed",
+      "learned absolute temporal positions undergo a major phase-alignment distribution shift",
+      "two factorized temporal/spatial blocks may be too shallow for three sequential identity updates",
+      "the three-swap joint optimization changes too many parameters at once and does not reproduce the successful staged curriculum"
+    ]
+  }
+}

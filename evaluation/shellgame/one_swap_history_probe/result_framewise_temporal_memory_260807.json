@@ -1,0 +1,94 @@
+{
+  "experiment": "one_swap_framewise_temporal_memory",
+  "date": "2026-08-07",
+  "task": {
+    "history_frames": [0, 29],
+    "current_frame": 30,
+    "label_key": "after_first_swap_ball_cup",
+    "classes": ["left", "middle", "right"],
+    "train_samples": 5400,
+    "validation_samples": 600,
+    "validation_class_counts": {
+      "left": 208,
+      "middle": 209,
+      "right": 183
+    },
+    "majority_baseline_accuracy": 0.3483333333
+  },
+  "architecture": {
+    "frozen_visual_tokens_per_frame": 256,
+    "history_frames": 30,
+    "framewise_spatial_slots": 16,
+    "temporal_width": 256,
+    "temporal_depth": 2,
+    "temporal_heads": 8,
+    "final_memory_tokens": 128,
+    "final_memory_width": 1152,
+    "pipeline": "frozen SigLIP patches -> shared per-frame cross-attention compressor -> factorized temporal/spatial Transformer -> final cross-attention memory compressor -> attention-pooling classifier"
+  },
+  "training": {
+    "steps": 500,
+    "warmup_steps": 50,
+    "peak_learning_rate": 0.0001,
+    "batch_size": 12,
+    "fsdp_devices": 6,
+    "gpus": [0, 1, 2, 3, 4, 5],
+    "gradient_clip_norm": 1.0,
+    "diversity_weight": 0.01,
+    "trainable_parameters": 4625028
+  },
+  "validation": {
+    "step_100": {
+      "accuracy": 0.305,
+      "classifier_loss": 1.150358,
+      "total_loss": 1.150647
+    },
+    "step_200": {
+      "accuracy": 0.3466666667,
+      "classifier_loss": 1.10583,
+      "total_loss": 1.107801
+    },
+    "step_300": {
+      "accuracy": 0.305,
+      "classifier_loss": 1.099866,
+      "total_loss": 1.101996
+    },
+    "step_400": {
+      "accuracy": 0.305,
+      "classifier_loss": 1.102018,
+      "total_loss": 1.103129
+    },
+    "final": {
+      "accuracy": 0.305,
+      "classifier_loss": 1.1009939575,
+      "diversity_loss": 0.1145438328,
+      "total_loss": 1.1021393958
+    }
+  },
+  "comparison": {
+    "old_flat_history_resampler_final_accuracy": 0.3533,
+    "raw_patch_factorized_transformer": {
+      "step_100_accuracy": 0.3467,
+      "step_200_accuracy": 0.445,
+      "step_300_accuracy": 0.9117,
+      "step_400_accuracy": 1.0,
+      "final_accuracy": 1.0
+    }
+  },
+  "aborted_stabilization_runs": {
+    "v1_without_final_slot_centering": {
+      "reason": "final memory token collapse",
+      "observed_token_cosine": "approximately 0.999",
+      "step_100_accuracy": 0.3483,
+      "step_200_accuracy": 0.305
+    },
+    "v2_centered_memory_with_flattened_classifier": {
+      "reason": "128*1152 flattened classifier produced unstable gradients and loss",
+      "step_100_accuracy": 0.3466666667,
+      "step_100_classifier_loss": 4.64623
+    }
+  },
+  "conclusion": "The stable K=16 framewise-first compression model remains at chance while the raw-patch temporal Transformer reaches 100% on the identical split. Early independent spatial compression discards or makes inaccessible the fine-grained inter-frame correspondence needed to track the cup through a swap. The next controlled test should increase K (32 or 64) or move temporal interaction before aggressive spatial compression.",
+  "source_file": "/data2/hzl_workspace_for_pi_mem/openpi-umi/examples/shellgame/train_one_swap_framewise_temporal_memory_probe.py",
+  "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_one_swap_framewise_temporal_memory_probe_260807/one_swap_framewise_temporal_memory_k16_m128_v3_260807/499"
+}

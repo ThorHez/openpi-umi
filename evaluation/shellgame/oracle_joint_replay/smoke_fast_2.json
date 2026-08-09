@@ -1,0 +1,102 @@
+{
+  "dataset_root": "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/shellgame_absolute_joint_dataset",
+  "episodes": [
+    {
+      "cup_selection": "middle",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 0,
+        "middle": 30,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.011287457342523722,
+      "eef_replay_xy_rmse_m": 0.008715287628309676,
+      "episode": "episode_002838",
+      "final_ball_cup": "right",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.017902581720031743,
+      "joint_tracking_max_abs_rad": 0.13186168670654297,
+      "joint_tracking_rmse_rad": 0.027642510293568505,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.0324629470705986,
+        "5": 0.03168874233961105,
+        "6": 0.01903778873383999,
+        "7": 0.022211391478776932
+      },
+      "seed": 576494541,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": -0.002013683319091797,
+          "middle": 0.16795241832733154,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16795241832733154
+      },
+      "target_cup": "middle",
+      "target_selection_min_xy_distance_m": 0.00013914500596001744
+    },
+    {
+      "cup_selection": "left",
+      "cup_selection_correct": true,
+      "cup_selection_votes": {
+        "left": 30,
+        "middle": 0,
+        "right": 0
+      },
+      "eef_replay_rmse_m": 0.012519614575449967,
+      "eef_replay_xy_rmse_m": 0.010637903628677076,
+      "episode": "episode_003070",
+      "final_ball_cup": "left",
+      "first_robot_index": 60,
+      "initial_joint_max_abs_error_rad": 0.0,
+      "initial_target_pos_error_m": 0.0,
+      "joint_tracking_mae_rad": 0.018354427397839334,
+      "joint_tracking_max_abs_rad": 0.16378235816955566,
+      "joint_tracking_rmse_rad": 0.029934850176382415,
+      "num_robot_steps": 95,
+      "phase_joint_tracking_rmse_rad": {
+        "4": 0.03998946025967598,
+        "5": 0.03012528270483017,
+        "6": 0.017162464559078217,
+        "7": 0.021419743075966835
+      },
+      "seed": 1223175886,
+      "success": true,
+      "success_stats": {
+        "lifts": {
+          "left": 0.16793489456176758,
+          "middle": -0.002013683319091797,
+          "right": -0.002013683319091797
+        },
+        "max_other_lift": -0.002013683319091797,
+        "target_lift": 0.16793489456176758
+      },
+      "target_cup": "left",
+      "target_selection_min_xy_distance_m": 0.00020424243120942265
+    }
+  ],
+  "sample_seed": 1,
+  "summary": {
+    "cup_selection_accuracy_all": 1.0,
+    "cup_selection_accuracy_decided": 1.0,
+    "cup_selection_correct": 2,
+    "cup_selection_decisions": 2,
+    "gripper_mode": "measured_width",
+    "joint_damping_ratio": 1.0,
+    "joint_kp": 50.0,
+    "mean_eef_replay_rmse_m": 0.011903535958986845,
+    "mean_eef_replay_xy_rmse_m": 0.009676595628493375,
+    "mean_initial_joint_max_abs_error_rad": 0.0,
+    "mean_initial_target_pos_error_m": 0.0,
+    "mean_joint_tracking_mae_rad": 0.01812850455893554,
+    "mean_joint_tracking_rmse_rad": 0.02878868023497546,
+    "num_episodes": 2,
+    "success_rate": 1.0,
+    "successes": 2
+  }
+}

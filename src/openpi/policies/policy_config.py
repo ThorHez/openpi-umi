@@ -56,6 +56,12 @@ def create_trained_policy(
     else:
         model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
+    # Keep inference tokenization identical to the training data loader.  The
+    # loader injects ``robot_type`` into tokenization transforms at runtime;
+    # without doing the same here, policies configured with a robot tag see a
+    # different prompt at serving / evaluation time than they saw in training.
+    if data_config.robot_type is not None:
+        data_config = _config._set_robot_type(data_config, data_config.robot_type)  # noqa: SLF001
     if norm_stats is None:
         # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure
         # that the policy is using the same normalization stats as the original training process.

@@ -1,0 +1,117 @@
+{
+  "experiment": "three_swap_recurrent_segment_260809",
+  "date": "2026-08-09",
+  "controlled_inputs": {
+    "siglip": "pretrained patch embeddings only",
+    "spatial_pool": "fixed 2x2, K=64",
+    "width": 256,
+    "depth_per_update": 2,
+    "memory_tokens": 128,
+    "segments": [
+      "reveal frames 0..9",
+      "reveal frames 10..19",
+      "swap_0 frames 20..29",
+      "swap_1 frames 30..39",
+      "swap_2 frames 40..49"
+    ],
+    "shared_weights": true,
+    "action_loss_weight": 0.0,
+    "validation_episodes": 600
+  },
+  "causality_test": {
+    "later_than_frame_30_cannot_change_swap_0": true,
+    "later_than_frame_40_cannot_change_swap_0_or_swap_1": true,
+    "frames_50_to_59_cannot_change_any_endpoint": true
+  },
+  "variant_k64_recurrent_state_then_m128_compressor": {
+    "script": "/data2/hzl_workspace_for_pi_mem/openpi-umi/examples/shellgame/train_three_swap_recurrent_segment_fixed_grid_probe.py",
+    "description": "carry K=64 state tokens and expand them with the old one-shot M=128 compressor",
+    "full_data_step_200": {
+      "joint_all_three_accuracy": 0.045,
+      "swap_0_accuracy": 0.345,
+      "swap_1_accuracy": 0.365,
+      "swap_2_accuracy": 0.343333,
+      "loss": 3.296111
+    },
+    "decision": "stopped at step 265 because endpoint logits became identical and validation stayed at random"
+  },
+  "variant_direct_m128_recurrent_memory": {
+    "script": "/data2/hzl_workspace_for_pi_mem/openpi-umi/examples/shellgame/train_three_swap_recurrent_memory_fixed_grid_probe.py",
+    "description": "carry M=128 tokens directly; every segment applies the same depth-2 cross-attention memory updater",
+    "checkpoint_initialization": {
+      "source": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_three_swap_shared_endpoint_joint_aux_260809/three_swap_shared_endpoint_joint_aux_260809/599/params",
+      "tracker_leaves": 80,
+      "mapped_leaves": 79,
+      "new_leaves": [
+        "relative_temporal_pos_embedding"
+      ]
+    },
+    "full_data_step_200": {
+      "joint_all_three_accuracy": 0.048333,
+      "swap_0_accuracy": 0.345,
+      "swap_1_accuracy": 0.363333,
+      "swap_2_accuracy": 0.346667,
+      "loss": 3.293823
+    },
+    "full_data_decision": "stopped at step 266 because the model had seen only 1200 of 5400 training episodes and showed no loss trend; proceeded to an exact small-set capacity test"
+  },
+  "overfit_capacity_test": {
+    "subset": "2 episodes per each of 27 joint endpoint classes",
+    "num_episodes": 54,
+    "validation_is_same_subset": true,
+    "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_three_swap_recurrent_memory_joint_aux_260809/recurrent_memory_overfit54_260809/299/params",
+    "curve": [
+      {
+        "step": 100,
+        "joint_all_three_accuracy": 0.111111,
+        "swap_0_accuracy": 0.481481,
+        "swap_1_accuracy": 0.425926,
+        "swap_2_accuracy": 0.407407,
+        "loss": 3.072773
+      },
+      {
+        "step": 150,
+        "joint_all_three_accuracy": 0.203704,
+        "swap_0_accuracy": 0.611111,
+        "swap_1_accuracy": 0.518519,
+        "swap_2_accuracy": 0.555556,
+        "loss": 2.642361
+      },
+      {
+        "step": 200,
+        "joint_all_three_accuracy": 0.333333,
+        "swap_0_accuracy": 0.722222,
+        "swap_1_accuracy": 0.611111,
+        "swap_2_accuracy": 0.759259,
+        "loss": 1.975772
+      },
+      {
+        "step": 300,
+        "joint_all_three_accuracy": 0.666667,
+        "swap_0_accuracy": 0.925926,
+        "swap_1_accuracy": 0.777778,
+        "swap_2_accuracy": 0.925926,
+        "loss": 1.020528
+      }
+    ]
+  },
+  "overfit_checkpoint_heldout_generalization": {
+    "validation_episodes": 600,
+    "joint_all_three_accuracy": 0.043333,
+    "swap_0_accuracy": 0.365,
+    "swap_1_accuracy": 0.285,
+    "swap_2_accuracy": 0.353333,
+    "loss": 7.410216
+  },
+  "baselines": {
+    "single_endpoint_random_accuracy": 0.333333,
+    "joint_random_accuracy": 0.037037,
+    "joint_random_cross_entropy": 3.295837
+  },
+  "conclusions": [
+    "The direct M=128 recurrent implementation has a valid gradient and capacity path: it can memorize the 54-example subset and preserves diverse memory tokens.",
+    "Its 54-example solution does not generalize to held-out episodes, so the current updater has not learned a reusable swap transition rule.",
+    "The one-shot model's first-swap advantage is not reproduced merely by adding shared recurrent calls; recurrence alone is insufficient under the present supervision and optimization schedule.",
+    "The next clean separation is an oracle-initial-state transition test: initialize the hidden cup state from ground-truth, feed only swap segments, and test whether the shared updater can apply the visible cup permutation three times."
+  ]
+}

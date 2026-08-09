@@ -1,0 +1,52 @@
+{
+  "experiment": "one_swap_temporal_transformer_v2_260807",
+  "description": "One-swap classification from the full pre-resampler Base-camera patch grid (30 frames x 256 patches) using a trainable factorized space-time Transformer; history_mem is bypassed.",
+  "source_checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_mem_compress_evan_shellgame_openpi_joint_260727/my_experiment_30f_s2_6gpu/23000/params",
+  "output_checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_one_swap_temporal_transformer_probe_260807/one_swap_temporal_transformer_v2_260807/499",
+  "label_key": "after_first_swap_ball_cup",
+  "train_episodes": 5400,
+  "validation_episodes": 600,
+  "validation_class_counts": {
+    "left": 208,
+    "middle": 209,
+    "right": 183
+  },
+  "random_baseline_accuracy": 0.3333333333333333,
+  "majority_baseline_accuracy": 0.34833333333333333,
+  "trainable_parameters": 2677251,
+  "architecture": {
+    "input_frames": 30,
+    "patches_per_frame": 256,
+    "input_width": 1152,
+    "temporal_width": 256,
+    "depth": 2,
+    "heads": 8
+  },
+  "steps": 500,
+  "warmup_steps": 50,
+  "peak_lr": 0.0003,
+  "batch_size": 12,
+  "validation": {
+    "step_100": {
+      "accuracy": 0.3466666666666667,
+      "loss": 1.100321
+    },
+    "step_200": {
+      "accuracy": 0.445,
+      "loss": 0.987989
+    },
+    "step_300": {
+      "accuracy": 0.9116666666666666,
+      "loss": 0.181037
+    },
+    "step_400": {
+      "accuracy": 1.0,
+      "loss": 0.000206
+    },
+    "final": {
+      "accuracy": 1.0,
+      "loss": -0.000557098388671875
+    }
+  },
+  "conclusion": "The frozen pre-resampler SigLIP patch sequence contains enough information to identify the cup after one swap. The dominant failure is in the existing history compression/temporal readout path, not missing visual evidence."
+}
