@@ -244,7 +244,16 @@ class Pi0(_model.BaseModel):
         *,
         num_steps: int | at.Int[at.Array, ""] = 10,
         noise: at.Float[at.Array, "b ah ad"] | None = None,
+        rtc_actions: at.Float[at.Array, "b ah ad"] | None = None,
+        rtc_mask: at.Float[at.Array, "b ah 1"] | None = None,
+        rtc_guidance_weight: float = 5.0,
     ) -> _model.Actions:
+        """Sample actions, optionally using RTC pseudoinverse guidance.
+
+        ``rtc_actions`` and ``rtc_mask`` are the padded previous chunk and the
+        soft mask from Equation 5 of the RTC paper. openpi integrates from
+        noise time 1 to data time 0, the reverse of the paper's convention.
+        """
         observation = _model.preprocess_observation(None, observation, train=False)
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
@@ -259,8 +268,7 @@ class Pi0(_model.BaseModel):
         positions = jnp.cumsum(prefix_mask, axis=1) - 1
         _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
 
-        def step(carry):
-            x_t, time = carry
+        def denoise_step(x_t, time):
             suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(
                 observation, x_t, jnp.broadcast_to(time, batch_size)
             )
@@ -289,7 +297,34 @@ class Pi0(_model.BaseModel):
                 adarms_cond=[None, adarms_cond],
             )
             assert prefix_out is None
-            v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
+            return self.action_out_proj(suffix_out[:, -self.action_horizon :])
+
+        def step(carry):
+            x_t, time = carry
+            if rtc_actions is None:
+                v_t = denoise_step(x_t, time)
+            else:
+                if rtc_mask is None:
+                    raise ValueError("rtc_mask is required when rtc_actions is provided")
+
+                # Equation 3 under openpi's reversed time convention:
+                # x_0_hat = x_t - t * v(x_t, t).
+                def estimate_actions(x):
+                    return x - time * denoise_step(x, time)
+
+                estimated_actions, pullback = jax.vjp(estimate_actions, x_t)
+                v_t = (x_t - estimated_actions) / time
+                error = (rtc_actions - estimated_actions) * rtc_mask
+                guidance = pullback(error)[0]
+
+                # Substitute paper time tau = 1 - time into Equation 2.
+                signal_time = 1.0 - time
+                r_squared = jnp.square(time) / (jnp.square(signal_time) + jnp.square(time))
+                raw_weight = time / (signal_time * r_squared)
+                weight = jnp.minimum(jnp.asarray(rtc_guidance_weight, dtype=time.dtype), raw_weight)
+
+                # v_openpi = -v_paper because openpi integrates time backwards.
+                v_t = v_t - weight * guidance
 
             return x_t + dt * v_t, time + dt
 

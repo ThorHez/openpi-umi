@@ -19,6 +19,18 @@ uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi0_fast_droid 
 
 This will start a policy server that will serve the policy specified by the `config` and `dir` arguments. The policy will be served on the specified port (default: 8000).
 
+### Real-time chunking (RTC)
+
+Flow-based pi0 and pi0.5 policies can use the inference-time RTC algorithm from [Real-Time Execution of Action Chunking Flow Policies](https://arxiv.org/abs/2506.07339):
+
+```bash
+uv run scripts/serve_policy.py --env ALOHA --rtc.enabled
+```
+
+The defaults adapt to the model's prediction horizon: `min_execution_horizon=H//2` and `initial_delay_steps=min(6, H//4)`, with a 10-entry delay buffer, 5 denoising steps, and guidance clipping at 5. Thus the paper's `H=50` setup uses `s_min=25, d_init=6`, while this repository's common UMI `H=16` setup uses `s_min=8, d_init=4`. Override them with flags such as `--rtc.min-execution-horizon=6` and `--rtc.initial-delay-steps=3`. RTC requires `initial_delay_steps <= min_execution_horizon <= prediction_horizon - initial_delay_steps`.
+
+With RTC enabled, send the newest observation on every controller tick. Each response contains exactly one action as a chunk with shape `(1, action_dim)` while the next full chunk is generated in the server's background thread. Existing runtime examples can therefore use `ActionChunkBroker(policy=client, action_horizon=1)`. Do not buffer several returned actions before sending the next observation; doing so would remove the execution/inference overlap that makes RTC real-time.
+
 ## Querying the remote policy server from your robot code
 
 We provide a client utility with minimal dependencies that you can easily embed into any robot codebase.
