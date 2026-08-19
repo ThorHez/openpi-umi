@@ -863,7 +863,10 @@ def _episode_split_indices(dataset, val_ratio: float, seed: int) -> tuple[list[i
     """Split a Pi0Mem dataset by episode, preventing temporal leakage."""
     current = dataset
     hf_dataset = None
+    sample_indices = None
     while current is not None:
+        if sample_indices is None:
+            sample_indices = getattr(current, "sample_indices", None)
         hf_dataset = getattr(current, "_hf_dataset", None)
         if hf_dataset is not None:
             break
@@ -877,6 +880,8 @@ def _episode_split_indices(dataset, val_ratio: float, seed: int) -> tuple[list[i
         )
 
     episode_indices = np.asarray(hf_dataset["episode_index"], dtype=np.int64)
+    if sample_indices is not None:
+        episode_indices = episode_indices[np.asarray(sample_indices, dtype=np.int64)]
     if episode_indices.shape != (len(dataset),):
         raise ValueError(
             f"episode_index has shape {episode_indices.shape}, but dataset length is {len(dataset)}."
@@ -906,7 +911,10 @@ def _filter_memory_classifier_frame_range(
         return indices
     current = dataset
     hf_dataset = None
+    sample_indices = None
     while current is not None:
+        if sample_indices is None:
+            sample_indices = getattr(current, "sample_indices", None)
         hf_dataset = getattr(current, "_hf_dataset", None)
         if hf_dataset is not None:
             break
@@ -914,6 +922,8 @@ def _filter_memory_classifier_frame_range(
     if hf_dataset is None or "frame_index" not in getattr(hf_dataset, "column_names", ()):
         raise ValueError("Classification-only frame filtering requires a frame_index column.")
     frame_indices = np.asarray(hf_dataset["frame_index"], dtype=np.int64)
+    if sample_indices is not None:
+        frame_indices = frame_indices[np.asarray(sample_indices, dtype=np.int64)]
     selected = np.asarray(indices, dtype=np.int64)
     keep = (
         (frame_indices[selected] >= classifier_config.min_frame_index)
@@ -939,7 +949,10 @@ def _select_balanced_memory_classifier_indices(
 
     current = dataset
     hf_dataset = None
+    sample_indices = None
     while current is not None:
+        if sample_indices is None:
+            sample_indices = getattr(current, "sample_indices", None)
         hf_dataset = getattr(current, "_hf_dataset", None)
         if hf_dataset is not None:
             break
@@ -948,7 +961,10 @@ def _select_balanced_memory_classifier_indices(
         raise ValueError("Balanced overfit selection requires an episode_index column.")
 
     selected = np.asarray(indices, dtype=np.int64)
-    episode_indices = np.asarray(hf_dataset["episode_index"], dtype=np.int64)[selected]
+    episode_indices = np.asarray(hf_dataset["episode_index"], dtype=np.int64)
+    if sample_indices is not None:
+        episode_indices = episode_indices[np.asarray(sample_indices, dtype=np.int64)]
+    episode_indices = episode_indices[selected]
     labels_by_episode = np.asarray(jax.device_get(class_labels_by_episode), dtype=np.int32)
     if np.any(episode_indices < 0) or np.any(episode_indices >= labels_by_episode.shape[0]):
         raise ValueError("Overfit subset contains an episode_index without a classifier label.")

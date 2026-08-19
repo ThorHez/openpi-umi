@@ -38,11 +38,148 @@ class VideoFrameConfig:
     padding_mode: str = "repeat"
     num_future_frames: int = 0
     future_frame_stride: int = 1
+    layout: str = "sliding"
+    fixed_prefix_frames: int = 0
+    min_frame_index: int | None = None
+    max_frame_index: int | None = None
 
     @property
     def total_frames(self) -> int:
         """Total frames emitted per image key (past + current + future)."""
         return self.num_frames + self.num_future_frames
+
+
+class FixedPrefixCurrentVideoDataset(_data_loader.Dataset):
+    """Emit an episode's fixed prefix followed by one dynamic current frame.
+
+    This is the production dataset contract for semantic-memory policies.  A
+    sample at episode frame ``t`` becomes ``[frame 0, ..., frame P-1, frame t]``.
+    Optional frame bounds are applied once at construction so early rows that
+    cannot supply the complete prefix never reach the training sampler.
+    """
+
+    def __init__(self, dataset: _data_loader.Dataset, config: VideoFrameConfig):
+        if config.layout != "fixed_prefix_current":
+            raise ValueError(f"Expected layout='fixed_prefix_current', got {config.layout!r}")
+        if config.fixed_prefix_frames <= 0:
+            raise ValueError("fixed_prefix_frames must be positive")
+        if config.num_frames != config.fixed_prefix_frames + 1:
+            raise ValueError(
+                "Fixed-prefix layout requires num_frames=fixed_prefix_frames+1; "
+                f"got {config.num_frames} and {config.fixed_prefix_frames}"
+            )
+        if config.num_future_frames != 0:
+            raise ValueError("Fixed-prefix layout does not support future image frames")
+
+        self._dataset = dataset
+        self._config = config
+        self._hf_dataset = None
+        if hasattr(dataset, "hf_dataset"):
+            self._hf_dataset = dataset.hf_dataset
+        else:
+            inner_dataset = getattr(dataset, "_dataset", None)
+            if inner_dataset is not None and hasattr(inner_dataset, "hf_dataset"):
+                self._hf_dataset = inner_dataset.hf_dataset
+        if self._hf_dataset is None:
+            raise ValueError("FixedPrefixCurrentVideoDataset requires a LeRobot hf_dataset")
+
+        columns = set(getattr(self._hf_dataset, "column_names", ()) or ())
+        if "frame_index" not in columns:
+            raise ValueError("Fixed-prefix layout requires a frame_index column")
+        frame_indices = np.asarray(self._hf_dataset["frame_index"], dtype=np.int64)
+        min_frame = config.min_frame_index
+        if min_frame is None:
+            min_frame = config.fixed_prefix_frames - 1
+        max_frame = config.max_frame_index
+        eligible = frame_indices >= min_frame
+        if max_frame is not None:
+            eligible &= frame_indices <= max_frame
+        self._sample_indices = np.flatnonzero(eligible).astype(np.int64)
+        if self._sample_indices.size == 0:
+            raise ValueError(
+                f"Fixed-prefix frame range [{min_frame}, {max_frame}] selected no rows"
+            )
+
+        self._source_keys = {
+            key: _resolve_image_source_key(key, columns) or key for key in config.image_keys
+        }
+        history_columns = list(dict.fromkeys(("episode_index", *self._source_keys.values())))
+        self._history_hf_dataset = self._hf_dataset
+        if columns and all(column in columns for column in history_columns):
+            self._history_hf_dataset = self._hf_dataset.select_columns(history_columns)
+
+    @property
+    def sample_indices(self) -> np.ndarray:
+        """Indices into the underlying full LeRobot dataset."""
+        return self._sample_indices
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        source_index = int(self._sample_indices[int(index)])
+        data = dict(self._dataset[source_index])
+        data.setdefault("index", source_index)
+        current_index = _to_int(data.get("index"), default=source_index)
+        current_episode = _to_int(data.get("episode_index"), default=-1)
+        current_frame = _to_int(data.get("frame_index"), default=-1)
+        if current_episode < 0 or current_frame < 0:
+            row = self._hf_dataset[current_index]
+            current_episode = _to_int(row.get("episode_index"), default=-1)
+            current_frame = _to_int(row.get("frame_index"), default=-1)
+            data["episode_index"] = current_episode
+            data["frame_index"] = current_frame
+        if current_frame < self._config.fixed_prefix_frames - 1:
+            raise ValueError(
+                "Fixed-prefix sample is earlier than the complete history: "
+                f"frame_index={current_frame}, prefix={self._config.fixed_prefix_frames}"
+            )
+
+        episode_start = current_index - current_frame
+        prefix_indices = [
+            episode_start + offset for offset in range(self._config.fixed_prefix_frames)
+        ]
+        target_indices = [*prefix_indices, current_index]
+        batch_rows = self._history_hf_dataset[prefix_indices]
+        rows = {
+            row_index: {key: _batch_item(value, position) for key, value in batch_rows.items()}
+            for position, row_index in enumerate(prefix_indices)
+        }
+        for row_index, row in rows.items():
+            row_episode = _to_int(row.get("episode_index"), default=-1)
+            if row_episode != current_episode:
+                raise RuntimeError(
+                    f"Fixed prefix crossed an episode boundary at row {row_index}: "
+                    f"expected {current_episode}, got {row_episode}"
+                )
+
+        frame_valid_masks = {}
+        for image_key in self._config.image_keys:
+            source_key = self._source_keys[image_key]
+            current_source = _resolve_image_source_key(image_key, data) or source_key
+            frames = []
+            for row_index in prefix_indices:
+                raw = rows[row_index].get(source_key)
+                if raw is None:
+                    resolved = _resolve_image_source_key(image_key, rows[row_index])
+                    raw = rows[row_index].get(resolved) if resolved is not None else None
+                if raw is None:
+                    raise KeyError(f"Missing {image_key!r} at global row {row_index}")
+                frames.append(_parse_image(raw))
+
+            current_raw = data.get(current_source)
+            if current_raw is None:
+                current_raw = self._hf_dataset[current_index].get(source_key)
+            if current_raw is None:
+                raise KeyError(f"Missing current {image_key!r} at global row {current_index}")
+            frames.append(_parse_image(current_raw))
+
+            for offset, frame in enumerate(frames):
+                data[f"{image_key}_{offset}"] = frame
+            frame_valid_masks[image_key] = np.ones(len(target_indices), dtype=np.bool_)
+
+        data["video_frame_valid_mask"] = frame_valid_masks
+        return data
+
+    def __len__(self) -> int:
+        return int(self._sample_indices.size)
 
 
 def _parse_image(image) -> np.ndarray:

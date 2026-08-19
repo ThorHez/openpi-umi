@@ -38,7 +38,9 @@ import openpi.models.model as _model
 import openpi.training.config as _config
 import openpi.training.data_loader as _data_loader
 import openpi.transforms as _transforms
-from openpi.training.mem.video_dataset import VideoFrameConfig, VideoFrameDataset
+from openpi.training.mem.video_dataset import FixedPrefixCurrentVideoDataset
+from openpi.training.mem.video_dataset import VideoFrameConfig
+from openpi.training.mem.video_dataset import VideoFrameDataset
 
 
 # ---------------------------------------------------------------------------
@@ -598,8 +600,15 @@ def _build_pi0_mem_dataset(
         )
 
     # The defining piece of the Pi0Mem paradigm: wrap the dataset so each
-    # __getitem__ resolves T historical frames from the underlying HF dataset.
-    video_ds = VideoFrameDataset(base_ds, video_frame_config)
+    # __getitem__ resolves its configured temporal layout from the underlying
+    # HF dataset. Semantic-memory policies use a fixed episode prefix plus a
+    # dynamic current observation; other models retain the sliding window.
+    if video_frame_config.layout == "fixed_prefix_current":
+        video_ds = FixedPrefixCurrentVideoDataset(base_ds, video_frame_config)
+    elif video_frame_config.layout == "sliding":
+        video_ds = VideoFrameDataset(base_ds, video_frame_config)
+    else:
+        raise ValueError(f"Unknown Pi0Mem video layout {video_frame_config.layout!r}")
 
     # Reuse the standard transform pipeline (repack -> data_transforms ->
     # Normalize -> model_transforms -> action_loss_mask) so we stay in lock
