@@ -55,6 +55,46 @@ class CheckpointWeightLoader(WeightLoader):
 
 
 @dataclasses.dataclass(frozen=True)
+class CheckpointWeightLoaderReinitialize(WeightLoader):
+    """Load a checkpoint while deliberately reinitializing selected leaves.
+
+    This is useful for a pretraining recipe that shares a large frozen
+    backbone with an existing policy checkpoint but must train a named module
+    from scratch.  ``reinitialize_regex`` is matched against slash-separated
+    parameter paths with :func:`re.fullmatch`.
+    """
+
+    params_path: str
+    reinitialize_regex: str
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded_params = _model.restore_params(
+            download.maybe_download(self.params_path), restore_type=np.ndarray
+        )
+        flat_ref = flax.traverse_util.flatten_dict(params, sep="/")
+        flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
+        pattern = re.compile(self.reinitialize_regex)
+        reinitialized = [key for key in flat_ref if pattern.fullmatch(key)]
+        if not reinitialized:
+            raise ValueError(
+                "reinitialize_regex matched no target parameters: "
+                f"{self.reinitialize_regex!r}"
+            )
+        for key in reinitialized:
+            flat_loaded[key] = flat_ref[key]
+        logger.info(
+            "Reinitialized %d checkpoint leaves matching %r",
+            len(reinitialized),
+            self.reinitialize_regex,
+        )
+        return _merge_params(
+            flax.traverse_util.unflatten_dict(flat_loaded, sep="/"),
+            params,
+            missing_regex=".*lora.*",
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class PaliGemmaWeightLoader(WeightLoader):
     """Loads weights from the official PaliGemma checkpoint.
 

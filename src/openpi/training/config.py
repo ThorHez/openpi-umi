@@ -33,7 +33,6 @@ import openpi.models.pi0_discrete as pi0_discrete
 import openpi.models.pi0_mem as pi0_mem
 import openpi.models.pi0_mem_compress as pi0_mem_compress
 import openpi.models.pi0_mem_fixed_grid_query_action as pi0_mem_fixed_grid_query_action
-import openpi.models.pi0_mem_semantic_action as pi0_mem_semantic_action
 import openpi.models.pi0_mem_post_transformer as pi0_mem_post_transformer
 import openpi.models.pi0_mem_pf as pi0_mem_pf
 import openpi.models.pi0_mem_pf_safe as pi0_mem_pf_safe
@@ -2084,131 +2083,6 @@ class LeRobotUmiDataConfig_shellgame_Pi0Mem(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
-class LeRobotUmiDataConfig_shellgame_Pi0Mem_AbsoluteEEF7(DataConfigFactory):
-    """Shell-game video config for native absolute OSC EEF commands.
-
-    The real (unpadded) action is exactly seven dimensional:
-    ``world_xyz[3] + continuous_rotvec[3] + gripper[1]``.  The robot state is
-    the measured ten-dimensional EEF representation used by the existing
-    shell-game pipeline.  Keeping this separate from the legacy 10-D pose
-    config prevents action normalization from silently consuming three padded
-    dimensions.
-    """
-
-    num_frames: int = 16
-    frame_stride: int = 10
-    padding_mode: str = "repeat"
-    num_future_frames: int = 0
-    future_frame_stride: int = 1
-    video_layout: str = "sliding"
-    fixed_prefix_frames: int = 0
-    min_frame_index: int | None = None
-    max_frame_index: int | None = None
-    image_keys: tuple[str, ...] = (
-        "left_wrist_0_rgb_0",
-        "left_wrist_0_rgb_1",
-    )
-
-    normalize_masks = {
-        "actions": make_bool_mask(7),
-        "state": make_bool_mask(10),
-    }
-
-    @property
-    def total_frames(self) -> int:
-        return self.num_frames + self.num_future_frames
-
-    def video_frame_config(self):
-        """Video sampling contract consumed by the Pi0Mem data loader."""
-        from openpi.training.mem.video_dataset import VideoFrameConfig
-
-        return VideoFrameConfig(
-            image_keys=tuple(self.image_keys),
-            num_frames=self.num_frames,
-            frame_stride=self.frame_stride,
-            padding_mode=self.padding_mode,
-            num_future_frames=self.num_future_frames,
-            future_frame_stride=self.future_frame_stride,
-            layout=self.video_layout,
-            fixed_prefix_frames=self.fixed_prefix_frames,
-            min_frame_index=self.min_frame_index,
-            max_frame_index=self.max_frame_index,
-        )
-
-    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
-        config = super().create_base_config(assets_dirs, model_config)
-        return dataclasses.replace(config, normalize_masks=self.normalize_masks)
-
-    @override
-    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
-        import openpi.training.config_pi0_mem as _config_pi0_mem
-        from openpi import transforms_video as _transforms_video
-
-        per_frame_keys = {
-            f"{key}_{t}": f"{key}_{t}"
-            for key in self.image_keys
-            for t in range(self.total_frames)
-        }
-        frame_valid_mask_keys = {
-            "video_frame_valid_mask": {
-                key: f"video_frame_valid_mask/{key}" for key in self.image_keys
-            }
-        }
-        repack_transform = _transforms.Group(
-            inputs=[
-                _transforms.RepackTransform(
-                    {
-                        "robot0_eef_pos": "observation.robot0_eef_pos",
-                        "robot0_eef_rot_axis_angle": "observation.robot0_eef_rot_axis_angle",
-                        "robot0_gripper_width": "observation.robot0_gripper_width",
-                        **per_frame_keys,
-                        **frame_valid_mask_keys,
-                        "actions": "actions",
-                        "prompt": "task",
-                        "episode_index": "episode_index",
-                        "frame_index": "frame_index",
-                    }
-                )
-            ]
-        )
-        data_transforms = _transforms.Group(
-            inputs=[
-                _transforms_video.BuildVideoTensor(
-                    image_keys=tuple(self.image_keys),
-                    num_frames=self.total_frames,
-                    output_keys={key: f"{key}_video" for key in self.image_keys},
-                ),
-                _config_pi0_mem.UmiInputsV4_Shellgame_Video(num_frames=self.total_frames),
-            ],
-        )
-        model_transforms = _transforms.Group(
-            inputs=[
-                _transforms.InjectDefaultPrompt(None),
-                _transforms.TokenizePrompt(
-                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
-                    discrete_state_input=(
-                        model_config.discrete_state_input
-                        if hasattr(model_config, "discrete_state_input")
-                        else False
-                    ),
-                ),
-                _transforms.PadActionsOnly(model_config.action_dim),
-                _transforms.FlattenState(),
-            ],
-            outputs=[
-                _transforms.ChunkActions(target_dim=7),
-                _transforms.DropKeys(keys=("state",)),
-            ],
-        )
-        return dataclasses.replace(
-            self.create_base_config(assets_dirs, model_config),
-            repack_transforms=repack_transform,
-            data_transforms=data_transforms,
-            model_transforms=model_transforms,
-        )
-
-
-@dataclasses.dataclass(frozen=True)
 class LeRobotUmiDataConfig_shellgame_Pi0Mem_Joint(DataConfigFactory):
     """Pi0Mem data config for bimanual wrist + head RGB/depth streams.
 
@@ -3645,54 +3519,6 @@ _shellgame_history_classifier_probe_model = pi0_mem_compress.Pi0MemCompressConfi
     history_classifier_num_classes=3,
 )
 
-# Consolidated production model for the validated semantic recurrent memory
-# and direct action-memory interface. The legacy Pi0MemCompress history branch
-# is disabled; it remains only as the checkpoint-compatible visual backbone.
-_shellgame_semantic_action_model = pi0_mem_semantic_action.Pi0MemSemanticActionConfig(
-    pi05=True,
-    action_dim=32,
-    action_horizon=16,
-    action_loss_mask=(1.0,) * 7 + (0.0,) * 25,
-    max_token_len=256,
-    num_frames=61,
-    current_frame_index=-1,
-    memory_every=0,
-    history_memory_tokens=1,
-    history_resampler_depth=1,
-    history_use_current_condition=False,
-    history_gate_fixed=0.0,
-    diversity_weight=0.0,
-    current_frame_corrupt_sample_prob=0.0,
-    current_frame_dropout_prob=0.0,
-    current_frame_mask_prob=0.0,
-    current_frame_corrupt_loss_weight=0.0,
-    history_classifier_num_classes=0,
-    history_frames=60,
-    encoder_width=256,
-    encoder_depth=2,
-    encoder_heads=8,
-    semantic_memory_width=64,
-    semantic_memory_depth=2,
-    semantic_memory_heads=4,
-    semantic_memory_tokens=128,
-    diagnostic_current_tokens=256,
-    diagnostic_adapter_heads=4,
-    diagnostic_residual_scale=1.0,
-    video_mode="normal",
-    initial_mode="normal",
-    relation_mode="one_hot",
-    raw_memory_mode="normal",
-    query_tokens=16,
-    query_width=256,
-    query_depth=2,
-    query_heads=4,
-    action_cross_attention_heads=8,
-    gripper_loss_weight=4.0,
-    real_action_dim=7,
-    gripper_action_index=6,
-    last_episode_frame=154,
-)
-
 # Formal generic action model following the controlled query-action probe.  It
 # retains a 60-frame stride-1 history, encodes historical patches through the
 # lightweight fixed-grid temporal path, and exposes the resulting memory to
@@ -3755,6 +3581,20 @@ _shellgame_history_post_transformer_probe_model = (
         current_frame_corrupt_loss_weight=0.0,
         history_classifier_num_classes=3,
     )
+)
+
+# Import task recipes only after the shared config dataclasses are defined.
+# This keeps task-specific data and model policy code out of this registry.
+from openpi.training.mem.recipes import shellgame_semantic_action as _shellgame_semantic_action_recipe  # noqa: E402
+
+_shellgame_semantic_action_train_config = (
+    _shellgame_semantic_action_recipe.make_train_config()
+)
+
+# Temporary import compatibility for local experiment scripts. New code should
+# import the task recipe directly from openpi.training.mem.recipes.
+LeRobotUmiDataConfig_shellgame_Pi0Mem_AbsoluteEEF7 = (
+    _shellgame_semantic_action_recipe.data_config_type()
 )
 
 # Use `get_config` if you need to get a config by name in your code.
@@ -6017,67 +5857,7 @@ _CONFIGS = [
         ),
     ),
 
-    TrainConfig(
-        name="pi0_mem_semantic_action_shellgame_eef7",
-        model=_shellgame_semantic_action_model,
-        freeze_filter=_shellgame_semantic_action_model.get_freeze_filter_action_finetune(),
-        data=MultiDataConfigFactory(
-            state_pad_dim=96,
-            weights=[1.0],
-            datasets=[
-                LeRobotUmiDataConfig_shellgame_Pi0Mem_AbsoluteEEF7(
-                    repo_id=(
-                        "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
-                        "shellgame_lerobot_absolute_eef_raw7"
-                    ),
-                    assets=AssetsConfig(
-                        asset_id=".",
-                        assets_dir=(
-                            "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
-                            "shellgame_lerobot_absolute_eef_raw7"
-                        ),
-                    ),
-                    base_config=UmiDataConfig(
-                        action_loss_mask=(1.0,) * 7 + (0.0,) * 25,
-                        robot_type="ARM=1 G=0 H=0",
-                    ),
-                    num_frames=61,
-                    frame_stride=1,
-                    video_layout="fixed_prefix_current",
-                    fixed_prefix_frames=60,
-                    min_frame_index=59,
-                    max_frame_index=153,
-                ),
-            ],
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader(
-            "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/"
-            "pi0_shellgame_old_tracker_full_absolute_eef7_mixed_correction_v6_260816/"
-            "absolute_eef7_mixed_correction_v6_dynamic_phase_60_30_5_3_2_b12_3k_6gpu_260816/"
-            "5999/params"
-        ),
-        lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=300,
-            peak_lr=3e-5,
-            decay_steps=6_000,
-            decay_lr=3e-6,
-        ),
-        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        ema_decay=None,
-        num_train_steps=6_000,
-        batch_size=12,
-        num_workers=8,
-        fsdp_devices=6,
-        log_interval=10,
-        save_interval=500,
-        keep_period=1_000,
-        val_ratio=0.1,
-        eval_interval=250,
-        eval_batches=20,
-        wandb_enabled=False,
-        shellgame_memory_classifier=ShellgameMemoryClassifierConfig(enabled=False),
-        shellgame_cup_eval=ShellgameCupEvalConfig(enabled=False),
-    ),
+    _shellgame_semantic_action_train_config,
 
     TrainConfig(
         name="pi0_mem_fixed_grid_query_action_shellgame_joint_260810",

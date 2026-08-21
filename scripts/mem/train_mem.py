@@ -1,8 +1,8 @@
 """Unified training entry point for compressed and semantic Pi0 memory models.
 
-This stable entry point delegates to the mature Pi0MemCompress trainer, which
-already provides the video-aware data loader, validation, checkpointing and
-memory diagnostics required by :class:`Pi0MemSemanticActionConfig`.
+This stable entry point delegates to the shared memory trainer, which provides
+the video-aware data loader, validation, checkpointing, and diagnostics used
+by both generic memory models and task-specific recipes.
 
 Example::
 
