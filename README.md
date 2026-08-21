@@ -13,10 +13,59 @@ This is an experiment: $\pi_0$ was developed for our own robots, which differ fr
 
 ## Updates
 
+- [Aug 2026] Added a task-agnostic semantic-memory core, a ShellGame task adapter, and unified two-stage training entry points for supervised memory pretraining and memory-conditioned action training.
 - [Sept 2025] We released PyTorch support in openpi.
 - [Sept 2025] We released pi05, an upgraded version of pi0 with better open-world generalization.
 - [Sept 2025]: We have added an [improved idle filter](examples/droid/README_train.md#data-filtering) for DROID training.
 - [Jun 2025]: We have added [instructions](examples/droid/README_train.md) for using `openpi` to train VLAs on the full [DROID dataset](https://droid-dataset.github.io/). This is an approximate open-source implementation of the training pipeline used to train pi0-FAST-DROID. 
+
+## Semantic Memory Training
+
+The `mem_exp` branch includes a reusable compact-memory framework and a ShellGame reference task. Task-neutral visual-memory and action-conditioning modules live in:
+
+```text
+src/openpi/models/siglip_mem_semantic.py
+src/openpi/models/pi0_mem_semantic_action.py
+```
+
+Task-specific event definitions, frame schedules, labels, and EEF action semantics are isolated under `src/openpi/tasks/shellgame`, while training hyperparameters and dataset contracts live under `src/openpi/training/mem/recipes`.
+
+The ShellGame pipeline uses 60 fixed history frames plus one dynamic current frame. It produces a compact `[B, 128, 64]` semantic memory, resamples it into 16 action-width queries, and conditions the π₀.₅ flow action expert through cross-attention.
+
+Training has two stages:
+
+1. Supervise the semantic memory with initial-cup, swap-relation, and recurrent stage-slot labels.
+2. Load the resulting checkpoint and train the memory-conditioned absolute-EEF action policy.
+
+Run stage 1 with the standalone memory objective:
+
+```bash
+TAG=my_run
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 \
+uv run python scripts/mem/train_semantic_memory.py \
+  shellgame_semantic_memory_pretrain \
+  --exp-name "semantic_memory_${TAG}" \
+  --fsdp-devices 6
+```
+
+Then explicitly pass the stage-1 parameters into stage 2:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 \
+uv run python scripts/mem/train_mem.py \
+  pi0_mem_semantic_action_shellgame_eef7 \
+  --exp-name "semantic_action_${TAG}" \
+  --weight-loader.params-path \
+    "checkpoints/shellgame_semantic_memory_pretrain/semantic_memory_${TAG}/5999/params" \
+  --fsdp-devices 6
+```
+
+The checkpoint override is required: without it, the action recipe uses its configured default initialization instead of the newly pretrained memory. The current reference action recipe uses nominal absolute-EEF demonstrations and freezes the semantic memory and memory-to-action interface; it is a generic baseline, not a reproduction of the earlier V10 mixed-data recipe.
+
+See [ShellGame Semantic Memory Training Steps](docs/shellgame_generic_semantic_training_steps_260821.md) for dataset requirements, complete background commands, validation metrics, checkpoint selection, and closed-loop evaluation requirements.
 
 
 ## Requirements
