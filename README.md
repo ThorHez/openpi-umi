@@ -65,8 +65,10 @@ uv run python scripts/mem/train_mem.py \
 
 The checkpoint override is required: without it, the action recipe uses its configured default initialization instead of the newly pretrained memory. The current reference action recipe uses nominal absolute-EEF demonstrations and freezes the semantic memory and memory-to-action interface; it is a generic baseline, not a reproduction of the earlier V10 mixed-data recipe.
 
-See [ShellGame Semantic Memory Training Steps](docs/shellgame_generic_semantic_training_steps_260821.md) for dataset requirements, complete background commands, validation metrics, checkpoint selection, and closed-loop evaluation requirements.
+Documentation:
 
+- [ShellGame Semantic Memory Training Steps](docs/shellgame_generic_semantic_training_steps_260821.md) describes the refactored two-stage workflow, dataset requirements, complete background commands, validation metrics, checkpoint selection, and closed-loop evaluation requirements.
+- [ShellGame MEM + Absolute EEF Stage Summary](docs/shellgame_mem_absolute_eef_stage_summary_260821.md) records the full historical iteration path and ablations, including joint replay/FK diagnostics, memory compression studies, joint-to-EEF migration, correction-data versions, deployment controls, and the V6/V10 100-episode results. It covers both legacy experiment interfaces and the evidence that motivated the refactored workflow above.
 
 ## Requirements
 
