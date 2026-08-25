@@ -1,0 +1,8 @@
+# Install these only in the isolated Qwen environment, never openpi-umi/.venv.
+# The tested host environment used torch 2.7.1+cu118 on an NVIDIA 12.4 driver.
+torch>=2.6,<2.8
+transformers==4.57.1
+tokenizers==0.22.1
+accelerate>=1.0
+numpy>=1.26
+pillow>=10

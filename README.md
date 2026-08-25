@@ -13,6 +13,7 @@ This is an experiment: $\pi_0$ was developed for our own robots, which differ fr
 
 ## Updates
 
+- [Aug 2026] Added Qwen3-VL event fine-tuning and direct-visual recurrent-memory distillation for low-compute long-horizon memory.
 - [Aug 2026] Added a task-agnostic semantic-memory core, a ShellGame task adapter, and unified two-stage training entry points for supervised memory pretraining and memory-conditioned action training.
 - [Sept 2025] We released PyTorch support in openpi.
 - [Sept 2025] We released pi05, an upgraded version of pi0 with better open-world generalization.
@@ -69,6 +70,7 @@ Documentation:
 
 - [ShellGame Semantic Memory Training Steps](docs/shellgame_generic_semantic_training_steps_260821.md) describes the refactored two-stage workflow, dataset requirements, complete background commands, validation metrics, checkpoint selection, and closed-loop evaluation requirements.
 - [ShellGame MEM + Absolute EEF Stage Summary](docs/shellgame_mem_absolute_eef_stage_summary_260821.md) records the full historical iteration path and ablations, including joint replay/FK diagnostics, memory compression studies, joint-to-EEF migration, correction-data versions, deployment controls, and the V6/V10 100-episode results. It covers both legacy experiment interfaces and the evidence that motivated the refactored workflow above.
+- [Qwen3-VL to Recurrent MEM Distillation](docs/qwen_to_recurrent_mem_distillation_training_guide_260825.md) documents the structured-event teacher, direct-visual recurrent student, data schemas, LoRA and MEM training commands, ablations, and the verified 94.6% full-dataset result.
 
 ## Requirements
 
