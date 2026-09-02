@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from typing import Dict, Optional, Tuple
 
@@ -34,8 +35,17 @@ class WebsocketClientPolicy(_base_policy.BasePolicy):
         while True:
             try:
                 headers = {"Authorization": f"Api-Key {self._api_key}"} if self._api_key else None
+                # Large JAX policies can spend longer than the websocket library's
+                # default keepalive timeout compiling their first inference.  Keep
+                # the default for normal clients, but let isolated evaluations opt
+                # out without changing policy or control semantics.
+                ping_interval = None if os.environ.get("OPENPI_WEBSOCKET_DISABLE_PING") == "1" else 20
                 conn = websockets.sync.client.connect(
-                    self._uri, compression=None, max_size=None, additional_headers=headers
+                    self._uri,
+                    compression=None,
+                    max_size=None,
+                    additional_headers=headers,
+                    ping_interval=ping_interval,
                 )
                 metadata = msgpack_numpy.unpackb(conn.recv())
                 return conn, metadata

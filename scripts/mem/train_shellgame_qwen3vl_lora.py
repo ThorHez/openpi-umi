@@ -21,6 +21,7 @@ from accelerate import Accelerator
 from accelerate.utils import set_seed
 import numpy as np
 from peft import LoraConfig
+from peft import PeftModel
 from peft import get_peft_model
 from PIL import Image
 import torch
@@ -40,16 +41,22 @@ from openpi.tasks.shellgame.qwen3vl_sft_contract import SAMPLE_TYPES
 from openpi.tasks.shellgame.qwen3vl_sft_contract import SYSTEM_PROMPT
 from openpi.tasks.shellgame.qwen3vl_sft_contract import prompt_for_sample_type
 from openpi.tasks.shellgame.qwen3vl_sft_contract import validate_compact_response
+from openpi.tasks.shellgame.real_cup_qwen3vl_sft_contract import SYSTEM_PROMPT as REAL_CUP_SYSTEM_PROMPT
+from openpi.tasks.shellgame.real_cup_qwen3vl_sft_contract import prompt_for_sample_type as real_cup_prompt
+from openpi.tasks.shellgame.real_cup_qwen3vl_sft_contract import validate_response as validate_real_cup
 
 DEFAULT_MODEL = Path("/data2/hzl_workspace_for_pi_mem/Qwen3-VL-4B-Instruct")
 DEFAULT_MANIFEST_DIR = _ROOT / "artifacts/shellgame_qwen3vl_gt_event_sft_v1"
 DEFAULT_OUTPUT_DIR = _ROOT / "checkpoints/qwen3vl_shellgame_gt_event_lora_v1"
 TYPE_TO_ID = {name: index for index, name in enumerate(SAMPLE_TYPES)}
+for real_sample_type in ("local_swap", "sequence", "full_initial", "full_swap", "full_final"):
+    TYPE_TO_ID.setdefault(real_sample_type, len(TYPE_TO_ID))
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL)
+    parser.add_argument("--initial-adapter", type=Path)
     parser.add_argument("--train-manifest", type=Path, default=DEFAULT_MANIFEST_DIR / "train.jsonl")
     parser.add_argument("--val-manifest", type=Path, default=DEFAULT_MANIFEST_DIR / "val.jsonl")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
@@ -86,9 +93,13 @@ class ManifestDataset(Dataset):
         if not self.rows:
             raise ValueError(f"No samples loaded from {path}")
         for row in self.rows:
-            if str(row["sample_type"]) not in TYPE_TO_ID:
+            sample_type = str(row["sample_type"])
+            if sample_type not in TYPE_TO_ID:
                 raise ValueError(f"Invalid sample type in {path}: {row['sample_type']!r}")
-            validate_compact_response(str(row["target"]))
+            if row.get("source") == "real_cup":
+                validate_real_cup(str(row["target"]), sample_type, require_consistent=True)
+            else:
+                validate_compact_response(str(row["target"]))
 
     def __len__(self) -> int:
         return len(self.rows)
@@ -103,6 +114,12 @@ class QwenVideoSFTCollator:
 
     @staticmethod
     def _frames(row: dict[str, Any]) -> list[Image.Image]:
+        if row.get("source") == "real_cup":
+            with np.load(row["clip_path"], allow_pickle=False) as clip:
+                frames = np.asarray(clip["frames"], dtype=np.uint8)
+            if frames.ndim != 4 or frames.shape[0] not in {12, 36} or frames.shape[1:] != (224, 224, 3):
+                raise ValueError(f"Expected real-cup clip [12|36,224,224,3], got {frames.shape}")
+            return [Image.fromarray(frame).convert("RGB") for frame in frames]
         indices = np.asarray(row["frame_indices"], dtype=np.int64)
         if indices.shape != (10,) or not np.all(np.diff(indices) == 1):
             raise ValueError(f"Expected ten consecutive frame indices, got {indices.tolist()}")
@@ -117,15 +134,26 @@ class QwenVideoSFTCollator:
         for row in rows:
             frames = self._frames(row)
             target = str(row["target"])
+            real_cup = row.get("source") == "real_cup"
             targets.append(target)
             conversations.append(
                 [
-                    {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
+                    {
+                        "role": "system",
+                        "content": [{"type": "text", "text": REAL_CUP_SYSTEM_PROMPT if real_cup else SYSTEM_PROMPT}],
+                    },
                     {
                         "role": "user",
                         "content": [
                             {"type": "video", "video": frames},
-                            {"type": "text", "text": prompt_for_sample_type(str(row["sample_type"]))},
+                            {
+                                "type": "text",
+                                "text": (
+                                    real_cup_prompt(str(row["sample_type"]), row.get("event_index"))
+                                    if real_cup
+                                    else prompt_for_sample_type(str(row["sample_type"]))
+                                ),
+                            },
                         ],
                     },
                     {"role": "assistant", "content": [{"type": "text", "text": target}]},
@@ -133,14 +161,18 @@ class QwenVideoSFTCollator:
             )
             video_metadata.append(
                 VideoMetadata(
-                    total_num_frames=10,
+                    total_num_frames=len(frames),
                     fps=10.0,
                     width=int(frames[0].width),
                     height=int(frames[0].height),
-                    duration=1.0,
-                    frames_indices=list(range(10)),
+                    duration=len(frames) / 10.0,
+                    frames_indices=list(range(len(frames))),
                 )
             )
+        frame_counts = {item.total_num_frames for item in video_metadata}
+        if len(frame_counts) != 1:
+            raise ValueError(f"A batch cannot mix different video lengths: {sorted(frame_counts)}")
+        num_frames = next(iter(frame_counts))
         batch = self.processor.apply_chat_template(
             conversations,
             tokenize=True,
@@ -148,7 +180,7 @@ class QwenVideoSFTCollator:
             return_dict=True,
             return_tensors="pt",
             padding=True,
-            num_frames=10,
+            num_frames=num_frames,
             video_metadata=video_metadata,
         )
         labels = torch.full_like(batch["input_ids"], -100)
@@ -228,6 +260,28 @@ def _save_adapter(accelerator: Accelerator, model: torch.nn.Module, processor: A
     accelerator.wait_for_everyone()
 
 
+def _install_non_tp_peft_load_compat() -> None:
+    """Allow PEFT 0.19.1 adapter loading with Transformers 4.57.1 for non-TP DDP."""
+
+    import peft.utils.save_and_load as peft_save_and_load
+    import transformers.integrations.tensor_parallel as tensor_parallel
+
+    if hasattr(tensor_parallel, "EmbeddingParallel"):
+        return
+    original = peft_save_and_load._maybe_shard_state_dict_for_tp  # noqa: SLF001
+
+    def non_tp_compatible(model: torch.nn.Module, state_dict: dict[str, torch.Tensor], adapter_name: str) -> None:
+        has_tp_layer = any(
+            getattr(module, "_hf_tp_plan", None) is not None
+            and getattr(module, "_hf_device_mesh", None) is not None
+            for module in model.modules()
+        )
+        if has_tp_layer:
+            original(model, state_dict, adapter_name)
+
+    peft_save_and_load._maybe_shard_state_dict_for_tp = non_tp_compatible  # noqa: SLF001
+
+
 def main() -> None:
     args = parse_args()
     accelerator = Accelerator(
@@ -287,26 +341,30 @@ def main() -> None:
     model.config.use_cache = False
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model.enable_input_require_grads()
-    lora_config = LoraConfig(
-        r=args.lora_rank,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
-        bias="none",
-        task_type="CAUSAL_LM",
-        target_modules=(
-            # Vision temporal/spatial attention and MLP, including the merger.
-            "qkv",
-            "proj",
-            "linear_fc1",
-            "linear_fc2",
-            # A light language-side adaptation for the compact output contract.
-            "q_proj",
-            "k_proj",
-            "v_proj",
-            "o_proj",
-        ),
-    )
-    model = get_peft_model(model, lora_config)
+    if args.initial_adapter is None:
+        lora_config = LoraConfig(
+            r=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            bias="none",
+            task_type="CAUSAL_LM",
+            target_modules=(
+                # Vision temporal/spatial attention and MLP, including the merger.
+                "qkv",
+                "proj",
+                "linear_fc1",
+                "linear_fc2",
+                # A light language-side adaptation for the compact output contract.
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+            ),
+        )
+        model = get_peft_model(model, lora_config)
+    else:
+        _install_non_tp_peft_load_compat()
+        model = PeftModel.from_pretrained(model, args.initial_adapter, is_trainable=True)
     if accelerator.is_main_process:
         model.print_trainable_parameters()
     trainable = [parameter for parameter in model.parameters() if parameter.requires_grad]
@@ -321,7 +379,7 @@ def main() -> None:
     )
 
     if accelerator.is_main_process:
-        config = vars(args).copy()
+        config = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
         config.update(
             {
                 "model_path": str(args.model_path),
@@ -355,7 +413,8 @@ def main() -> None:
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(trainable, args.max_grad_norm)
                 optimizer.step()
-                scheduler.step()
+                if accelerator.sync_gradients:
+                    scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
             if not accelerator.sync_gradients:
                 continue

@@ -114,6 +114,11 @@ class Observation(Generic[ArrayT]):
     # Low-dimensional robot state.
     state: at.Float[ArrayT, "*b s"]
 
+    # Optional externally computed semantic-memory tokens.  These are kept
+    # separate from robot state so a frozen memory bank can condition an
+    # action policy without inflating or normalizing the proprioceptive state.
+    semantic_memory: at.Float[ArrayT, "*b m d"] | None = None
+
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
     # Tokenized prompt mask.
@@ -146,6 +151,9 @@ class Observation(Generic[ArrayT]):
     # For value training with compute_normalized_value_targets (Option B).
     episode_index: at.Float[ArrayT, "*b"] | at.Int[ArrayT, "*b"] | None = None
     frame_index: at.Float[ArrayT, "*b"] | at.Int[ArrayT, "*b"] | None = None
+    # Number of frames in the current episode. Variable-length action datasets
+    # use this to mask padded future waypoints at the end of each episode.
+    episode_length: at.Float[ArrayT, "*b"] | at.Int[ArrayT, "*b"] | None = None
     # Precomputed scalar value target from dataset (optional; shape [B] or [B, 1]).
     value_target: at.Float[ArrayT, "*b"] | at.Float[ArrayT, "*b 1"] | None = None
     # LeRobot global row index (optional; kept by KeepModelKeys for some pipelines).
@@ -167,6 +175,7 @@ class Observation(Generic[ArrayT]):
             images=data["image"],
             image_masks=data["image_mask"],
             state=data["state"],
+            semantic_memory=data.get("semantic_memory"),
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
@@ -185,6 +194,7 @@ class Observation(Generic[ArrayT]):
             terminal_reward=data.get("terminal_reward"),
             episode_index=data.get("episode_index"),
             frame_index=data.get("frame_index"),
+            episode_length=data.get("episode_length"),
             value_target=data.get("value_target"),
             index=data.get("index"),
         )
@@ -317,6 +327,7 @@ def preprocess_observation(
         images=out_images,
         image_masks=out_masks,
         state=observation.state,
+        semantic_memory=observation.semantic_memory,
         tokenized_prompt=observation.tokenized_prompt,
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,
@@ -332,6 +343,7 @@ def preprocess_observation(
         terminal_reward=observation.terminal_reward,
         episode_index=observation.episode_index,
         frame_index=observation.frame_index,
+        episode_length=observation.episode_length,
         value_target=observation.value_target,
         index=observation.index,
     )

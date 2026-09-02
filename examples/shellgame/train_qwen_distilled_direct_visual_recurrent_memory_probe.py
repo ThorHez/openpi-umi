@@ -55,6 +55,19 @@ DEFAULT_TEACHER_CHECKPOINT = (
 )
 
 
+def _student_swap_slices(segment_size: int) -> tuple[tuple[int, int], ...]:
+    """Return causal clips ending at the validated swap commit timestamps."""
+
+    if segment_size < 1:
+        raise ValueError(f"student segment size must be positive, got {segment_size}")
+    ends = tuple(end for _, end in _semantic.SWAP_SLICES)
+    if segment_size > min(ends):
+        raise ValueError(
+            f"student segment size {segment_size} reaches before frame zero for commit ends {ends}"
+        )
+    return tuple((end - segment_size, end) for end in ends)
+
+
 def _memory_distillation_loss(student_memory, teacher_memory, *, shuffle_targets: bool):
     """Token-aligned cosine plus scale-sensitive MSE memory supervision."""
     student = jnp.asarray(student_memory, dtype=jnp.float32)
@@ -84,6 +97,7 @@ class QwenDistilledDirectVisualMemoryTracker(nn.Module):
     num_current_tokens: int = 256
     current_width: int = 1152
     residual_scale: float = 1.0
+    student_segment_size: int = _semantic.SWAP_SEGMENT_SIZE
     dtype_mm: str = "bfloat16"
 
     @nn.compact
@@ -113,18 +127,19 @@ class QwenDistilledDirectVisualMemoryTracker(nn.Module):
         # patch embedding only, 16x16 -> 8x8 pooling, width-256 depth-2
         # factorized temporal/spatial encoding, then a width-64 projection.
         pooled = _memory_core.pool_fixed_grid(patch_tokens, pool_factor=2)
+        student_slices = _student_swap_slices(self.student_segment_size)
         clips = jnp.stack(
-            [pooled[:, start:end] for start, end in _semantic.SWAP_SLICES],
+            [pooled[:, start:end] for start, end in student_slices],
             axis=1,
         ).reshape(
-            batch * len(_semantic.SWAP_SLICES),
-            _semantic.SWAP_SEGMENT_SIZE,
+            batch * len(student_slices),
+            self.student_segment_size,
             _semantic.SPATIAL_TOKENS,
             self.input_width,
         )
         visual_evidence = _direct.DirectVisualSegmentEncoder(
             name="direct_visual_segment_encoder",
-            segment_size=_semantic.SWAP_SEGMENT_SIZE,
+            segment_size=self.student_segment_size,
             spatial_tokens=_semantic.SPATIAL_TOKENS,
             input_width=self.input_width,
             encoder_width=self.encoder_width,
@@ -134,8 +149,8 @@ class QwenDistilledDirectVisualMemoryTracker(nn.Module):
             dtype_mm=self.dtype_mm,
         )(clips, train=train).reshape(
             batch,
-            len(_semantic.SWAP_SLICES),
-            _semantic.SWAP_SEGMENT_SIZE * _semantic.SPATIAL_TOKENS,
+            len(student_slices),
+            self.student_segment_size * _semantic.SPATIAL_TOKENS,
             self.memory_width,
         )
 
@@ -232,6 +247,7 @@ class QwenDistilledDirectVisualConfig(_shellgame_model.Pi0MemSemanticActionConfi
     memory_distill_weight: float = 1.0
     stage_slot_weight: float = 0.25
     shuffle_teacher_targets: bool = False
+    student_segment_size: int = _semantic.SWAP_SEGMENT_SIZE
 
     def create(self, rng: at.KeyArrayLike) -> Pi0QwenDistilledDirectVisualMemory:
         return Pi0QwenDistilledDirectVisualMemory(self, rngs=nnx.Rngs(rng))
@@ -268,6 +284,7 @@ class Pi0QwenDistilledDirectVisualMemory(_base_model.Pi0MemCompress):
                 num_current_tokens=config.diagnostic_current_tokens,
                 current_width=1152,
                 residual_scale=config.diagnostic_residual_scale,
+                student_segment_size=config.student_segment_size,
                 dtype_mm=config.dtype,
             )
         )
@@ -413,6 +430,7 @@ def _copy_model_config(source, args) -> QwenDistilledDirectVisualConfig:
         memory_distill_weight=args.memory_distill_weight,
         stage_slot_weight=args.stage_slot_weight,
         shuffle_teacher_targets=args.shuffle_teacher_targets,
+        student_segment_size=args.student_segment_size,
     )
     return QwenDistilledDirectVisualConfig(**values)
 
@@ -424,6 +442,8 @@ def build_config(args):
         base,
         name="shellgame_qwen_distilled_direct_visual_recurrent_memory_probe",
         exp_name=args.exp_name,
+        seed=args.seed,
+        split_seed=args.split_seed,
         model=model,
         freeze_filter=model.get_freeze_filter_qwen_distill(),
         weight_loader=QwenDistilledVisualLoader(args.teacher_checkpoint),
@@ -465,6 +485,7 @@ def run_self_test():
         num_memory_tokens=8,
         num_current_tokens=8,
         current_width=32,
+        student_segment_size=12,
         dtype_mm="float32",
     )
     patches = jax.random.normal(jax.random.key(1), (2, 60, 256, 16))
@@ -488,13 +509,16 @@ def run_self_test():
         raise AssertionError(f"Relation interface leaked into student: {student_forbidden}")
     print(
         "Qwen direct-visual distillation self-test passed: "
-        f"student={expected}, teacher={expected}, student_relation_params=0"
+        f"student={expected}, teacher={expected}, student_segment_size=12, "
+        "student_relation_params=0"
     )
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exp-name", required=True)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--split-seed", type=int, default=42)
     parser.add_argument("--teacher-checkpoint", default=DEFAULT_TEACHER_CHECKPOINT)
     parser.add_argument("--steps", type=int, default=500)
     parser.add_argument("--warmup-steps", type=int, default=50)
@@ -502,6 +526,7 @@ def parse_args():
     parser.add_argument("--decay-lr", type=float)
     parser.add_argument("--memory-distill-weight", type=float, default=1.0)
     parser.add_argument("--stage-slot-weight", type=float, default=0.25)
+    parser.add_argument("--student-segment-size", type=int, default=_semantic.SWAP_SEGMENT_SIZE)
     parser.add_argument("--shuffle-teacher-targets", action="store_true")
     parser.add_argument("--batch-size", type=int, default=12)
     parser.add_argument("--num-workers", type=int, default=0)

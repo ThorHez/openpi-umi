@@ -3586,9 +3586,13 @@ _shellgame_history_post_transformer_probe_model = (
 # Import task recipes only after the shared config dataclasses are defined.
 # This keeps task-specific data and model policy code out of this registry.
 from openpi.training.mem.recipes import shellgame_semantic_action as _shellgame_semantic_action_recipe  # noqa: E402
+from openpi.training.mem.recipes import shellgame_real_wrist_stage2 as _shellgame_real_wrist_stage2_recipe  # noqa: E402
 
 _shellgame_semantic_action_train_config = (
     _shellgame_semantic_action_recipe.make_train_config()
+)
+_shellgame_real_wrist_stage2_train_config = (
+    _shellgame_real_wrist_stage2_recipe.make_train_config()
 )
 
 # Temporary import compatibility for local experiment scripts. New code should
@@ -5858,6 +5862,7 @@ _CONFIGS = [
     ),
 
     _shellgame_semantic_action_train_config,
+    _shellgame_real_wrist_stage2_train_config,
 
     TrainConfig(
         name="pi0_mem_fixed_grid_query_action_shellgame_joint_260810",
@@ -6302,6 +6307,61 @@ _CONFIGS = [
             overfit_same_samples_for_validation=True,
             disable_train_augmentation=True,
         ),
+    ),
+
+    # Clean, memory-free pi0.5 baseline for ShellGame. This intentionally uses
+    # only the current wrist and third-person images: it is the control against
+    # which recurrent/semantic-memory policies should be compared.
+    TrainConfig(
+        name="pi05_shellgame_baseline_v1",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            max_token_len=256,
+            # The dataset contains raw robosuite OSC actions (6 arm + gripper).
+            # Keep the 32-D pi0.5 head for checkpoint compatibility, but never
+            # train the 25 zero-padding dimensions.
+            action_loss_mask=(1.0,) * 7 + (0.0,) * 25,
+        ),
+        data=LeRobotUmiDataConfig_shellgame_Base_Inference(
+            repo_id=(
+                "/data2/hzl_workspace_for_pi_mem/openpi-umi/"
+                "data/shellgame_static_phase_instruction_dataset2"
+            ),
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir=(
+                    "/data2/hzl_workspace_for_pi_mem/openpi-umi/"
+                    "data/shellgame_static_phase_instruction_dataset2"
+                ),
+            ),
+            base_config=UmiDataConfig(
+                action_loss_mask=(1.0,) * 7 + (0.0,) * 25,
+                robot_type="ARM=1 G=0 H=0",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=32,
+        num_workers=16,
+        fsdp_devices=2,
+        log_interval=10,
+        save_interval=1_000,
+        # A full checkpoint is about 42 GiB on this checkout. Retain only the
+        # latest one so the baseline remains safe on the shared data volume.
+        keep_period=None,
+        wandb_enabled=False,
     ),
 
     TrainConfig(

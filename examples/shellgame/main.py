@@ -27,6 +27,9 @@ class Args:
     # ShellGame episode generation parameters. Keep these aligned with the
     # training data generation command unless intentionally testing OOD.
     num_trials: int = 20
+    # Start index in the deterministic episode schedule. This permits exact
+    # non-overlapping parallel shards while preserving a single seeded run.
+    trial_start: int = 0
     seed: int = 0
     env: str = "ShellGame"
     robots: str = "Panda"
@@ -79,6 +82,7 @@ class Args:
     action_dim: int = 10
     # history: Pi0Mem input with indexed historical frames.
     # single_frame: standard Pi0/Pi0.5 input with only the current two views.
+    # mme_framesamp: MME-VLA current observation plus an explicit history buffer.
     policy_input_mode: str = "history"
     # pose10: legacy relative target pose + measured gripper width.
     # raw7: native robosuite controller command, passed directly to env.step().
@@ -90,6 +94,11 @@ class Args:
     observation_position_frame: str = "absolute"
     action_pose_frame: str = "current"
     rot6d_convention: str = "openpi"
+    # Native OSC command convention. ``raw7`` checkpoints generated with
+    # ``--osc-input-type absolute`` must use the same controller semantics at
+    # evaluation time; otherwise absolute world poses are interpreted as
+    # deltas and the rollout is invalid.
+    osc_input_type: str = "delta"
 
     # Policy-control rollout.
     max_policy_steps: int = 120
@@ -127,6 +136,8 @@ def _episode_namespace(args: Args, *, seed: int, initial_ball_cup: str, num_swap
     return Namespace(
         env=args.env,
         robots=args.robots,
+        osc_input_type=args.osc_input_type,
+        arm_controller_type="OSC_POSE",
         import_module=None,
         output="",
         camera=args.camera,
@@ -190,8 +201,12 @@ def _resize_uint8(image: np.ndarray, size: int) -> np.ndarray:
     if arr.dtype != np.uint8:
         arr = np.clip(arr, 0, 255).astype(np.uint8)
     if arr.shape[:2] == (size, size):
-        return np.ascontiguousarray(arr)
-    return np.asarray(Image.fromarray(arr).resize((size, size), Image.BICUBIC), dtype=np.uint8)
+        # Camera observations may be backed by a renderer-owned readback
+        # buffer.  History must own its pixels because the renderer can reuse
+        # that storage on the next observation.
+        return np.array(arr, dtype=np.uint8, order="C", copy=True)
+    resized = Image.fromarray(arr).resize((size, size), Image.BICUBIC)
+    return np.array(resized, dtype=np.uint8, order="C", copy=True)
 
 
 def _quat_to_rot6d(quat_xyzw: np.ndarray, convention: str) -> np.ndarray:
@@ -294,7 +309,10 @@ def _append_observation(
             "gripper_width": _gripper_width(shell.obs_vector(obs, "robot0_gripper_qpos")),
         }
     )
-    replay.append(np.asarray(base, dtype=np.uint8))
+    # Keep video frames independent from both the observation dictionary and
+    # the EGL readback buffer.  Without an explicit copy, delayed video writes
+    # can encode renderer-reused memory instead of the frame seen here.
+    replay.append(np.array(base, dtype=np.uint8, order="C", copy=True))
 
 
 def _zero_shellgame_object_velocities(env) -> None:
@@ -382,12 +400,55 @@ def _policy_input(
     elif args.policy_input_mode == "single_frame":
         element["left_wrist_0_rgb_0"] = cur["wrist"]
         element["left_wrist_0_rgb_1"] = cur["base"]
+    elif args.policy_input_mode == "mme_framesamp":
+        element = {
+            "observation/image": cur["base"],
+            "observation/wrist_image": cur["wrist"],
+            "observation/state": np.concatenate(
+                [
+                    element["robot0_eef_pos"].reshape(-1),
+                    element["robot0_eef_rot_axis_angle"].reshape(-1),
+                    element["robot0_gripper_width"].reshape(-1),
+                ]
+            ).astype(np.float32),
+            "prompt": element["prompt"],
+        }
     else:
         raise ValueError(
             f"Unknown policy_input_mode={args.policy_input_mode!r}; "
-            "expected 'history' or 'single_frame'"
+            "expected 'history', 'single_frame', or 'mme_framesamp'"
         )
     return element
+
+
+def _sync_mme_framesamp_buffer(
+    client,
+    history: list[dict],
+    start_eef_pos: np.ndarray,
+    *,
+    args: Args,
+) -> None:
+    """Send every observation not yet seen by the online MME memory buffer."""
+
+    sent = int(getattr(client, "_shellgame_history_sent", 0))
+    if sent >= len(history):
+        return
+    new_frames = history[sent:]
+    states = [
+        _policy_input([frame], start_eef_pos, args=args)["observation/state"]
+        for frame in new_frames
+    ]
+    response = client.add_buffer(
+        {
+            "add_buffer": True,
+            "images": np.stack([frame["base"] for frame in new_frames])[:, None, ...],
+            "state": np.stack(states).astype(np.float32),
+            "exec_start_idx": 0,
+        }
+    )
+    if not response.get("add_buffer_finished", False):
+        raise RuntimeError(f"MME-VLA server rejected history buffer: {response}")
+    client._shellgame_history_sent = len(history)
 
 
 def _target_action_to_env_action(
@@ -476,6 +537,8 @@ def _policy_env_action(
         element = _policy_input(history, start_eef_pos, args=args, prompt=prompt)
         if client is None:
             raise RuntimeError("Policy client is required unless zero_action_policy is enabled.")
+        if args.policy_input_mode == "mme_framesamp":
+            _sync_mme_framesamp_buffer(client, history, start_eef_pos, args=args)
         action_dim = _policy_action_dim(args)
         if args.action_mode == "pose10":
             plan_base_pos = np.asarray(shell.get_eef_pos(env), dtype=np.float32)
@@ -758,6 +821,37 @@ def _physics_snapshot(shell, env, *, step: int, env_action: np.ndarray, target10
     }
 
 
+def _gripper_contacted_cups(contacts: list[dict]) -> set[str]:
+    """Return cup identities directly contacting either gripper finger/body."""
+    touched: set[str] = set()
+    for contact in contacts:
+        bodies = (str(contact["body1"]), str(contact["body2"]))
+        if not any("gripper" in body for body in bodies):
+            continue
+        for cup in ("left", "middle", "right"):
+            if f"{cup}_cup_root" in bodies:
+                touched.add(cup)
+    return touched
+
+
+def _current_gripper_contacted_cups(env) -> set[str]:
+    """Collect direct gripper/cup contacts without enabling full debug traces."""
+
+    model = env.sim.model
+    contacts = []
+    for contact_idx in range(int(env.sim.data.ncon)):
+        contact = env.sim.data.contact[contact_idx]
+        body1 = int(model.geom_bodyid[int(contact.geom1)])
+        body2 = int(model.geom_bodyid[int(contact.geom2)])
+        contacts.append(
+            {
+                "body1": _model_name(model, "body", body1),
+                "body2": _model_name(model, "body", body2),
+            }
+        )
+    return _gripper_contacted_cups(contacts)
+
+
 def _write_physics_debug(video_dir: pathlib.Path, trial: int, payload: dict) -> None:
     path = video_dir / "physics_debug" / f"trial_{trial:04d}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -782,19 +876,37 @@ def eval_shellgame(args: Args) -> None:
 
     shell = _import_shellgame_tools(args.robosuite_root)
     rng = np.random.default_rng(args.seed)
-    client = None if args.zero_action_policy else _websocket_client_policy.WebsocketClientPolicy(args.host, args.port)
+    if args.zero_action_policy:
+        client = None
+    elif args.policy_input_mode == "mme_framesamp":
+        client = _websocket_client_policy.MMEVLAWebsocketClientPolicy(args.host, args.port)
+    else:
+        client = _websocket_client_policy.WebsocketClientPolicy(args.host, args.port)
     video_dir = pathlib.Path(args.video_out_path)
     successes = 0
     cup_selection_correct = 0
     cup_selection_decisions = 0
+    correct_selection_and_contact = 0
+    target_cup_contacts = 0
+    any_cup_contacts = 0
+    target_cup_lifts = 0
+    any_cup_lifts = 0
+    episode_results: list[dict] = []
 
     if args.phase_instructions:
         logging.info("phase instructions enabled: observe=%r grasp=%r", args.observe_task, args.grasp_task)
 
-    for trial in range(args.num_trials):
+    if args.trial_start < 0:
+        raise ValueError(f"trial_start must be non-negative, got {args.trial_start}")
+
+    for schedule_trial in range(args.trial_start + args.num_trials):
         episode_seed = int(rng.integers(0, 2**31 - 1))
         initial = str(rng.choice(shell.CUP_NAMES)) if args.initial_ball_cup == "random" else args.initial_ball_cup
         num_swaps = int(rng.integers(args.min_swaps, args.max_swaps + 1)) if args.scripted_observation else 0
+        if schedule_trial < args.trial_start:
+            continue
+        trial = schedule_trial
+        local_trial = schedule_trial - args.trial_start
         ep_args = _episode_namespace(args, seed=episode_seed, initial_ball_cup=initial, num_swaps=num_swaps)
 
         env = shell.make_env(ep_args)
@@ -802,6 +914,11 @@ def eval_shellgame(args: Args) -> None:
         replay: list[np.ndarray] = []
         physics_trace: deque[dict] = deque(maxlen=max(1, int(args.physics_debug_window)))
         try:
+            if args.policy_input_mode == "mme_framesamp" and client is not None:
+                response = client.reset()
+                if not response.get("reset_finished", False):
+                    raise RuntimeError(f"MME-VLA server reset failed: {response}")
+                client._shellgame_history_sent = 0
             if args.scripted_observation:
                 meta = _run_scripted_observation(shell, env, ep_args, args, history, replay, client=client)
             else:
@@ -814,6 +931,7 @@ def eval_shellgame(args: Args) -> None:
             selection_votes = {cup: 0 for cup in shell.CUP_NAMES}
             selection_distance_sums = {cup: 0.0 for cup in shell.CUP_NAMES}
             selection_window_end = args.cup_selection_skip_frames + args.cup_selection_window_frames
+            gripper_contacted_cups: set[str] = set()
 
             for _step in range(args.max_policy_steps):
                 target10_debug = None
@@ -830,6 +948,7 @@ def eval_shellgame(args: Args) -> None:
                     prompt=args.grasp_task if args.phase_instructions else None,
                 )
                 env.step(env_action)
+                gripper_contacted_cups.update(_current_gripper_contacted_cups(env))
                 _append_observation(
                     shell,
                     env,
@@ -857,17 +976,16 @@ def eval_shellgame(args: Args) -> None:
 
                 ok, stats = _success(shell, env, meta["target_cup"], meta["settle_cup_pos"], args.lift_success_height)
                 if args.physics_debug:
-                    physics_trace.append(
-                        _physics_snapshot(
-                            shell,
-                            env,
-                            step=_step,
-                            env_action=env_action,
-                            target10=target10_debug,
-                            gripper_action=gripper_action,
-                            stats=stats,
-                        )
+                    snapshot = _physics_snapshot(
+                        shell,
+                        env,
+                        step=_step,
+                        env_action=env_action,
+                        target10=target10_debug,
+                        gripper_action=gripper_action,
+                        stats=stats,
                     )
+                    physics_trace.append(snapshot)
                 if ok:
                     successes += 1
                     logging.info("trial=%d success target=%s final_slot=%s stats=%s", trial, meta["target_cup"], meta["final_ball_cup"], stats)
@@ -896,6 +1014,34 @@ def eval_shellgame(args: Args) -> None:
                 selection_votes,
             )
 
+            selected_correct = selected_cup == meta["target_cup"]
+            target_contact = meta["target_cup"] in gripper_contacted_cups
+            any_contact = bool(gripper_contacted_cups)
+            target_lift = float(stats["lifts"][meta["target_cup"]]) >= args.lift_success_height
+            any_lift = max(stats["lifts"].values()) >= args.lift_success_height
+            correct_selection_and_contact += int(selected_correct and target_contact)
+            target_cup_contacts += int(target_contact)
+            any_cup_contacts += int(any_contact)
+            target_cup_lifts += int(target_lift)
+            any_cup_lifts += int(any_lift)
+            episode_results.append(
+                {
+                    "trial": trial,
+                    "episode_seed": episode_seed,
+                    "target_cup": meta["target_cup"],
+                    "selected_cup": selected_cup,
+                    "cup_selection_correct": selected_correct,
+                    "gripper_contacted_cups": sorted(gripper_contacted_cups),
+                    "target_cup_contact": target_contact,
+                    "any_cup_contact": any_contact,
+                    "correct_selection_and_contact": selected_correct and target_contact,
+                    "target_lift_success": target_lift,
+                    "any_cup_lift_success": any_lift,
+                    "strict_success": bool(ok),
+                    "lifts": stats["lifts"],
+                }
+            )
+
             if args.physics_debug:
                 _write_physics_debug(
                     video_dir,
@@ -910,6 +1056,14 @@ def eval_shellgame(args: Args) -> None:
                         "success": bool(ok),
                         "selected_cup": selected_cup,
                         "cup_selection_correct": selected_cup == meta["target_cup"],
+                        "gripper_contacted_cups": sorted(gripper_contacted_cups),
+                        "any_cup_contact": bool(gripper_contacted_cups),
+                        "target_cup_contact": meta["target_cup"] in gripper_contacted_cups,
+                        "selected_cup_contact": selected_cup in gripper_contacted_cups,
+                        "correct_selection_and_contact": (
+                            selected_cup == meta["target_cup"]
+                            and meta["target_cup"] in gripper_contacted_cups
+                        ),
                         "cup_selection_votes": selection_votes,
                         "final_stats": stats,
                         "zero_action_policy": bool(args.zero_action_policy),
@@ -927,13 +1081,13 @@ def eval_shellgame(args: Args) -> None:
             "running success rate: %d/%d = %.1f%% | cup selection accuracy: %d/%d = %.1f%% "
             "(decisions=%d/%d)",
             successes,
-            trial + 1,
-            successes / (trial + 1) * 100.0,
+            local_trial + 1,
+            successes / (local_trial + 1) * 100.0,
             cup_selection_correct,
-            trial + 1,
-            cup_selection_correct / (trial + 1) * 100.0,
+            local_trial + 1,
+            cup_selection_correct / (local_trial + 1) * 100.0,
             cup_selection_decisions,
-            trial + 1,
+            local_trial + 1,
         )
 
     logging.info(
@@ -948,6 +1102,22 @@ def eval_shellgame(args: Args) -> None:
         cup_selection_decisions,
         args.num_trials,
     )
+    result = {
+        "protocol": dataclasses.asdict(args),
+        "num_trials": args.num_trials,
+        "strict_success": successes,
+        "cup_selection_correct": cup_selection_correct,
+        "cup_selection_decisions": cup_selection_decisions,
+        "correct_selection_and_contact": correct_selection_and_contact,
+        "target_cup_contact": target_cup_contacts,
+        "any_cup_contact": any_cup_contacts,
+        "target_cup_lift_success": target_cup_lifts,
+        "any_cup_lift_success": any_cup_lifts,
+        "episodes": episode_results,
+    }
+    video_dir.mkdir(parents=True, exist_ok=True)
+    (video_dir / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    logging.info("wrote aggregate result: %s", video_dir / "result.json")
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, force=True)

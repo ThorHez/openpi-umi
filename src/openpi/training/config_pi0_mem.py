@@ -381,6 +381,66 @@ class UmiInputsV4_Shellgame_Video(_transforms.DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class UmiInputsV4ShellgameRealWristVideo(_transforms.DataTransformFn):
+    """Single-camera deployment-aligned contract for real ShellGame data.
+
+    The fixed history and dynamic current image both come from the wrist
+    camera. Pose state is relative to the episode's first Direct link6 pose;
+    every action target in the 16-step chunk is relative to the row's current
+    link6 pose. The converter performs those transforms; this class only
+    assembles the 10-D state and model image dictionary.
+    """
+
+    num_frames: int
+
+    def __call__(self, data: dict) -> dict:
+        wrist_video = _parse_video(data["left_wrist_0_rgb_0_video"])
+        expected = (self.num_frames, 224, 224, 3)
+        if wrist_video.shape != expected:
+            raise ValueError(f"wrist_video shape {wrist_video.shape} != {expected}")
+
+        state = np.concatenate(
+            [
+                np.asarray(data["robot0_eef_pos"], dtype=np.float32),
+                np.asarray(data["robot0_eef_rot_axis_angle"], dtype=np.float32),
+                np.asarray(data["robot0_gripper_width"], dtype=np.float32).reshape(-1),
+            ],
+            axis=-1,
+        )
+        if state.shape != (10,):
+            raise ValueError(f"Real ShellGame state must be 10-D, got {state.shape}")
+
+        data["state"] = state
+        # The semantic tracker historically calls its memory-bearing stream
+        # ``base_rgb``. Preserve that internal key while using the only real
+        # camera available in this dataset.
+        data["image"] = {"base_rgb": wrist_video}
+        data["image_mask"] = {"base_rgb": np.True_}
+        frame_valid_mask = data.get("video_frame_valid_mask")
+        if frame_valid_mask is not None:
+            data["frame_valid_mask"] = {
+                "base_rgb": np.asarray(
+                    frame_valid_mask.get(
+                        "left_wrist_0_rgb_0",
+                        np.ones(self.num_frames, dtype=np.bool_),
+                    )
+                )
+            }
+        # Ground-truth actions exist in training/evaluation dataset rows but
+        # are intentionally absent from live policy observations.
+        if "actions" in data:
+            data["actions"] = np.asarray(data["actions"], dtype=np.float32)
+            if data["actions"].shape != (16, 10):
+                raise ValueError(
+                    "Real ShellGame actions must be a pre-chunked [16,10] "
+                    f"current-relative link6 target, got {data['actions'].shape}"
+                )
+        if "episode_length" in data:
+            data["episode_length"] = np.asarray(data["episode_length"]).reshape(-1)[0]
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
 class UmiInputsV4_Shellgame_Video_Joint(_transforms.DataTransformFn):
     """Pi0Mem video twin of ``UmiInputsV4_Bimanual_HeadView_Depth_Horizon1``.
 

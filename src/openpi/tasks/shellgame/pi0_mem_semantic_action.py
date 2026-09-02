@@ -85,6 +85,9 @@ class Pi0MemSemanticActionConfig(_base.Pi0MemCompressConfig):
     real_action_dim: int = 7
     gripper_action_index: int = 6
     last_episode_frame: int = 154
+    swap_frame_indices: tuple[tuple[int, ...], ...] = (
+        semantic_memory.DEFAULT_SWAP_FRAME_INDICES
+    )
 
     def create(self, rng: at.KeyArrayLike) -> Pi0MemSemanticAction:
         return Pi0MemSemanticAction(self, rngs=nnx.Rngs(rng))
@@ -144,6 +147,9 @@ class Pi0MemSemanticAction(_base.Pi0MemCompress):
         self.real_action_dim = int(config.real_action_dim)
         self.gripper_action_index = int(config.gripper_action_index)
         self.last_episode_frame = int(config.last_episode_frame)
+        self.swap_frame_indices = tuple(
+            tuple(int(index) for index in stage) for stage in config.swap_frame_indices
+        )
 
         self.HistoryFrame0InitialCupClassifier = nnx_bridge.ToNNX(
             semantic_memory.FrozenFrame0InitialCupClassifier(input_width=1152)
@@ -168,6 +174,7 @@ class Pi0MemSemanticAction(_base.Pi0MemCompress):
                 residual_scale=config.diagnostic_residual_scale,
                 relation_mode=config.relation_mode,
                 dtype_mm=config.dtype,
+                swap_frame_indices=self.swap_frame_indices,
             )
         )
         self.HistoryThreeSwapVisualRelationMemoryTracker.lazy_init(
@@ -255,16 +262,15 @@ class Pi0MemSemanticAction(_base.Pi0MemCompress):
 
         _, history_encoder_out = self.PaliGemma.img(history, train=False)
         history_patches = history_encoder_out["with_posemb"][:, : self.history_frames]
+        swap_indices = tuple(
+            index for stage in self.swap_frame_indices for index in stage
+        )
         if self.video_mode == "shuffle_swaps":
-            start = semantic_memory.SWAP_SLICES[0][0]
-            end = semantic_memory.SWAP_SLICES[-1][1]
-            history_patches = history_patches.at[:, start:end].set(
-                jnp.roll(history_patches[:, start:end], 1, axis=0)
+            history_patches = history_patches.at[:, jnp.asarray(swap_indices)].set(
+                jnp.roll(history_patches[:, jnp.asarray(swap_indices)], 1, axis=0)
             )
         elif self.video_mode == "zero_swaps":
-            start = semantic_memory.SWAP_SLICES[0][0]
-            end = semantic_memory.SWAP_SLICES[-1][1]
-            history_patches = history_patches.at[:, start:end].set(0)
+            history_patches = history_patches.at[:, jnp.asarray(swap_indices)].set(0)
         elif self.video_mode != "normal":
             raise ValueError(f"Unknown video_mode={self.video_mode!r}")
 
@@ -423,9 +429,11 @@ class Pi0MemSemanticAction(_base.Pi0MemCompress):
 
         frame_index = jnp.asarray(observation.frame_index, dtype=jnp.int32)
         future_offsets = 1 + jnp.arange(self.action_horizon, dtype=jnp.int32)
-        temporal_valid = (
-            frame_index[..., None] + future_offsets <= self.last_episode_frame
-        )
+        if observation.episode_length is not None:
+            last_frame = jnp.asarray(observation.episode_length, dtype=jnp.int32) - 1
+        else:
+            last_frame = jnp.full_like(frame_index, self.last_episode_frame)
+        temporal_valid = frame_index[..., None] + future_offsets <= last_frame[..., None]
         valid_count = jnp.sum(temporal_valid, axis=-1, keepdims=True)
         temporal_scale = self.action_horizon / jnp.maximum(valid_count, 1)
         loss_per_timestep = (

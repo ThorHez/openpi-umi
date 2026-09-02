@@ -62,19 +62,19 @@ import tqdm_loggable.auto as tqdm
 import wandb
 
 import openpi.models.model as _model
+
+# Pi0MemCompress-specific imports.
+import openpi.models.pi0_mem_compress as pi0_mem_compress
 import openpi.shared.array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.checkpoints as _checkpoints
 import openpi.training.config as _config
+import openpi.training.config_pi0_mem as _config_pi0_mem
 import openpi.training.data_loader as _data_loader
 import openpi.training.multi_data_loader as _multi_data_loader
 import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
-
-# Pi0MemCompress-specific imports.
-import openpi.models.pi0_mem_compress as pi0_mem_compress
-import openpi.training.config_pi0_mem as _config_pi0_mem
 
 # Reuse train.py helpers verbatim. Add openpi-umi/scripts to sys.path so we
 # can import scripts/train.py as a top-level module. Note we deliberately do
@@ -84,8 +84,9 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from train import _load_weights_and_validate, init_logging, init_wandb  # noqa: E402
-
+from train import _load_weights_and_validate  # noqa: E402
+from train import init_logging  # noqa: E402
+from train import init_wandb  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Compressed-memory training metrics (gradient health + token diversity).
@@ -209,6 +210,29 @@ def new_memory_param_grad_metrics(grads):
     history_cross_attn = select("HistoryMultiHeadDotProductAttention_0")
     history_out_proj = select("HistoryOutProj")
 
+    # Semantic-memory action bridge. These were accidentally frozen in the
+    # failed real-robot stage-2 run, so keep their health separately visible.
+    semantic_query_resampler = select("HistoryRawMemoryQueryResampler")
+    semantic_action_cross_attn = select("ActionMemoryCrossAttention")
+    action_expert = [
+        leaf
+        for path, leaf in path_leaves
+        if "PaliGemma" in path and "llm" in path and "_1" in path
+    ]
+    action_projection = [
+        leaf
+        for path, leaf in path_leaves
+        if any(
+            name in path
+            for name in (
+                "action_in_proj",
+                "action_out_proj",
+                "time_mlp_in",
+                "time_mlp_out",
+            )
+        )
+    ]
+
     return {
         "grad/memory_new_total_l2": _global_l2_norm(resampler + history_gate + history_cross_attn + history_out_proj),
         "grad/history_resampler_l2": _global_l2_norm(resampler),
@@ -221,6 +245,14 @@ def new_memory_param_grad_metrics(grads):
         "grad/history_gate_l2": _global_l2_norm(history_gate),
         "grad/history_cross_attn_l2": _global_l2_norm(history_cross_attn),
         "grad/history_out_proj_l2": _global_l2_norm(history_out_proj),
+        "grad/semantic_query_resampler_l2": _global_l2_norm(
+            semantic_query_resampler
+        ),
+        "grad/semantic_action_cross_attn_l2": _global_l2_norm(
+            semantic_action_cross_attn
+        ),
+        "grad/action_expert_l2": _global_l2_norm(action_expert),
+        "grad/action_projection_l2": _global_l2_norm(action_projection),
     }
 
 
@@ -787,6 +819,10 @@ def train_step(
             "current_frame_corrupt_sample_rate": use_corrupt,
             "current_frame_dropout_rate": corruption_metrics["current_frame_dropout_rate"],
             "current_frame_mask_rate": corruption_metrics["current_frame_mask_rate"],
+            # Models may expose scalar diagnostics without requiring a
+            # task-specific trainer fork. The empty default is structure-stable
+            # for every existing model.
+            "model_extra_metrics": aux.get("extra_metrics", {}),
         }
         return total_loss, aux_out
 
@@ -843,6 +879,7 @@ def train_step(
         "grad_norm": optax.global_norm(grads),
         "param_norm": optax.global_norm(kernel_params),
     }
+    info.update(aux["model_extra_metrics"])
 
     # Compressed-memory monitors. ``aux["history_mem"]`` has shape
     # [B * num_image_streams, M, D] (concatenated across image streams by
@@ -1245,7 +1282,7 @@ def eval_step(
         + diversity_weight * diversity_loss
         + classifier_weight * classifier_loss
     )
-    return {
+    result = {
         "val/loss": total_loss,
         "val/action_loss": action_loss,
         "val/diversity_loss": diversity_loss,
@@ -1256,6 +1293,10 @@ def eval_step(
         "_val/history_classifier_correct_count": classifier_correct_count,
         "_val/history_classifier_valid_count": valid_count,
     }
+    result.update(
+        {f"val/{key}": value for key, value in aux.get("extra_metrics", {}).items()}
+    )
+    return result
 
 
 def run_evaluation(

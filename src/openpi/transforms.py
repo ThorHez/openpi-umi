@@ -852,6 +852,7 @@ class PadAndFlattenState(DataTransformFn):
 MODEL_KEYS = frozenset({
     "actions",
     "state",
+    "semantic_memory",
     "image",
     "image_mask",
     "tokenized_prompt",
@@ -868,6 +869,7 @@ MODEL_KEYS = frozenset({
     "terminal_reward",
     "episode_index",
     "frame_index",
+    "episode_length",
     "value_target",
     "index",
 })

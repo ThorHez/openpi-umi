@@ -286,6 +286,24 @@ class VideoFrameDataset(_data_loader.Dataset):
                 "VideoFrameDataset requires a LeRobotDataset with hf_dataset attribute"
             )
 
+        # Sliding layouts may still be restricted to a causal phase of the
+        # episode.  This is essential for external final-memory action
+        # training: rows before the memory is observable must not receive a
+        # future-derived memory bank.  Historically these bounds were only
+        # honored by FixedPrefixCurrentVideoDataset.
+        frame_indices = np.asarray(self._hf_dataset["frame_index"], dtype=np.int64)
+        eligible = np.ones(frame_indices.shape, dtype=np.bool_)
+        if config.min_frame_index is not None:
+            eligible &= frame_indices >= config.min_frame_index
+        if config.max_frame_index is not None:
+            eligible &= frame_indices <= config.max_frame_index
+        self._sample_indices = np.flatnonzero(eligible).astype(np.int64)
+        if self._sample_indices.size == 0:
+            raise ValueError(
+                "Sliding frame range selected no rows: "
+                f"[{config.min_frame_index}, {config.max_frame_index}]"
+            )
+
         # Map configured output stream names -> actual keys present in the
         # LeRobot / HF sample. Shellgame (and many LeRobot v2 datasets) store
         # cameras as ``observation.<name>`` while configs often use bare
@@ -330,12 +348,13 @@ class VideoFrameDataset(_data_loader.Dataset):
             4-image-stream HeadView+Depth Pi0Mem setup).
         """
         # Load the current frame (this also decodes the current row's images once).
-        data = dict(self._dataset[index])
+        source_index = int(self._sample_indices[int(index)])
+        data = dict(self._dataset[source_index])
 
         if "index" not in data:
-            data["index"] = index
+            data["index"] = source_index
 
-        current_index = _to_int(data.get("index", index), default=int(index))
+        current_index = _to_int(data.get("index", source_index), default=source_index)
         current_episode = _to_int(data.get("episode_index"), default=-1)
         current_frame_idx = _to_int(data.get("frame_index"), default=-1)
 
@@ -495,7 +514,12 @@ class VideoFrameDataset(_data_loader.Dataset):
         return data
 
     def __len__(self) -> int:
-        return len(self._dataset)
+        return int(self._sample_indices.size)
+
+    @property
+    def sample_indices(self) -> np.ndarray:
+        """Indices into the underlying full LeRobot dataset."""
+        return self._sample_indices
 
 
 class VideoFrameTransformDataset(_data_loader.Dataset):

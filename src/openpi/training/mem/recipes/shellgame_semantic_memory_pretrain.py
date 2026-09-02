@@ -40,6 +40,9 @@ class ShellGameSemanticMemoryPretrainConfig(_config.TrainConfig):
     relation_loss_weight: float = 1.0
     stage_memory_loss_weight: float = 1.0
     memory_train_augmentation: bool = False
+    # Keep the episode-disjoint train/validation partition fixed when training
+    # seeds are varied for multi-seed comparisons.
+    split_seed: int = 42
 
 
 MODEL_CONFIG = dataclasses.replace(_action_recipe.MODEL_CONFIG)

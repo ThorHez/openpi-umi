@@ -141,6 +141,12 @@ def main(config: _config.TrainConfig, *, data_loader=None):
 
     if resuming:
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
+        # Orbax may restore the sharding recorded in the checkpoint. Explicitly
+        # move the restored state onto the current mesh so runs can resume with
+        # a different FSDP device count (for example, 2 GPUs -> 4 GPUs).
+        train_state = jax.device_put(train_state, train_state_sharding, donate=True)
+        jax.block_until_ready(train_state)
+        logging.info(f"Resharded restored train state onto {config.fsdp_devices} FSDP devices")
 
     ptrain_step = jax.jit(
         functools.partial(train_step, config),

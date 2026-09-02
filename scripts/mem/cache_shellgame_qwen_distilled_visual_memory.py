@@ -49,6 +49,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--all-episodes", action="store_true")
     parser.add_argument("--batch-size", type=int, default=12)
     parser.add_argument("--fsdp-devices", type=int, default=6)
+    parser.add_argument(
+        "--student-segment-size",
+        type=int,
+        default=probe._semantic.SWAP_SEGMENT_SIZE,  # noqa: SLF001
+        help="Rebuild the tracker with the temporal clip length used by the checkpoint.",
+    )
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
@@ -65,6 +71,9 @@ def make_memory_config(args: argparse.Namespace):
         memory_distill_weight=1.0,
         stage_slot_weight=0.25,
         shuffle_teacher_targets=False,
+        # Keep cache/eval graph construction in sync with the training entry
+        # after the recurrent student gained configurable clip length.
+        student_segment_size=args.student_segment_size,
         batch_size=args.batch_size,
         num_workers=0,
         fsdp_devices=args.fsdp_devices,
@@ -198,17 +207,20 @@ def main() -> None:
         "final_slot_accuracy": accuracy,
     }
     output.parent.mkdir(parents=True, exist_ok=True)
-    dense_episode_to_template = np.full(int(np.max(episode)) + 1, -1, dtype=np.int32)
-    dense_episode_to_template[episode] = np.arange(len(episode), dtype=np.int32)
-    if np.any(dense_episode_to_template < 0):
-        raise ValueError("Full memory bank requires dense episode indices")
-    np.savez_compressed(
-        output,
+    output_payload = {
         **payload,
-        memory_templates=payload["final_memory"],
-        episode_template_index=dense_episode_to_template,
-        metadata_json=np.asarray(json.dumps(metadata, sort_keys=True)),
-    )
+        "metadata_json": np.asarray(json.dumps(metadata, sort_keys=True)),
+    }
+    if args.all_episodes:
+        dense_episode_to_template = np.full(int(np.max(episode)) + 1, -1, dtype=np.int32)
+        dense_episode_to_template[episode] = np.arange(len(episode), dtype=np.int32)
+        if np.any(dense_episode_to_template < 0):
+            raise ValueError("Full memory bank requires dense episode indices")
+        output_payload.update(
+            memory_templates=payload["final_memory"],
+            episode_template_index=dense_episode_to_template,
+        )
+    np.savez_compressed(output, **output_payload)
     print(json.dumps(metadata, indent=2, sort_keys=True))
     print(f"wrote {output}")
 

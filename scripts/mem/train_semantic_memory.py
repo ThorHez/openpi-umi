@@ -262,11 +262,13 @@ def create_train_val_data_loaders(config, data_sharding):
         action_horizon=config.model.action_horizon,
         skip_norm_stats=False,
     )
-    train_indices, val_indices = _episode_split_indices(dataset, config.val_ratio, config.seed)
+    split_seed = getattr(config, "split_seed", config.seed)
+    train_indices, val_indices = _episode_split_indices(dataset, config.val_ratio, split_seed)
     logging.info(
-        "Memory dataset episode split: train=%d, val=%d (one fixed prefix per row)",
+        "Memory dataset episode split: train=%d, val=%d, split_seed=%d (one fixed prefix per row)",
         len(train_indices),
         len(val_indices),
+        split_seed,
     )
     return (
         _make_loader(

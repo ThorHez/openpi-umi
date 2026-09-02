@@ -18,6 +18,9 @@ HISTORY_FRAMES = 60
 TOTAL_INPUT_FRAMES = 61
 SWAP_SLICES = ((20, 30), (30, 40), (40, 50))
 SWAP_SEGMENT_SIZE = 10
+DEFAULT_SWAP_FRAME_INDICES = tuple(
+    tuple(range(start, end)) for start, end in SWAP_SLICES
+)
 SPATIAL_TOKENS = 64
 NUM_CUPS = 3
 
@@ -140,6 +143,7 @@ class ThreeSwapVisualRelationMemoryTracker(nn.Module):
     residual_scale: float = 1.0
     relation_mode: str = "one_hot"
     dtype_mm: str = "bfloat16"
+    swap_frame_indices: tuple[tuple[int, ...], ...] = DEFAULT_SWAP_FRAME_INDICES
 
     @nn.compact
     def __call__(self, patch_tokens, initial_slots, relation_ids_override=None):
@@ -149,13 +153,29 @@ class ThreeSwapVisualRelationMemoryTracker(nn.Module):
             raise ValueError(f"Expected [B,{expected}], got {patch_tokens.shape}")
         if initial_slots.shape != (batch,):
             raise ValueError(f"Expected initial slots [B], got {initial_slots.shape}")
+        if len(self.swap_frame_indices) != 3:
+            raise ValueError(
+                f"ShellGame requires exactly three swap stages, got {len(self.swap_frame_indices)}"
+            )
+        segment_sizes = {len(indices) for indices in self.swap_frame_indices}
+        if len(segment_sizes) != 1 or not segment_sizes or 0 in segment_sizes:
+            raise ValueError(
+                "swap_frame_indices must contain three non-empty, equal-length stages"
+            )
+        segment_size = next(iter(segment_sizes))
+        flat_indices = tuple(index for stage in self.swap_frame_indices for index in stage)
+        if min(flat_indices) < 0 or max(flat_indices) >= frames:
+            raise ValueError(
+                f"swap_frame_indices must stay inside [0, {frames}); got "
+                f"[{min(flat_indices)}, {max(flat_indices)}]"
+            )
         if relation_ids_override is not None and relation_ids_override.shape != (
             batch,
-            len(SWAP_SLICES),
+            len(self.swap_frame_indices),
         ):
             raise ValueError(
                 "Expected teacher-forced relation ids "
-                f"[B,{len(SWAP_SLICES)}], got {relation_ids_override.shape}"
+                f"[B,{len(self.swap_frame_indices)}], got {relation_ids_override.shape}"
             )
 
         pooled = memory_core.pool_fixed_grid(patch_tokens, pool_factor=2)
@@ -165,10 +185,11 @@ class ThreeSwapVisualRelationMemoryTracker(nn.Module):
                 f"got {pooled.shape[2]}"
             )
         clips = jnp.stack(
-            [pooled[:, start:end] for start, end in SWAP_SLICES], axis=1
+            [pooled[:, jnp.asarray(indices)] for indices in self.swap_frame_indices],
+            axis=1,
         ).reshape(
-            batch * len(SWAP_SLICES),
-            SWAP_SEGMENT_SIZE,
+            batch * len(self.swap_frame_indices),
+            segment_size,
             SPATIAL_TOKENS,
             self.input_width,
         )
@@ -178,9 +199,9 @@ class ThreeSwapVisualRelationMemoryTracker(nn.Module):
             width=self.encoder_width,
             depth=self.encoder_depth,
             num_heads=self.encoder_heads,
-            segment_size=SWAP_SEGMENT_SIZE,
+            segment_size=segment_size,
             dtype_mm=self.dtype_mm,
-        )(clips).reshape(batch, len(SWAP_SLICES), NUM_CUPS)
+        )(clips).reshape(batch, len(self.swap_frame_indices), NUM_CUPS)
         relation_ids = jnp.argmax(relation_logits, axis=-1)
         memory_relation_ids = (
             relation_ids
@@ -201,8 +222,8 @@ class ThreeSwapVisualRelationMemoryTracker(nn.Module):
         segment_tokens = jnp.zeros(
             (
                 batch,
-                len(SWAP_SLICES),
-                SWAP_SEGMENT_SIZE,
+                len(self.swap_frame_indices),
+                segment_size,
                 SPATIAL_TOKENS,
                 self.memory_width,
             ),
@@ -227,7 +248,7 @@ class ThreeSwapVisualRelationMemoryTracker(nn.Module):
             width=self.memory_width,
             depth=self.memory_depth,
             num_heads=self.memory_heads,
-            segment_size=SWAP_SEGMENT_SIZE,
+            segment_size=segment_size,
             dtype_mm="float32",
         )
         adapter = memory_core.SingleHistoryReadAdapter(
