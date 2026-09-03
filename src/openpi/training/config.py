@@ -3359,6 +3359,9 @@ class TrainConfig:
     seed: int = 42
     # Global batch size.
     batch_size: int = 32
+    # Optional global validation batch size. Defaults to the training batch size.
+    # This is useful for small held-out splits that cannot fill a training batch.
+    eval_batch_size: int | None = None
     # Number of workers to use for the data loader. Increasing this number will speed up data loading but
     # will increase memory and CPU usage.
     num_workers: int = 2

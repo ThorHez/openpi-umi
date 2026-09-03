@@ -62,6 +62,12 @@ class Policy(BasePolicy):
         else:
             # JAX model setup
             self._sample_actions = nnx_utils.module_jit(model.sample_actions)
+            compute_history_classification = getattr(model, "compute_history_classification", None)
+            self._compute_history_classification = (
+                nnx_utils.module_jit(compute_history_classification)
+                if compute_history_classification is not None
+                else None
+            )
             self._rng = rng or jax.random.key(0)
 
     @override
@@ -103,6 +109,34 @@ class Policy(BasePolicy):
         outputs["policy_timing"] = {
             "infer_ms": model_time * 1000,
         }
+        return outputs
+
+    def infer_memory(self, obs: dict) -> dict:
+        """Run an optional model-native history classifier on a policy observation.
+
+        This deliberately uses the same input transforms as :meth:`infer`, so
+        deployment diagnostics see exactly the images and preprocessing used by
+        action inference.  Action-only models do not expose this method and
+        fail explicitly instead of returning a proxy derived from trajectories.
+        """
+        if self._is_pytorch_model or self._compute_history_classification is None:
+            raise NotImplementedError("This policy model does not expose a history classifier")
+
+        inputs = jax.tree.map(lambda x: x, obs)
+        inputs = self._input_transform(inputs)
+        inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
+        self._rng, classifier_rng = jax.random.split(self._rng)
+        observation = _model.Observation.from_dict(inputs)
+
+        start_time = time.monotonic()
+        logits, aux = self._compute_history_classification(
+            classifier_rng,
+            observation,
+        )
+        model_time = time.monotonic() - start_time
+        outputs = {"joint_logits": logits, **aux}
+        outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
+        outputs["policy_timing"] = {"memory_infer_ms": model_time * 1000}
         return outputs
 
     @property

@@ -1027,11 +1027,19 @@ def _make_split_torch_loaders(
     val_dataset,
 ):
     local_batch_size = config.batch_size // jax.process_count()
-    if len(train_dataset) < local_batch_size or len(val_dataset) < local_batch_size:
+    global_eval_batch_size = config.eval_batch_size or config.batch_size
+    if global_eval_batch_size % jax.process_count():
         raise ValueError(
-            "Both dataset splits must contain at least one full local batch: "
+            "eval_batch_size must be divisible by the JAX process count: "
+            f"eval_batch_size={global_eval_batch_size}, process_count={jax.process_count()}."
+        )
+    local_eval_batch_size = global_eval_batch_size // jax.process_count()
+    if len(train_dataset) < local_batch_size or len(val_dataset) < local_eval_batch_size:
+        raise ValueError(
+            "Both dataset splits must contain at least one full local train/eval batch: "
             f"train={len(train_dataset)}, val={len(val_dataset)}, "
-            f"local_batch_size={local_batch_size}. Increase --val-ratio or reduce --batch-size."
+            f"local_batch_size={local_batch_size}, "
+            f"local_eval_batch_size={local_eval_batch_size}. Increase --val-ratio or reduce the batch size."
         )
 
     train_loader = _data_loader.TorchDataLoader(
@@ -1046,7 +1054,7 @@ def _make_split_torch_loaders(
     # Validation is deterministic and intentionally uses no worker prefetching.
     val_loader = _data_loader.TorchDataLoader(
         val_dataset,
-        local_batch_size=local_batch_size,
+        local_batch_size=local_eval_batch_size,
         sharding=data_sharding,
         shuffle=False,
         num_workers=0,
@@ -1594,6 +1602,12 @@ def main(config: _config.TrainConfig):
             out_shardings=replicated_sharding,
         )
         best_val_loss = float("inf")
+        direction_metric_name = str(getattr(config.model, "direction_early_stop_metric", ""))
+        direction_best = float("-inf")
+        direction_no_improve = 0
+        direction_eval_count = 0
+        direction_best_step = None
+        direction_stop_reason = None
     if use_shellgame_cup_eval:
         pshellgame_cup_eval = jax.jit(
             functools.partial(
@@ -1689,6 +1703,47 @@ def main(config: _config.TrainConfig):
             if val_metrics["val/loss"] < best_val_loss:
                 best_val_loss = val_metrics["val/loss"]
                 pbar.write(f"Step {step}: new best val/loss={best_val_loss:.6f}")
+            if direction_metric_name:
+                if direction_metric_name not in val_metrics:
+                    raise KeyError(
+                        f"Direction early-stop metric {direction_metric_name!r} missing from validation: "
+                        f"{sorted(val_metrics)}"
+                    )
+                score = float(val_metrics[direction_metric_name])
+                direction_eval_count += 1
+                min_delta = float(getattr(config.model, "direction_early_stop_min_delta", 0.02))
+                meaningful = score >= direction_best + min_delta
+                if meaningful:
+                    direction_best = score
+                    direction_best_step = step
+                    direction_no_improve = 0
+                    pbar.write(
+                        f"Step {step}: new best direction score={score:.6f}; saving selected checkpoint"
+                    )
+                    _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
+                else:
+                    direction_no_improve += 1
+                min_evals = int(getattr(config.model, "direction_early_stop_min_evals", 3))
+                patience = int(getattr(config.model, "direction_early_stop_patience", 3))
+                failure_below = float(getattr(config.model, "direction_early_stop_failure_below", 0.45))
+                success_above = float(getattr(config.model, "direction_early_stop_success_above", 0.85))
+                if direction_eval_count >= min_evals and score >= success_above:
+                    direction_stop_reason = (
+                        f"direction success gate reached: {score:.4f} >= {success_above:.4f}"
+                    )
+                elif (
+                    direction_eval_count >= min_evals
+                    and direction_no_improve >= patience
+                    and direction_best < failure_below
+                ):
+                    direction_stop_reason = (
+                        "direction ineffective/stagnant: "
+                        f"best={direction_best:.4f} < {failure_below:.4f}, "
+                        f"no_improve_evals={direction_no_improve}"
+                    )
+                if direction_stop_reason:
+                    pbar.write(f"Step {step}: EARLY STOP — {direction_stop_reason}")
+                    break
 
         if (
             use_shellgame_cup_eval
@@ -1706,8 +1761,24 @@ def main(config: _config.TrainConfig):
             pbar.write(f"Step {step} [cup eval]: {cup_str}")
             wandb.log(cup_metrics, step=step)
 
-        if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
+        if not direction_metric_name and (
+            (step % config.save_interval == 0 and step > start_step)
+            or step == config.num_train_steps - 1
+        ):
             _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
+
+    if use_val and direction_metric_name:
+        if direction_best_step is None:
+            fallback_step = max(int(train_state.step) - 1, 0)
+            logging.warning("No direction checkpoint was selected; saving fallback step %d", fallback_step)
+            _checkpoints.save_state(checkpoint_manager, train_state, data_loader, fallback_step)
+        logging.info(
+            "Direction selection complete: best=%s step=%s evals=%d stop_reason=%s",
+            direction_best,
+            direction_best_step,
+            direction_eval_count,
+            direction_stop_reason,
+        )
 
     if use_val:
         logging.info("Running final validation...")
