@@ -83,6 +83,8 @@ class RealM6DirectionStage1Config(_shellgame_model.Pi0MemSemanticActionConfig):
     direction_xyz_centroids: tuple[tuple[tuple[float, ...], ...], ...] = ()
     direction_loss_weight: float = 0.0
     direction_temperature: float = 5e-4
+    direction_frame_start: int | None = None
+    direction_frame_end: int | None = None
     direction_early_stop_metric: str = "val/direction_clean_accuracy"
     direction_early_stop_min_evals: int = 3
     direction_early_stop_patience: int = 3
@@ -98,12 +100,18 @@ class RealM6DirectionStage1Model(_shellgame_model.Pi0MemSemanticAction):
     """M6 deployment model with an auxiliary clean-trajectory direction loss."""
 
     def __init__(self, config: RealM6DirectionStage1Config, rngs: nnx.Rngs):
-        if len(config.final_cups) != 306:
-            raise ValueError("direction stage 1 requires 306 final-cup labels")
+        if not config.final_cups or any(value not in (0, 1, 2) for value in config.final_cups):
+            raise ValueError("direction stage 1 requires a nonempty table of valid final-cup labels")
         if np.shape(config.direction_xyz_centroids) != (3, config.action_horizon, 3):
             raise ValueError("direction_xyz_centroids must have shape [3, action_horizon, 3]")
         if config.direction_loss_weight < 0 or config.direction_temperature <= 0:
             raise ValueError("direction loss weight must be nonnegative and temperature positive")
+        if (
+            config.direction_frame_start is not None
+            and config.direction_frame_end is not None
+            and config.direction_frame_end < config.direction_frame_start
+        ):
+            raise ValueError("direction_frame_end must be >= direction_frame_start")
         super().__init__(config, rngs)
         self.final_cups = tuple(int(value) for value in config.final_cups)
         self.direction_xyz_centroids = tuple(
@@ -112,6 +120,8 @@ class RealM6DirectionStage1Model(_shellgame_model.Pi0MemSemanticAction):
         )
         self.direction_loss_weight = float(config.direction_loss_weight)
         self.direction_temperature = float(config.direction_temperature)
+        self.direction_frame_start = config.direction_frame_start
+        self.direction_frame_end = config.direction_frame_end
 
     def compute_loss_with_memory_aux(self, rng, observation, actions, *, train=False):
         del train
@@ -180,12 +190,24 @@ class RealM6DirectionStage1Model(_shellgame_model.Pi0MemSemanticAction):
         labels = label_table[safe_episode]
         direction_logits = -mean_squared_distances / self.direction_temperature
         direction_loss = optax.softmax_cross_entropy_with_integer_labels(direction_logits, labels)
+        direction_active = jnp.ones_like(frame_index, dtype=jnp.bool_)
+        if self.direction_frame_start is not None:
+            direction_active &= frame_index >= self.direction_frame_start
+        if self.direction_frame_end is not None:
+            direction_active &= frame_index <= self.direction_frame_end
+        direction_active_float = direction_active.astype(flow_loss.dtype)
         total_loss = (
             flow_loss
             if self.direction_loss_weight == 0.0
-            else flow_loss + self.direction_loss_weight * direction_loss[:, None]
+            else flow_loss
+            + self.direction_loss_weight * direction_loss[:, None] * direction_active_float[:, None]
         )
-        direction_accuracy = jnp.mean(jnp.argmax(direction_logits, axis=-1) == labels)
+        active_count = jnp.maximum(jnp.sum(direction_active_float), 1.0)
+        direction_accuracy = jnp.sum(
+            (jnp.argmax(direction_logits, axis=-1) == labels).astype(flow_loss.dtype)
+            * direction_active_float
+        ) / active_count
+        active_direction_loss = jnp.sum(direction_loss * direction_active_float) / active_count
 
         return total_loss, {
             "history_mem": raw_memory,
@@ -194,7 +216,8 @@ class RealM6DirectionStage1Model(_shellgame_model.Pi0MemSemanticAction):
             "temporal_valid_fraction": jnp.mean(temporal_valid),
             "extra_metrics": {
                 "flow_loss_only": jnp.mean(flow_loss),
-                "direction_loss": jnp.mean(direction_loss),
+                "direction_loss": active_direction_loss,
+                "direction_active_fraction": jnp.mean(direction_active_float),
                 "direction_clean_accuracy": direction_accuracy,
                 "direction_weight": jnp.asarray(self.direction_loss_weight, dtype=jnp.float32),
             },

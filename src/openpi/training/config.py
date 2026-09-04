@@ -3069,6 +3069,11 @@ class MultiDataConfigFactory(DataConfigFactory):
     repo_id: str = "multi"
     datasets: list[DataConfigFactory] = dataclasses.field(default_factory=list)
     weights: list[float] | None = None  # None = uniform; same length as datasets
+    # Optional source-level weights used only when merging normalization
+    # statistics.  This is separate from ``weights`` because the latter is a
+    # per-row sampler weight: differently sized datasets need inverse-size
+    # correction to realize a desired source mixture.
+    norm_weights: list[float] | None = None
     state_pad_dim: int | None = None
     use_merged_norm_stats: bool = True
 
@@ -3094,7 +3099,7 @@ class MultiDataConfigFactory(DataConfigFactory):
         if self.use_merged_norm_stats:
             stats_dict_list = [dc.norm_stats for dc in all_configs if dc.norm_stats is not None]
             if stats_dict_list:
-                merge_weights = self.weights
+                merge_weights = self.norm_weights if self.norm_weights is not None else self.weights
                 if merge_weights is None or len(merge_weights) != len(all_configs):
                     merge_weights = [1.0] * len(all_configs)
                 weights_for_merge = [merge_weights[i] for i, dc in enumerate(all_configs) if dc.norm_stats is not None]
@@ -3589,6 +3594,7 @@ _shellgame_history_post_transformer_probe_model = (
 # Import task recipes only after the shared config dataclasses are defined.
 # This keeps task-specific data and model policy code out of this registry.
 from openpi.training.mem.recipes import shellgame_semantic_action as _shellgame_semantic_action_recipe  # noqa: E402
+from openpi.training.mem.recipes import shellgame_real_memory_adapt as _shellgame_real_memory_adapt_recipe  # noqa: E402
 from openpi.training.mem.recipes import shellgame_real_wrist_stage2 as _shellgame_real_wrist_stage2_recipe  # noqa: E402
 
 _shellgame_semantic_action_train_config = (
@@ -3596,6 +3602,9 @@ _shellgame_semantic_action_train_config = (
 )
 _shellgame_real_wrist_stage2_train_config = (
     _shellgame_real_wrist_stage2_recipe.make_train_config()
+)
+_shellgame_real_memory_adapt_train_config = (
+    _shellgame_real_memory_adapt_recipe.make_train_config()
 )
 
 # Temporary import compatibility for local experiment scripts. New code should
@@ -5866,6 +5875,7 @@ _CONFIGS = [
 
     _shellgame_semantic_action_train_config,
     _shellgame_real_wrist_stage2_train_config,
+    _shellgame_real_memory_adapt_train_config,
 
     TrainConfig(
         name="pi0_mem_fixed_grid_query_action_shellgame_joint_260810",

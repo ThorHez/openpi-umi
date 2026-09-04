@@ -5,6 +5,7 @@ import sys
 
 import numpy as np
 
+from openpi.training.config_pi0_mem import UmiInputsV4ShellgameRealWristVideo
 from scripts.mem.convert_real_shellgame_stage2_epfirst import build_episode_contract
 
 UMI_ARX_ROOT = Path("/data2/hzl_workspace_for_pi_mem/umi-arx-kian")
@@ -61,6 +62,37 @@ def test_invalid_or_stale_command_falls_back_to_measured_pose() -> None:
     np.testing.assert_allclose(contract.actions[-1, 0], contract.actions[-1, -1])
     assert contract.max_roundtrip_position_error_m < 1e-12
     assert contract.max_roundtrip_rotation_matrix_error < 1e-12
+
+
+def test_action_horizon_32_uses_the_same_current_frame_anchor() -> None:
+    position, rotation, gripper = _pose_series(40)
+    raw_action = np.concatenate((position, rotation, gripper[:, None]), axis=-1)
+
+    contract = build_episode_contract(
+        position,
+        rotation,
+        gripper,
+        raw_action,
+        action_horizon=32,
+    )
+
+    assert contract.actions.shape == (40, 32, 10)
+    np.testing.assert_allclose(contract.actions[2, 0, :3], [0.1, 0.0, 0.0], atol=1e-6)
+    np.testing.assert_allclose(contract.actions[2, 31, :3], [3.2, 0.0, 0.0], atol=1e-6)
+    np.testing.assert_allclose(contract.actions[-1, 0], contract.actions[-1, -1])
+
+
+def test_real_wrist_transform_accepts_its_configured_action_horizon() -> None:
+    common = {
+        "left_wrist_0_rgb_0_video": np.zeros((2, 224, 224, 3), dtype=np.uint8),
+        "robot0_eef_pos": np.zeros(3, dtype=np.float32),
+        "robot0_eef_rot_axis_angle": np.zeros(6, dtype=np.float32),
+        "robot0_gripper_width": np.zeros(1, dtype=np.float32),
+    }
+    for horizon in (16, 32):
+        transform = UmiInputsV4ShellgameRealWristVideo(num_frames=2, action_horizon=horizon)
+        result = transform({**common, "actions": np.zeros((horizon, 10), dtype=np.float32)})
+        assert result["actions"].shape == (horizon, 10)
 
 
 def test_training_contract_roundtrips_through_exact_robot_inference_decoder() -> None:

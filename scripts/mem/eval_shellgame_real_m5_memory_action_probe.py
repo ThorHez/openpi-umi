@@ -10,19 +10,19 @@ from pathlib import Path
 import sys
 
 import numpy as np
-from openpi.policies import policy_config
-import pyarrow.parquet as pq
 from PIL import Image
+import pyarrow.parquet as pq
 
+from openpi.policies import policy_config
 
 OPENPI_ROOT = Path(__file__).resolve().parents[2]
 if str(OPENPI_ROOT) not in sys.path:
     sys.path.insert(0, str(OPENPI_ROOT))
 
 from openpi.training.mem.recipes import shellgame_real_wrist_m5 as _m5  # noqa: E402
+from openpi.training.mem.recipes import shellgame_real_wrist_m5_mixed as _m5_mixed  # noqa: E402
 from scripts.mem import eval_shellgame_real_m5_oracle_action_probe as _oracle_eval  # noqa: E402
 from scripts.mem import eval_shellgame_real_stage2_checkpoint as _action_eval  # noqa: E402
-
 
 CHECKPOINT = Path(
     "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/"
@@ -51,6 +51,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=Path, default=CHECKPOINT)
     parser.add_argument("--memory-results", type=Path, default=MEMORY_RESULTS)
     parser.add_argument("--output", type=Path, default=OUTPUT)
+    parser.add_argument("--config-kind", choices=("old", "mixed"), default="old")
+    parser.add_argument("--episode-offset", type=int, default=0)
     return parser.parse_args()
 
 
@@ -121,10 +123,11 @@ def main() -> None:
 
     memory_payload = json.loads(args.memory_results.read_text(encoding="utf-8"))
     memory_by_episode = {int(row["episode_id"]): row for row in memory_payload["rows"]}
-    if sorted(memory_by_episode) != validation_episodes:
-        raise ValueError("Memory result episodes do not match the seed-42 validation split")
+    if not set(validation_episodes).issubset(memory_by_episode):
+        raise ValueError("Memory results do not cover the held-out validation split")
 
-    config = _m5.make_train_config(
+    config_factory = _m5_mixed.make_train_config if args.config_kind == "mixed" else _m5.make_train_config
+    config = config_factory(
         semantic_source="memory",
         exp_name="evaluation_only",
         checkpoint=str(checkpoint),
@@ -142,7 +145,7 @@ def main() -> None:
     for progress, episode_id in enumerate(validation_episodes, start=1):
         row = load_eval_row(dataset, episode_id)
         history = _action_eval.load_history(dataset, episode_id)
-        prediction = policy.infer(build_observation(history, row, episode_id))
+        prediction = policy.infer(build_observation(history, row, episode_id + args.episode_offset))
         actions = np.asarray(prediction["actions"], dtype=np.float64)
         if actions.shape != (ACTION_HORIZON, ACTION_DIM):
             raise ValueError(f"Policy returned {actions.shape}")
@@ -170,7 +173,7 @@ def main() -> None:
         }
         result_rows.append(result)
         print(
-            f"[{progress:02d}/31] ep={episode_id:03d} gt={CUP_NAMES[gt_class]} "
+            f"[{progress:02d}/{len(validation_episodes):02d}] ep={episode_id:03d} gt={CUP_NAMES[gt_class]} "
             f"mem={CUP_NAMES[memory_class]} action={CUP_NAMES[action_class]} "
             f"mem_ok={result['memory_correct']} follows_mem={result['action_matches_memory']} "
             f"xyz_rmse={result['xyz_rmse_mm']:.2f}mm",
@@ -242,6 +245,8 @@ def main() -> None:
         "memory_results": str(args.memory_results.resolve()),
         "dataset": str(dataset),
         "frame_index": FRAME_INDEX,
+        "config_kind": args.config_kind,
+        "episode_offset": args.episode_offset,
         "action_contract": "commands 242..257 relative to measured frame 241",
         "centroid_source": "275 seed-42 training episodes, frame 241, flattened XYZ",
         "summary": summary,

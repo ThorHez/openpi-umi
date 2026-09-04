@@ -146,11 +146,16 @@ class ThreeSwapVisualRelationMemoryTracker(nn.Module):
     swap_frame_indices: tuple[tuple[int, ...], ...] = DEFAULT_SWAP_FRAME_INDICES
 
     @nn.compact
-    def __call__(self, patch_tokens, initial_slots, relation_ids_override=None):
-        batch, frames, tokens, width = patch_tokens.shape
-        expected = (self.num_frames, 256, self.input_width)
-        if (frames, tokens, width) != expected:
-            raise ValueError(f"Expected [B,{expected}], got {patch_tokens.shape}")
+    def __call__(
+        self,
+        patch_tokens,
+        initial_slots,
+        relation_ids_override=None,
+        *,
+        preselected_pooled_clips: bool = False,
+        return_relation_logits_only: bool = False,
+    ):
+        batch = patch_tokens.shape[0]
         if initial_slots.shape != (batch,):
             raise ValueError(f"Expected initial slots [B], got {initial_slots.shape}")
         if len(self.swap_frame_indices) != 3:
@@ -163,12 +168,6 @@ class ThreeSwapVisualRelationMemoryTracker(nn.Module):
                 "swap_frame_indices must contain three non-empty, equal-length stages"
             )
         segment_size = next(iter(segment_sizes))
-        flat_indices = tuple(index for stage in self.swap_frame_indices for index in stage)
-        if min(flat_indices) < 0 or max(flat_indices) >= frames:
-            raise ValueError(
-                f"swap_frame_indices must stay inside [0, {frames}); got "
-                f"[{min(flat_indices)}, {max(flat_indices)}]"
-            )
         if relation_ids_override is not None and relation_ids_override.shape != (
             batch,
             len(self.swap_frame_indices),
@@ -178,21 +177,49 @@ class ThreeSwapVisualRelationMemoryTracker(nn.Module):
                 f"[B,{len(self.swap_frame_indices)}], got {relation_ids_override.shape}"
             )
 
-        pooled = memory_core.pool_fixed_grid(patch_tokens, pool_factor=2)
-        if pooled.shape[2] != SPATIAL_TOKENS:
-            raise ValueError(
-                f"ShellGame relation encoder requires {SPATIAL_TOKENS} pooled tokens, "
-                f"got {pooled.shape[2]}"
+        if preselected_pooled_clips:
+            expected = (
+                len(self.swap_frame_indices),
+                segment_size,
+                SPATIAL_TOKENS,
+                self.input_width,
             )
-        clips = jnp.stack(
-            [pooled[:, jnp.asarray(indices)] for indices in self.swap_frame_indices],
-            axis=1,
-        ).reshape(
-            batch * len(self.swap_frame_indices),
-            segment_size,
-            SPATIAL_TOKENS,
-            self.input_width,
-        )
+            if patch_tokens.shape[1:] != expected:
+                raise ValueError(
+                    f"Expected preselected pooled clips [B,{expected}], got {patch_tokens.shape}"
+                )
+            clips = patch_tokens.reshape(
+                batch * len(self.swap_frame_indices),
+                segment_size,
+                SPATIAL_TOKENS,
+                self.input_width,
+            )
+        else:
+            _, frames, tokens, width = patch_tokens.shape
+            expected = (self.num_frames, 256, self.input_width)
+            if (frames, tokens, width) != expected:
+                raise ValueError(f"Expected [B,{expected}], got {patch_tokens.shape}")
+            flat_indices = tuple(index for stage in self.swap_frame_indices for index in stage)
+            if min(flat_indices) < 0 or max(flat_indices) >= frames:
+                raise ValueError(
+                    f"swap_frame_indices must stay inside [0, {frames}); got "
+                    f"[{min(flat_indices)}, {max(flat_indices)}]"
+                )
+            pooled = memory_core.pool_fixed_grid(patch_tokens, pool_factor=2)
+            if pooled.shape[2] != SPATIAL_TOKENS:
+                raise ValueError(
+                    f"ShellGame relation encoder requires {SPATIAL_TOKENS} pooled tokens, "
+                    f"got {pooled.shape[2]}"
+                )
+            clips = jnp.stack(
+                [pooled[:, jnp.asarray(indices)] for indices in self.swap_frame_indices],
+                axis=1,
+            ).reshape(
+                batch * len(self.swap_frame_indices),
+                segment_size,
+                SPATIAL_TOKENS,
+                self.input_width,
+            )
         relation_logits = FrozenSwapRelationClassifier(
             name="swap_relation_classifier",
             input_width=self.input_width,
@@ -202,6 +229,8 @@ class ThreeSwapVisualRelationMemoryTracker(nn.Module):
             segment_size=segment_size,
             dtype_mm=self.dtype_mm,
         )(clips).reshape(batch, len(self.swap_frame_indices), NUM_CUPS)
+        if return_relation_logits_only:
+            return relation_logits
         relation_ids = jnp.argmax(relation_logits, axis=-1)
         memory_relation_ids = (
             relation_ids

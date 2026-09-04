@@ -11,6 +11,7 @@ import numpy as np
 from openpi.policies import policy_config
 from openpi.serving import websocket_policy_server
 from openpi.training import config as training_config
+from openpi.training.mem.recipes.shellgame_real_wrist_m6 import direction_prompt
 
 HISTORY_FRAMES = 241
 CURRENT_FRAME = HISTORY_FRAMES
@@ -61,8 +62,9 @@ def summarize_memory_classification(outputs: dict) -> dict:
 class CachedHistoryPolicy:
     """Cache immutable episode history while preserving the exact full input."""
 
-    def __init__(self, policy):
+    def __init__(self, policy, *, prompt_from_memory: bool = False):
         self._policy = policy
+        self._prompt_from_memory = prompt_from_memory
         self._history: dict[str, object] | None = None
         self._memory: dict[str, object] | None = None
 
@@ -116,6 +118,8 @@ class CachedHistoryPolicy:
             full.update(
                 {key: value for key, value in obs.items() if key not in {"mode", VIDEO_CURRENT_STEP_KEY, "noise_seed"}}
             )
+            if self._prompt_from_memory and self._memory is not None:
+                full["prompt"] = direction_prompt(int(self._memory["predicted_final_cup"]))
             full[f"{VIDEO_FRAME_KEY_PREFIX}{CURRENT_FRAME}"] = obs[VIDEO_CURRENT_STEP_KEY]
             noise = np.random.default_rng(noise_seed).standard_normal(
                 (ACTION_HORIZON, MODEL_ACTION_DIM), dtype=np.float32
@@ -135,6 +139,11 @@ def parse_args() -> argparse.Namespace:
         default="pi0_mem_semantic_action_shellgame_real_wrist_currentrel_eef10_stage2",
     )
     parser.add_argument("--port", type=int, default=8017)
+    parser.add_argument(
+        "--prompt-from-memory",
+        action="store_true",
+        help="Use the cached MEM final-cup prediction to build the M6 direction prompt.",
+    )
     return parser.parse_args()
 
 
@@ -153,7 +162,7 @@ def main() -> None:
         }
     )
     server = websocket_policy_server.WebsocketPolicyServer(
-        policy=CachedHistoryPolicy(policy),
+        policy=CachedHistoryPolicy(policy, prompt_from_memory=args.prompt_from_memory),
         host="0.0.0.0",
         port=args.port,
         metadata=metadata,

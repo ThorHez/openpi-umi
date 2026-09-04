@@ -17,17 +17,17 @@ from pathlib import Path
 import sys
 
 import numpy as np
-from openpi.policies import policy_config
 import pyarrow.parquet as pq
 
+from openpi.policies import policy_config
 
 OPENPI_ROOT = Path(__file__).resolve().parents[2]
 if str(OPENPI_ROOT) not in sys.path:
     sys.path.insert(0, str(OPENPI_ROOT))
 
 from openpi.training.mem.recipes import shellgame_real_wrist_m5 as _m5  # noqa: E402
+from openpi.training.mem.recipes import shellgame_real_wrist_m5_mixed as _m5_mixed  # noqa: E402
 from scripts.mem import eval_shellgame_real_stage2_checkpoint as _action_eval  # noqa: E402
-
 
 CHECKPOINT = Path(
     "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/"
@@ -51,16 +51,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--labels", type=Path, default=_action_eval.LABELS)
     parser.add_argument("--checkpoint", type=Path, default=CHECKPOINT)
     parser.add_argument("--output", type=Path, default=OUTPUT)
+    parser.add_argument("--config-kind", choices=("old", "mixed"), default="old")
+    parser.add_argument("--episode-offset", type=int, default=0)
     return parser.parse_args()
 
 
 def load_split(dataset: Path) -> tuple[list[int], list[int]]:
     audit = json.loads((dataset / "conversion_audit.json").read_text(encoding="utf-8"))
     validation = sorted(int(value) for value in audit["validation_episode_ids"])
-    validation_set = set(validation)
-    training = [episode for episode in range(int(audit["episodes"])) if episode not in validation_set]
-    if len(training) != 275 or len(validation) != 31:
-        raise ValueError(f"Expected the seed-42 275/31 split, got {len(training)}/{len(validation)}")
+    if "training_episode_ids" in audit:
+        training = sorted(int(value) for value in audit["training_episode_ids"])
+    else:
+        validation_set = set(validation)
+        training = [episode for episode in range(int(audit["episodes"])) if episode not in validation_set]
+    if not training or not validation:
+        raise ValueError("Training and validation episode splits must both be nonempty")
     return training, validation
 
 
@@ -172,7 +177,8 @@ def main() -> None:
         for cup in range(3)
     }
 
-    config = _m5.make_train_config(
+    config_factory = _m5_mixed.make_train_config if args.config_kind == "mixed" else _m5.make_train_config
+    config = config_factory(
         semantic_source="oracle",
         exp_name="evaluation_only",
         checkpoint=str(checkpoint),
@@ -197,7 +203,7 @@ def main() -> None:
         normal_prediction = policy.infer(
             build_observation(
                 row,
-                oracle_episode_id=episode_id,
+                oracle_episode_id=episode_id + args.episode_offset,
                 actual_episode_id=episode_id,
                 zero_frame=zero_frame,
             )
@@ -227,7 +233,7 @@ def main() -> None:
             prediction = policy.infer(
                 build_observation(
                     row,
-                    oracle_episode_id=donor_by_class[forced_cup],
+                    oracle_episode_id=donor_by_class[forced_cup] + args.episode_offset,
                     actual_episode_id=episode_id,
                     zero_frame=zero_frame,
                 )
@@ -252,8 +258,8 @@ def main() -> None:
             for right in range(left + 1, 3)
         ]
         print(
-            f"[{progress:02d}/31] ep={episode_id:03d} gt={CUP_NAMES[gt_cup]} "
-            f"normal={CUP_NAMES[normal_class]} forced={list(map(lambda x: CUP_NAMES[x], forced_classes))} "
+            f"[{progress:02d}/{len(validation_episodes):02d}] ep={episode_id:03d} gt={CUP_NAMES[gt_cup]} "
+            f"normal={CUP_NAMES[normal_class]} forced={[CUP_NAMES[x] for x in forced_classes]} "
             f"xyz_rmse={normal_rows[-1]['xyz_rmse_mm']:.2f}mm "
             f"forced_sep={np.mean(pairwise_separation):.4f}",
             flush=True,
@@ -294,6 +300,8 @@ def main() -> None:
         "checkpoint": str(checkpoint),
         "dataset": str(dataset),
         "frame_index": FRAME_INDEX,
+        "config_kind": args.config_kind,
+        "episode_offset": args.episode_offset,
         "action_contract": "commands 242..257 relative to measured frame 241",
         "centroid_source": "275 seed-42 training episodes, frame 241, flattened XYZ",
         "summary": summary,

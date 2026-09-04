@@ -95,6 +95,58 @@ class CheckpointWeightLoaderReinitialize(WeightLoader):
 
 
 @dataclasses.dataclass(frozen=True)
+class OverlayCheckpointWeightLoader(WeightLoader):
+    """Load a complete policy checkpoint and overlay selected memory leaves.
+
+    This preserves an already-trained action policy while transplanting a
+    small, independently adapted module (for example the ShellGame relation
+    classifier) from another checkpoint with the same model structure.
+    """
+
+    params_path: str
+    overlay_params_path: str
+    overlay_regex: str
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded_params = _model.restore_params(
+            download.maybe_download(self.params_path), restore_type=np.ndarray
+        )
+        overlay_params = _model.restore_params(
+            download.maybe_download(self.overlay_params_path), restore_type=np.ndarray
+        )
+        flat_ref = flax.traverse_util.flatten_dict(params, sep="/")
+        flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
+        flat_overlay = flax.traverse_util.flatten_dict(overlay_params, sep="/")
+        pattern = re.compile(self.overlay_regex)
+        matched = sorted(key for key in flat_overlay if pattern.fullmatch(key))
+        if not matched:
+            raise ValueError(f"overlay_regex matched no overlay parameters: {self.overlay_regex!r}")
+        missing = [key for key in matched if key not in flat_ref or key not in flat_loaded]
+        if missing:
+            raise ValueError(f"Overlay parameter paths are missing from the target/base: {missing[:8]}")
+        shape_mismatches = [
+            (key, np.shape(flat_overlay[key]), np.shape(flat_ref[key]))
+            for key in matched
+            if np.shape(flat_overlay[key]) != np.shape(flat_ref[key])
+        ]
+        if shape_mismatches:
+            raise ValueError(f"Overlay parameter shape mismatch: {shape_mismatches[:8]}")
+        for key in matched:
+            flat_loaded[key] = flat_overlay[key]
+        logger.info(
+            "Overlaid %d checkpoint leaves matching %r from %s",
+            len(matched),
+            self.overlay_regex,
+            self.overlay_params_path,
+        )
+        return _merge_params(
+            flax.traverse_util.unflatten_dict(flat_loaded, sep="/"),
+            params,
+            missing_regex=".*lora.*",
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class PaliGemmaWeightLoader(WeightLoader):
     """Loads weights from the official PaliGemma checkpoint.
 

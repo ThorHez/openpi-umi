@@ -26,6 +26,10 @@ if str(OPENPI_ROOT) not in sys.path:
 
 from openpi.training.mem.recipes import shellgame_real_wrist_m6 as _m6  # noqa: E402
 from openpi.training.mem.recipes import shellgame_real_wrist_m6_direction_stage1 as _stage1  # noqa: E402
+from openpi.training.mem.recipes import shellgame_real_wrist_m6_direction_stage1_h32 as _stage1_h32  # noqa: E402
+from openpi.training.mem.recipes import shellgame_real_wrist_m6_direction_stage1_mixed as _stage1_mixed  # noqa: E402
+from openpi.training.mem.recipes import shellgame_real_wrist_m6_mixed as _m6_mixed  # noqa: E402
+from openpi.training.mem.recipes import shellgame_real_wrist_stage2_h32 as _stage2_h32  # noqa: E402
 from scripts.mem import eval_shellgame_real_m5_memory_action_probe as _m5_memory_eval  # noqa: E402
 from scripts.mem import eval_shellgame_real_m5_oracle_action_probe as _m5_oracle_eval  # noqa: E402
 from scripts.mem import eval_shellgame_real_stage2_checkpoint as _action_eval  # noqa: E402
@@ -57,13 +61,18 @@ THREE_WAY_RESPONSE_THRESHOLD = 0.70
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", type=Path, default=_action_eval.DATASET)
+    parser.add_argument("--dataset", type=Path)
     parser.add_argument("--labels", type=Path, default=_action_eval.LABELS)
     parser.add_argument("--checkpoint", type=Path, default=CHECKPOINT)
     parser.add_argument("--memory-results", type=Path, default=MEMORY_RESULTS)
     parser.add_argument("--output", type=Path, default=OUTPUT)
     parser.add_argument("--samples-per-prompt", type=int, default=2)
-    parser.add_argument("--config-kind", choices=("m6", "stage1"), default="m6")
+    parser.add_argument(
+        "--config-kind",
+        choices=("m6", "stage1", "stage1_h32", "mixed_stage1", "mixed_full"),
+        default="m6",
+    )
+    parser.add_argument("--episode-offset", type=int, default=0)
     parser.add_argument(
         "--episodes-per-class",
         type=int,
@@ -187,7 +196,9 @@ def main() -> None:
     args = parse_args()
     if args.samples_per_prompt <= 0:
         raise ValueError("samples-per-prompt must be positive")
-    dataset = args.dataset.resolve()
+    action_horizon = _stage2_h32.ACTION_HORIZON if args.config_kind == "stage1_h32" else ACTION_HORIZON
+    default_dataset = Path(_stage2_h32.DATASET_ROOT) if args.config_kind == "stage1_h32" else _action_eval.DATASET
+    dataset = (args.dataset or default_dataset).resolve()
     checkpoint = args.checkpoint.resolve()
     training_episodes, validation_episodes = _m5_oracle_eval.load_split(dataset)
     labels = _m5_oracle_eval.load_labels(args.labels.resolve())
@@ -198,9 +209,7 @@ def main() -> None:
         for cup in range(3):
             candidates = [episode for episode in validation_episodes if labels[episode] == cup]
             if len(candidates) < args.episodes_per_class:
-                raise ValueError(
-                    f"held-out split has only {len(candidates)} {_m6.CUP_NAMES[cup]} episodes"
-                )
+                raise ValueError(f"held-out split has only {len(candidates)} {_m6.CUP_NAMES[cup]} episodes")
             selected.extend(candidates[: args.episodes_per_class])
         validation_episodes = sorted(selected)
     centroids = _m5_oracle_eval.build_training_centroids(dataset, training_episodes)
@@ -209,18 +218,35 @@ def main() -> None:
     if not set(validation_episodes).issubset(memory_by_episode):
         raise ValueError("Memory results do not cover the selected seed-42 validation episodes")
 
-    config_factory = _stage1.make_train_config if args.config_kind == "stage1" else _m6.make_train_config
-    config = config_factory(
-        exp_name="evaluation_only",
-        checkpoint=str(checkpoint),
-        steps=1,
-        batch_size=1,
-        fsdp_devices=1,
-        num_workers=0,
-        eval_interval=1,
-        eval_batches=1,
-        save_interval=1,
-    )
+    common_config_args = {
+        "exp_name": "evaluation_only",
+        "steps": 1,
+        "batch_size": 1,
+        "fsdp_devices": 1,
+        "num_workers": 0,
+        "eval_interval": 1,
+        "eval_batches": 1,
+        "save_interval": 1,
+    }
+    if args.config_kind == "mixed_stage1":
+        config = _stage1_mixed.make_train_config(
+            action_checkpoint=str(checkpoint),
+            eval_batch_size=1,
+            **common_config_args,
+        )
+    elif args.config_kind == "mixed_full":
+        config = _m6_mixed.make_train_config(
+            checkpoint=str(checkpoint),
+            eval_batch_size=1,
+            **common_config_args,
+        )
+    else:
+        config_factory = {
+            "m6": _m6.make_train_config,
+            "stage1": _stage1.make_train_config,
+            "stage1_h32": _stage1_h32.make_train_config,
+        }[args.config_kind]
+        config = config_factory(checkpoint=str(checkpoint), **common_config_args)
     policy = policy_config.create_trained_policy(config, checkpoint)
     deployment_rows: list[dict] = []
     counterfactual_rows: list[dict] = []
@@ -240,19 +266,19 @@ def main() -> None:
             for sample_index in range(args.samples_per_prompt):
                 noise_seed = episode_id * 1_000_003 + FRAME_INDEX * 101 + sample_index
                 noise = np.random.default_rng(noise_seed).standard_normal(
-                    (ACTION_HORIZON, MODEL_ACTION_DIM), dtype=np.float32
+                    (action_horizon, MODEL_ACTION_DIM), dtype=np.float32
                 )
                 result = policy.infer(
                     build_observation(
                         history,
                         row,
-                        episode_id,
+                        episode_id + args.episode_offset,
                         _m6.direction_prompt(forced_cup),
                     ),
                     noise=noise,
                 )
                 action = np.asarray(result["actions"], dtype=np.float64)
-                if action.shape != (ACTION_HORIZON, ACTION_DIM):
+                if action.shape != (action_horizon, ACTION_DIM):
                     raise ValueError(f"Policy returned {action.shape}")
                 samples.append(action)
             actions = np.mean(np.stack(samples), axis=0)
@@ -426,9 +452,11 @@ def main() -> None:
         "checkpoint": str(checkpoint),
         "dataset": str(dataset),
         "frame_index": FRAME_INDEX,
+        "action_horizon": action_horizon,
         "samples_per_prompt": args.samples_per_prompt,
         "config_kind": args.config_kind,
         "episodes_per_class": args.episodes_per_class,
+        "episode_offset": args.episode_offset,
         "prompt_template": _m6.PROMPT_TEMPLATE,
         "deployment_prompt_source": "frozen MEM final-cup prediction",
         "centroid_source": "275 seed-42 training episodes, frame 241, flattened XYZ",

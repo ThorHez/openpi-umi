@@ -5,7 +5,8 @@ The raw replay stores measured world-frame EEF poses and 7-D commanded EEF
 targets. For a dataset row at frame ``t`` this converter emits:
 
 * state: ``inv(T_episode0) @ T_measured[t]`` as xyz + rot6d + gripper;
-* action[h]: ``inv(T_measured[t]) @ T_command[t+h+1]`` for h=0..15;
+* action[h]: ``inv(T_measured[t]) @ T_command[t+h+1]`` for the requested
+  action horizon (16 by default);
 * one wrist RGB image;
 * episode length and semantic labels for masking/evaluation.
 
@@ -35,8 +36,7 @@ from openpi.utils.pose_utils import pose_to_mat
 DEFAULT_INPUT = Path("/data2/hzl_workspace_for_pi_mem/replay_buffer_merged_306_degap.zarr.zip")
 DEFAULT_LABELS = Path("/data2/hzl_workspace_for_pi_mem/labels_merged_306_degap.jsonl")
 DEFAULT_OUTPUT = Path(
-    "/data2/hzl_workspace_for_pi_mem/openpi-umi/data/"
-    "shellgame_real_306_degap_state_epfirst_action_currentrel_eef10"
+    "/data2/hzl_workspace_for_pi_mem/openpi-umi/data/shellgame_real_306_degap_state_epfirst_action_currentrel_eef10"
 )
 # Must match DEFAULT_PROMPT in umi-arx-kian/scripts/eval_arx5_pi_hzl.py.
 PROMPT = "The shell game has ended. Grasp and lift the cup containing the ball."
@@ -194,6 +194,7 @@ def build_episode_contract(
     gripper: np.ndarray,
     raw_action: np.ndarray,
     *,
+    action_horizon: int = ACTION_HORIZON,
     max_command_position_error_m: float = 0.05,
 ) -> EpisodeContract:
     """Construct ep-first state and current-anchored future action chunks."""
@@ -222,8 +223,10 @@ def build_episode_contract(
     state_pose10 = _relative_pose10(measured_world, episode_first)
     state = np.concatenate((state_pose10, gripper[:, None]), axis=-1).astype(np.float32)
 
+    if action_horizon <= 0:
+        raise ValueError("action_horizon must be positive")
     future_indices = np.minimum(
-        np.arange(length)[:, None] + 1 + np.arange(ACTION_HORIZON)[None, :],
+        np.arange(length)[:, None] + 1 + np.arange(action_horizon)[None, :],
         length - 1,
     )
     future_world = sanitized_world[future_indices]
@@ -274,7 +277,7 @@ def _free_bytes(path: Path) -> int:
     return int(shutil.disk_usage(probe).free)
 
 
-def _create_lerobot_dataset(output: Path, *, workers: int):
+def _create_lerobot_dataset(output: Path, *, workers: int, action_horizon: int, repo_id: str):
     from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
     features = {
@@ -300,7 +303,7 @@ def _create_lerobot_dataset(output: Path, *, workers: int):
         },
         "actions": {
             "dtype": "float32",
-            "shape": (ACTION_HORIZON, ACTION_DIM),
+            "shape": (action_horizon, ACTION_DIM),
             "names": ["horizon", "eef10"],
         },
         "episode_length": {"dtype": "int64", "shape": (1,), "names": ["frames"]},
@@ -309,7 +312,7 @@ def _create_lerobot_dataset(output: Path, *, workers: int):
         "swap_pairs": {"dtype": "int64", "shape": (3, 2), "names": ["stage", "pair"]},
     }
     return LeRobotDataset.create(
-        repo_id="local/shellgame_real_306_degap_state_epfirst_action_currentrel_eef10",
+        repo_id=repo_id,
         fps=20,
         root=output,
         robot_type="umi",
@@ -374,6 +377,7 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
                 arrays["robot0_eef_rot_axis_angle"][start:end],
                 np.asarray(arrays["robot0_gripper_width"][start:end]).reshape(-1),
                 arrays["action"][start:end],
+                action_horizon=args.action_horizon,
                 max_command_position_error_m=args.max_command_position_error_m,
             )
             contracts.append(contract)
@@ -406,7 +410,7 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 "episodes": length_mismatches,
             },
-            "action_horizon": ACTION_HORIZON,
+            "action_horizon": args.action_horizon,
             "state_contract": "episode_first_relative_link6_pose10_plus_direct_gripper",
             "action_contract": "current_frame_same_anchor_relative_link6_pose10_plus_direct_gripper",
             "raw_command_fallback": {
@@ -457,7 +461,12 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
         camera = ZarrV3Array(store, "data/camera0_rgb")
         if camera.shape != (total_frames, 224, 224, 3):
             raise ValueError(f"Unexpected camera shape: {camera.shape}")
-        dataset = _create_lerobot_dataset(args.output, workers=args.image_workers)
+        dataset = _create_lerobot_dataset(
+            args.output,
+            workers=args.image_workers,
+            action_horizon=args.action_horizon,
+            repo_id=args.repo_id,
+        )
         for episode, contract in enumerate(contracts):
             start, end = int(starts[episode]), int(episode_ends[episode])
             label = labels[episode]
@@ -500,6 +509,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--labels", type=Path, default=DEFAULT_LABELS)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument(
+        "--repo-id",
+        default="local/shellgame_real_306_degap_state_epfirst_action_currentrel_eef10",
+    )
+    parser.add_argument("--action-horizon", type=int, default=ACTION_HORIZON)
+    parser.add_argument(
         "--audit-output",
         type=Path,
         default=Path("artifacts/shellgame_real_306_stage2_conversion_audit.json"),
@@ -512,6 +526,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.max_episodes is not None and args.max_episodes <= 0:
         parser.error("--max-episodes must be positive")
+    if args.action_horizon <= 0:
+        parser.error("--action-horizon must be positive")
     return args
 
 

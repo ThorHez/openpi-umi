@@ -12,14 +12,15 @@ import subprocess
 import sys
 import time
 
-
 ROOT = Path(__file__).resolve().parents[2]
-CONFIG = "pi0_mem_semantic_action_shellgame_real_wrist_currentrel_eef10_m6_direction_stage1"
+CONFIG_H16 = "pi0_mem_semantic_action_shellgame_real_wrist_currentrel_eef10_m6_direction_stage1"
+CONFIG_H32 = "pi0_mem_semantic_action_shellgame_real_wrist_currentrel_eef10_m6_direction_stage1_h32"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exp-name", default="real306_m6_direction_stage1_frame241_flowonly_seed42_v1")
+    parser.add_argument("--action-horizon", type=int, choices=(16, 32), default=16)
     parser.add_argument("--max-steps", type=int, default=2_000)
     parser.add_argument("--interval", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=32)
@@ -43,7 +44,7 @@ def run(command: list[str], *, env: dict[str, str], log_path: Path) -> None:
     with log_path.open("a", encoding="utf-8") as log:
         log.write("\n$ " + " ".join(command) + "\n")
         log.flush()
-        process = subprocess.run(command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+        process = subprocess.run(command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, check=False)
     if process.returncode:
         raise subprocess.CalledProcessError(process.returncode, command)
 
@@ -64,6 +65,13 @@ def hardlink_snapshot(source: Path, destination: Path) -> None:
 
 def main() -> None:
     args = parse_args()
+    config_name = CONFIG_H32 if args.action_horizon == 32 else CONFIG_H16
+    trainer_script = (
+        "scripts/mem/train_shellgame_real_m6_direction_stage1_h32.py"
+        if args.action_horizon == 32
+        else "scripts/mem/train_shellgame_real_m6_direction_stage1.py"
+    )
+    eval_config_kind = "stage1_h32" if args.action_horizon == 32 else "stage1"
     if args.max_steps <= 0 or args.interval <= 0 or args.batch_size <= 0:
         raise ValueError("max-steps, interval, and batch-size must be positive")
     if args.max_steps % args.interval:
@@ -75,8 +83,8 @@ def main() -> None:
     if args.min_early_stop_step < args.interval:
         raise ValueError("min-early-stop-step must be at least one evaluation interval")
 
-    run_dir = ROOT / "checkpoints" / CONFIG / args.exp_name
-    best_root = ROOT / "checkpoints" / CONFIG / f"{args.exp_name}_best_direction"
+    run_dir = ROOT / "checkpoints" / config_name / args.exp_name
+    best_root = ROOT / "checkpoints" / config_name / f"{args.exp_name}_best_direction"
     output_root = ROOT / "evaluation" / "shellgame_real" / args.exp_name
     train_log = ROOT / f"train_{args.exp_name}.log"
     guard_log = ROOT / f"guard_{args.exp_name}.json"
@@ -114,19 +122,31 @@ def main() -> None:
         num_train_steps = target_step
         command = [
             str(ROOT / ".venv/bin/python"),
-            "scripts/mem/train_shellgame_real_m6_direction_stage1.py",
-            "--exp-name", args.exp_name,
-            "--steps", str(num_train_steps),
-            "--schedule-steps", str(args.max_steps),
-            "--batch-size", str(args.batch_size),
-            "--eval-batch-size", str(args.eval_batch_size),
-            "--fsdp-devices", "8",
-            "--num-workers", "16",
-            "--eval-interval", str(args.interval),
-            "--eval-batches", "3",
-            "--direction-loss-weight", str(args.direction_loss_weight),
-            "--direction-temperature", str(args.direction_temperature),
-            "--save-interval", str(args.interval),
+            trainer_script,
+            "--exp-name",
+            args.exp_name,
+            "--steps",
+            str(num_train_steps),
+            "--schedule-steps",
+            str(args.max_steps),
+            "--batch-size",
+            str(args.batch_size),
+            "--eval-batch-size",
+            str(args.eval_batch_size),
+            "--fsdp-devices",
+            "8",
+            "--num-workers",
+            "16",
+            "--eval-interval",
+            str(args.interval),
+            "--eval-batches",
+            "3",
+            "--direction-loss-weight",
+            str(args.direction_loss_weight),
+            "--direction-temperature",
+            str(args.direction_temperature),
+            "--save-interval",
+            str(args.interval),
             "--disable-direction-early-stop",
         ]
         if target_step == args.interval:
@@ -142,19 +162,21 @@ def main() -> None:
         eval_command = [
             str(ROOT / ".venv/bin/python"),
             "scripts/mem/eval_shellgame_real_m6_direction_prompt.py",
-            "--config-kind", "stage1",
-            "--checkpoint", str(checkpoint),
-            "--output", str(eval_output),
-            "--samples-per-prompt", "1",
-            "--episodes-per-class", str(args.episodes_per_class),
+            "--config-kind",
+            eval_config_kind,
+            "--checkpoint",
+            str(checkpoint),
+            "--output",
+            str(eval_output),
+            "--samples-per-prompt",
+            "1",
+            "--episodes-per-class",
+            str(args.episodes_per_class),
         ]
         run(eval_command, env=eval_env, log_path=output_root / f"screen_step{saved_step}" / "eval.log")
         summary = json.loads(eval_output.read_text(encoding="utf-8"))["summary"]
         score = float(summary["counterfactual_prompt_following_accuracy"])
-        min_class = min(
-            float(values["accuracy"])
-            for values in summary["counterfactual_by_forced_prompt"].values()
-        )
+        min_class = min(float(values["accuracy"]) for values in summary["counterfactual_by_forced_prompt"].values())
         three_way = float(summary["counterfactual_all_three_prompts_follow_episode_accuracy"])
         distinct = float(summary["counterfactual_three_distinct_action_classes_episode_accuracy"])
 
@@ -189,10 +211,7 @@ def main() -> None:
             and best_score < 0.55
         ):
             stop_reason = "direction_ineffective_early_stop"
-        elif (
-            saved_step + 1 >= args.min_early_stop_step
-            and no_meaningful_improvement >= args.early_stop_patience
-        ):
+        elif saved_step + 1 >= args.min_early_stop_step and no_meaningful_improvement >= args.early_stop_patience:
             stop_reason = "direction_stagnation_early_stop"
         if stop_reason:
             break
@@ -207,16 +226,21 @@ def main() -> None:
         [
             str(ROOT / ".venv/bin/python"),
             "scripts/mem/eval_shellgame_real_m6_direction_prompt.py",
-            "--config-kind", "stage1",
-            "--checkpoint", str(best_checkpoint),
-            "--output", str(full_output),
-            "--samples-per-prompt", "2",
+            "--config-kind",
+            eval_config_kind,
+            "--checkpoint",
+            str(best_checkpoint),
+            "--output",
+            str(full_output),
+            "--samples-per-prompt",
+            "2",
         ],
         env=full_env,
         log_path=full_output.parent / "eval.log",
     )
     payload = {
         "status": "complete",
+        "action_horizon": args.action_horizon,
         "stop_reason": stop_reason or "max_steps",
         "best_step": best_step,
         "best_checkpoint": str(best_checkpoint),

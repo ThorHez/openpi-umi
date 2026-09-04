@@ -130,7 +130,10 @@ class _RealWristEpisodeFirstEEF10DataConfigMixin:
                     num_frames=self.num_frames,
                     output_keys={key: f"{key}_video" for key in self.image_keys},
                 ),
-                _config_pi0_mem.UmiInputsV4ShellgameRealWristVideo(num_frames=self.num_frames),
+                _config_pi0_mem.UmiInputsV4ShellgameRealWristVideo(
+                    num_frames=self.num_frames,
+                    action_horizon=model_config.action_horizon,
+                ),
             ]
         )
         model_inputs: list[Any] = []

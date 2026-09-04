@@ -386,12 +386,13 @@ class UmiInputsV4ShellgameRealWristVideo(_transforms.DataTransformFn):
 
     The fixed history and dynamic current image both come from the wrist
     camera. Pose state is relative to the episode's first Direct link6 pose;
-    every action target in the 16-step chunk is relative to the row's current
+    every action target in the configured chunk is relative to the row's current
     link6 pose. The converter performs those transforms; this class only
     assembles the 10-D state and model image dictionary.
     """
 
     num_frames: int
+    action_horizon: int = 16
 
     def __call__(self, data: dict) -> dict:
         wrist_video = _parse_video(data["left_wrist_0_rgb_0_video"])
@@ -430,9 +431,10 @@ class UmiInputsV4ShellgameRealWristVideo(_transforms.DataTransformFn):
         # are intentionally absent from live policy observations.
         if "actions" in data:
             data["actions"] = np.asarray(data["actions"], dtype=np.float32)
-            if data["actions"].shape != (16, 10):
+            expected_actions = (self.action_horizon, 10)
+            if data["actions"].shape != expected_actions:
                 raise ValueError(
-                    "Real ShellGame actions must be a pre-chunked [16,10] "
+                    f"Real ShellGame actions must be a pre-chunked [{self.action_horizon},10] "
                     f"current-relative link6 target, got {data['actions'].shape}"
                 )
         if "episode_length" in data:
