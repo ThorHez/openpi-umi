@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402
 """Serve M6 and derive its direction prompt from cached MEM classification."""
 
 from __future__ import annotations
 
 import argparse
 import logging
+from pathlib import Path
+import sys
 
 import numpy as np
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from openpi.policies import policy_config
 from openpi.serving import websocket_policy_server
