@@ -59,6 +59,8 @@ def parse_args() -> argparse.Namespace:
 
 def environment(*, eval_gpu: bool = False) -> dict[str, str]:
     env = os.environ.copy()
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        env.pop(key, None)
     env.update(
         {
             "CUDA_VISIBLE_DEVICES": "0" if eval_gpu else "0,1,2,3,4,5,6,7",
@@ -66,6 +68,11 @@ def environment(*, eval_gpu: bool = False) -> dict[str, str]:
             "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.90",
             "HF_HOME": str(ROOT / ".cache/shellgame_real_mixed/huggingface"),
             "HF_DATASETS_CACHE": str(ROOT / ".cache/shellgame_real_mixed/huggingface/datasets"),
+            # Local validation talks to a temporary websocket server on this
+            # machine.  Do not route that connection through the user's HTTP
+            # or SOCKS proxy.
+            "NO_PROXY": "127.0.0.1,localhost",
+            "no_proxy": "127.0.0.1,localhost",
         }
     )
     return env

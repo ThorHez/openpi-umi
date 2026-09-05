@@ -16,8 +16,7 @@ from openpi.policies import policy_config
 from openpi.training import config as training_config
 
 DATASET = Path(
-    "/data2/hzl_workspace_for_pi_mem/openpi-umi/data/"
-    "shellgame_real_306_degap_state_epfirst_action_currentrel_eef10"
+    "/data2/hzl_workspace_for_pi_mem/openpi-umi/data/shellgame_real_306_degap_state_epfirst_action_currentrel_eef10"
 )
 LABELS = Path("/data2/hzl_workspace_for_pi_mem/labels_merged_306_degap.jsonl")
 CONFIG = "pi0_mem_semantic_action_shellgame_real_wrist_currentrel_eef10_stage2"
@@ -39,8 +38,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", type=Path, default=DATASET)
     parser.add_argument("--labels", type=Path, default=LABELS)
     parser.add_argument("--config", default=CONFIG)
+    parser.add_argument("--config-kind", choices=("registered", "fresh_memory"), default="registered")
     parser.add_argument("--checkpoint", type=Path, default=CHECKPOINT)
     parser.add_argument("--split", choices=("validation", "all"), default="validation")
+    parser.add_argument("--split-manifest", type=Path)
+    parser.add_argument("--split-domain", choices=("old306", "cup0903"))
+    parser.add_argument("--episode-offset", type=int, default=0)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
 
@@ -106,9 +109,7 @@ def softmax(logits: np.ndarray) -> np.ndarray:
 
 
 def classifier_observation(history: list[np.ndarray]) -> dict:
-    observation = {
-        f"{VIDEO_FRAME_KEY_PREFIX}{index}": frame for index, frame in enumerate(history)
-    }
+    observation = {f"{VIDEO_FRAME_KEY_PREFIX}{index}": frame for index, frame in enumerate(history)}
     observation[f"{VIDEO_FRAME_KEY_PREFIX}{HISTORY_FRAMES}"] = history[-1]
     observation.update(
         {
@@ -132,14 +133,29 @@ def main() -> None:
     args = parse_args()
     dataset = args.dataset.resolve()
     labels = load_labels(args.labels.resolve())
-    audit = json.loads((dataset / "conversion_audit.json").read_text(encoding="utf-8"))
-    episodes = (
-        [int(value) for value in audit["validation_episode_ids"]]
-        if args.split == "validation"
-        else list(range(len(labels)))
-    )
+    if (args.split_manifest is None) != (args.split_domain is None):
+        raise ValueError("--split-manifest and --split-domain must be provided together")
+    if args.split_manifest is not None:
+        split_payload = json.loads(args.split_manifest.resolve().read_text(encoding="utf-8"))
+        split = split_payload["episode_split"]
+        split_name = "validation" if args.split == "validation" else "training"
+        episodes = [
+            int(value) - args.episode_offset for value in split[split_name][args.split_domain]["global_episode_ids"]
+        ]
+    else:
+        audit = json.loads((dataset / "conversion_audit.json").read_text(encoding="utf-8"))
+        episodes = (
+            [int(value) for value in audit["validation_episode_ids"]]
+            if args.split == "validation"
+            else list(range(len(labels)))
+        )
 
-    config = training_config.get_config(args.config)
+    if args.config_kind == "fresh_memory":
+        from openpi.training.mem.recipes import shellgame_real_memory_mild_all
+
+        config = shellgame_real_memory_mild_all.make_train_config()
+    else:
+        config = training_config.get_config(args.config)
     policy = policy_config.create_trained_policy(config, args.checkpoint.resolve())
     confusion = np.zeros((3, 3), dtype=np.int64)
     initial_correct = 0

@@ -30,7 +30,6 @@ from openpi.training.mem.recipes import shellgame_real_wrist_stage2 as _stage2
 import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as _weight_loaders
 
-
 CONFIG_NAME = "pi0_mem_semantic_action_shellgame_real_wrist_currentrel_eef10_m6_direction_stage1"
 LABELS_PATH = Path("/data2/hzl_workspace_for_pi_mem/labels_merged_306_degap.jsonl")
 DECISION_FRAME = _stage2.CURRENT_START_FRAME
@@ -92,7 +91,7 @@ class RealM6DirectionStage1Config(_shellgame_model.Pi0MemSemanticActionConfig):
     direction_early_stop_failure_below: float = 0.45
     direction_early_stop_success_above: float = 0.85
 
-    def create(self, rng: at.KeyArrayLike) -> "RealM6DirectionStage1Model":
+    def create(self, rng: at.KeyArrayLike) -> RealM6DirectionStage1Model:
         return RealM6DirectionStage1Model(self, rngs=nnx.Rngs(rng))
 
 
@@ -115,8 +114,7 @@ class RealM6DirectionStage1Model(_shellgame_model.Pi0MemSemanticAction):
         super().__init__(config, rngs)
         self.final_cups = tuple(int(value) for value in config.final_cups)
         self.direction_xyz_centroids = tuple(
-            tuple(tuple(float(value) for value in xyz) for xyz in chunk)
-            for chunk in config.direction_xyz_centroids
+            tuple(tuple(float(value) for value in xyz) for xyz in chunk) for chunk in config.direction_xyz_centroids
         )
         self.direction_loss_weight = float(config.direction_loss_weight)
         self.direction_temperature = float(config.direction_temperature)
@@ -137,10 +135,21 @@ class RealM6DirectionStage1Model(_shellgame_model.Pi0MemSemanticAction):
         x_t = time_expanded * noise + (1 - time_expanded) * actions
         target_velocity = noise - actions
 
-        raw_memory, memory_tokens, tracked = self._raw_and_resampled_memory(observation)
+        if self.action_memory_injection:
+            raw_memory, memory_tokens, tracked = self._raw_and_resampled_memory(observation)
+        else:
+            # Prompt-only is a pure Pi0.5 action path: the current image,
+            # state, and text prompt are its only conditioning inputs.  The
+            # independently frozen MEM is used outside this forward pass to
+            # choose the direction prompt, so do not even execute its history
+            # encoder here.
+            raw_memory = jnp.zeros((actions.shape[0], 1, 1), dtype=jnp.bfloat16)
+            memory_tokens = None
+            tracked = {"joint_logits": jnp.zeros((actions.shape[0], 3), dtype=jnp.float32)}
         prefix_tokens, prefix_mask, prefix_ar_mask = self._embed_current_prefix(observation)
         suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, time)
-        suffix_tokens = self.ActionMemoryCrossAttention(suffix_tokens, memory_tokens)
+        if memory_tokens is not None:
+            suffix_tokens = self.ActionMemoryCrossAttention(suffix_tokens, memory_tokens)
         input_mask = jnp.concatenate((prefix_mask, suffix_mask), axis=1)
         ar_mask = jnp.concatenate((prefix_ar_mask, suffix_ar_mask), axis=0)
         positions = jnp.cumsum(input_mask, axis=1) - 1
@@ -173,12 +182,13 @@ class RealM6DirectionStage1Model(_shellgame_model.Pi0MemSemanticAction):
         )
         temporal_valid = frame_index[..., None] + future_offsets <= last_frame[..., None]
         valid_count = jnp.sum(temporal_valid, axis=-1, keepdims=True)
-        flow_loss = flow_loss * temporal_valid.astype(flow_loss.dtype) * (
-            self.action_horizon / jnp.maximum(valid_count, 1)
+        flow_loss = (
+            flow_loss * temporal_valid.astype(flow_loss.dtype) * (self.action_horizon / jnp.maximum(valid_count, 1))
         )
 
         # For x_t=t*noise+(1-t)*action and u=noise-action, clean action is x_t-t*u.
         predicted_clean_xyz = (x_t - time_expanded * velocity)[..., :3]
+        endpoint_xy_error = jnp.mean(jnp.linalg.norm(predicted_clean_xyz[:, -1, :2] - actions[:, -1, :2], axis=-1))
         centroids = jnp.asarray(self.direction_xyz_centroids, dtype=jnp.float32)
         mean_squared_distances = jnp.mean(
             jnp.square(predicted_clean_xyz[:, None, :, :] - centroids[None, :, :, :]),
@@ -199,14 +209,13 @@ class RealM6DirectionStage1Model(_shellgame_model.Pi0MemSemanticAction):
         total_loss = (
             flow_loss
             if self.direction_loss_weight == 0.0
-            else flow_loss
-            + self.direction_loss_weight * direction_loss[:, None] * direction_active_float[:, None]
+            else flow_loss + self.direction_loss_weight * direction_loss[:, None] * direction_active_float[:, None]
         )
         active_count = jnp.maximum(jnp.sum(direction_active_float), 1.0)
-        direction_accuracy = jnp.sum(
-            (jnp.argmax(direction_logits, axis=-1) == labels).astype(flow_loss.dtype)
-            * direction_active_float
-        ) / active_count
+        direction_accuracy = (
+            jnp.sum((jnp.argmax(direction_logits, axis=-1) == labels).astype(flow_loss.dtype) * direction_active_float)
+            / active_count
+        )
         active_direction_loss = jnp.sum(direction_loss * direction_active_float) / active_count
 
         return total_loss, {
@@ -219,13 +228,16 @@ class RealM6DirectionStage1Model(_shellgame_model.Pi0MemSemanticAction):
                 "direction_loss": active_direction_loss,
                 "direction_active_fraction": jnp.mean(direction_active_float),
                 "direction_clean_accuracy": direction_accuracy,
+                "endpoint_xy_error_normalized": endpoint_xy_error,
                 "direction_weight": jnp.asarray(self.direction_loss_weight, dtype=jnp.float32),
             },
         }
 
 
 def build_model_config(direction_loss_weight: float, direction_temperature: float) -> RealM6DirectionStage1Config:
-    fields = {field.name: getattr(_stage2.MODEL_CONFIG, field.name) for field in dataclasses.fields(_stage2.MODEL_CONFIG)}
+    fields = {
+        field.name: getattr(_stage2.MODEL_CONFIG, field.name) for field in dataclasses.fields(_stage2.MODEL_CONFIG)
+    }
     return RealM6DirectionStage1Config(
         **fields,
         final_cups=load_final_cups(),

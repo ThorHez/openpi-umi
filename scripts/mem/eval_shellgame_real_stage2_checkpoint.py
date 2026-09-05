@@ -46,6 +46,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--history-mode", choices=("normal", "zero", "wrong_episode"), default="normal")
     parser.add_argument("--episodes-per-class", type=int, default=3)
     parser.add_argument("--samples-per-frame", type=int, default=2)
+    parser.add_argument("--split-manifest", type=Path)
+    parser.add_argument("--split-domain", choices=("old306", "cup0903"))
+    parser.add_argument("--episode-offset", type=int, default=0)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
 
@@ -76,10 +79,24 @@ def choose_balanced_validation_episodes(
     dataset: Path,
     labels: list[dict],
     episodes_per_class: int,
+    *,
+    split_manifest: Path | None = None,
+    split_domain: str | None = None,
+    episode_offset: int = 0,
 ) -> list[int]:
-    audit = json.loads((dataset / "conversion_audit.json").read_text(encoding="utf-8"))
+    if split_manifest is not None:
+        if split_domain is None:
+            raise ValueError("--split-domain is required with --split-manifest")
+        manifest = json.loads(split_manifest.read_text(encoding="utf-8"))
+        episode_ids = [
+            int(value) - episode_offset
+            for value in manifest["episode_split"]["validation"][split_domain]["global_episode_ids"]
+        ]
+    else:
+        audit = json.loads((dataset / "conversion_audit.json").read_text(encoding="utf-8"))
+        episode_ids = audit["validation_episode_ids"]
     by_class: dict[int, list[int]] = defaultdict(list)
-    for episode_id in audit["validation_episode_ids"]:
+    for episode_id in episode_ids:
         by_class[int(labels[int(episode_id)]["final_cup"])].append(int(episode_id))
     chosen: list[int] = []
     for final_cup in range(3):
@@ -221,7 +238,14 @@ def main() -> None:
         raise ValueError("episodes-per-class and samples-per-frame must be positive")
     dataset = args.dataset.resolve()
     labels = load_labels(args.labels.resolve())
-    episodes = choose_balanced_validation_episodes(dataset, labels, args.episodes_per_class)
+    episodes = choose_balanced_validation_episodes(
+        dataset,
+        labels,
+        args.episodes_per_class,
+        split_manifest=args.split_manifest,
+        split_domain=args.split_domain,
+        episode_offset=args.episode_offset,
+    )
     final_cups = {episode: int(labels[episode]["final_cup"]) for episode in episodes}
     donor = {
         episode: next(candidate for candidate in episodes if final_cups[candidate] != final_cups[episode])

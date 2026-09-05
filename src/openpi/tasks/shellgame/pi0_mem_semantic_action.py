@@ -37,13 +37,10 @@ class SemanticJointActionReadout(nn.Module):
     def __call__(self, final_slot_probabilities, state):
         if final_slot_probabilities.shape[-1] != semantic_memory.NUM_CUPS:
             raise ValueError(
-                f"Expected {semantic_memory.NUM_CUPS} final-slot probabilities, "
-                f"got {final_slot_probabilities.shape}"
+                f"Expected {semantic_memory.NUM_CUPS} final-slot probabilities, got {final_slot_probabilities.shape}"
             )
         state = state[..., : self.state_dim].astype(jnp.float32)
-        features = jnp.concatenate(
-            (final_slot_probabilities.astype(jnp.float32), state), axis=-1
-        )
+        features = jnp.concatenate((final_slot_probabilities.astype(jnp.float32), state), axis=-1)
         features = nn.Dense(self.hidden_width, name="input_projection")(features)
         features = nn.gelu(features)
         residual = features
@@ -51,9 +48,7 @@ class SemanticJointActionReadout(nn.Module):
         features = nn.gelu(features)
         features = nn.Dense(self.hidden_width, name="hidden_1")(features)
         features = nn.gelu(features + residual)
-        flat = nn.Dense(
-            self.action_horizon * self.action_dim, name="trajectory_output"
-        )(features)
+        flat = nn.Dense(self.action_horizon * self.action_dim, name="trajectory_output")(features)
         return flat.reshape((-1, self.action_horizon, self.action_dim))
 
 
@@ -76,6 +71,7 @@ class Pi0MemSemanticActionConfig(_base.Pi0MemCompressConfig):
     initial_mode: str = "normal"
     relation_mode: str = "one_hot"
     raw_memory_mode: str = "normal"
+    action_memory_injection: bool = True
     query_tokens: int = 16
     query_width: int = 256
     query_depth: int = 2
@@ -85,9 +81,7 @@ class Pi0MemSemanticActionConfig(_base.Pi0MemCompressConfig):
     real_action_dim: int = 7
     gripper_action_index: int = 6
     last_episode_frame: int = 154
-    swap_frame_indices: tuple[tuple[int, ...], ...] = (
-        semantic_memory.DEFAULT_SWAP_FRAME_INDICES
-    )
+    swap_frame_indices: tuple[tuple[int, ...], ...] = semantic_memory.DEFAULT_SWAP_FRAME_INDICES
 
     def create(self, rng: at.KeyArrayLike) -> Pi0MemSemanticAction:
         return Pi0MemSemanticAction(self, rngs=nnx.Rngs(rng))
@@ -95,20 +89,14 @@ class Pi0MemSemanticActionConfig(_base.Pi0MemCompressConfig):
     def get_freeze_filter_action_finetune(self) -> nnx.filterlib.Filter:
         """Freeze memory and base perception; train only Pi0.5 action layers."""
         action_expert = nnx_utils.PathRegex(r".*PaliGemma/llm/.*_1.*")
-        action_modules = nnx_utils.PathRegex(
-            r".*(action_in_proj|action_out_proj|time_mlp_in|time_mlp_out).*"
-        )
+        action_modules = nnx_utils.PathRegex(r".*(action_in_proj|action_out_proj|time_mlp_in|time_mlp_out).*")
         return nnx.Not(nnx.Any(action_expert, action_modules))
 
     def get_freeze_filter_memory_interface_finetune(self) -> nnx.filterlib.Filter:
         """Train the action-memory interface together with the action expert."""
-        memory_interface = nnx_utils.PathRegex(
-            r".*(HistoryRawMemoryQueryResampler|ActionMemoryCrossAttention).*"
-        )
+        memory_interface = nnx_utils.PathRegex(r".*(HistoryRawMemoryQueryResampler|ActionMemoryCrossAttention).*")
         action_expert = nnx_utils.PathRegex(r".*PaliGemma/llm/.*_1.*")
-        action_modules = nnx_utils.PathRegex(
-            r".*(action_in_proj|action_out_proj|time_mlp_in|time_mlp_out).*"
-        )
+        action_modules = nnx_utils.PathRegex(r".*(action_in_proj|action_out_proj|time_mlp_in|time_mlp_out).*")
         return nnx.Not(nnx.Any(memory_interface, action_expert, action_modules))
 
     def get_freeze_filter_memory_pretrain(self) -> nnx.filterlib.Filter:
@@ -130,9 +118,7 @@ class Pi0MemSemanticAction(_base.Pi0MemCompress):
                 f"num_frames={config.num_frames}, history_frames={config.history_frames}"
             )
         if config.semantic_memory_width < semantic_memory.NUM_CUPS:
-            raise ValueError(
-                "semantic_memory_width must leave enough channels for the cup relation code"
-            )
+            raise ValueError("semantic_memory_width must leave enough channels for the cup relation code")
         if not 0 <= config.gripper_action_index < config.real_action_dim <= config.action_dim:
             raise ValueError(
                 "Expected 0 <= gripper_action_index < real_action_dim <= action_dim, got "
@@ -143,20 +129,17 @@ class Pi0MemSemanticAction(_base.Pi0MemCompress):
         self.video_mode = config.video_mode
         self.initial_mode = config.initial_mode
         self.raw_memory_mode = config.raw_memory_mode
+        self.action_memory_injection = bool(config.action_memory_injection)
         self.gripper_loss_weight = float(config.gripper_loss_weight)
         self.real_action_dim = int(config.real_action_dim)
         self.gripper_action_index = int(config.gripper_action_index)
         self.last_episode_frame = int(config.last_episode_frame)
-        self.swap_frame_indices = tuple(
-            tuple(int(index) for index in stage) for stage in config.swap_frame_indices
-        )
+        self.swap_frame_indices = tuple(tuple(int(index) for index in stage) for stage in config.swap_frame_indices)
 
         self.HistoryFrame0InitialCupClassifier = nnx_bridge.ToNNX(
             semantic_memory.FrozenFrame0InitialCupClassifier(input_width=1152)
         )
-        self.HistoryFrame0InitialCupClassifier.lazy_init(
-            jnp.zeros((1, 256, 1152), dtype=jnp.bfloat16), rngs=rngs
-        )
+        self.HistoryFrame0InitialCupClassifier.lazy_init(jnp.zeros((1, 256, 1152), dtype=jnp.bfloat16), rngs=rngs)
         self.HistoryThreeSwapVisualRelationMemoryTracker = nnx_bridge.ToNNX(
             semantic_memory.ThreeSwapVisualRelationMemoryTracker(
                 num_frames=config.history_frames,
@@ -178,9 +161,7 @@ class Pi0MemSemanticAction(_base.Pi0MemCompress):
             )
         )
         self.HistoryThreeSwapVisualRelationMemoryTracker.lazy_init(
-            jnp.zeros(
-                (1, config.history_frames, 256, 1152), dtype=jnp.bfloat16
-            ),
+            jnp.zeros((1, config.history_frames, 256, 1152), dtype=jnp.bfloat16),
             jnp.zeros((1,), dtype=jnp.int32),
             rngs=rngs,
         )
@@ -254,17 +235,11 @@ class Pi0MemSemanticAction(_base.Pi0MemCompress):
             raise ValueError(f"Unknown initial_mode={self.initial_mode!r}")
         initial_logits = self.HistoryFrame0InitialCupClassifier(frame0_features)
         initial_ids = jnp.argmax(initial_logits, axis=-1)
-        memory_initial_ids = (
-            initial_ids
-            if initial_slots_override is None
-            else initial_slots_override.astype(jnp.int32)
-        )
+        memory_initial_ids = initial_ids if initial_slots_override is None else initial_slots_override.astype(jnp.int32)
 
         _, history_encoder_out = self.PaliGemma.img(history, train=False)
         history_patches = history_encoder_out["with_posemb"][:, : self.history_frames]
-        swap_indices = tuple(
-            index for stage in self.swap_frame_indices for index in stage
-        )
+        swap_indices = tuple(index for stage in self.swap_frame_indices for index in stage)
         if self.video_mode == "shuffle_swaps":
             history_patches = history_patches.at[:, jnp.asarray(swap_indices)].set(
                 jnp.roll(history_patches[:, jnp.asarray(swap_indices)], 1, axis=0)
@@ -333,16 +308,10 @@ class Pi0MemSemanticAction(_base.Pi0MemCompress):
             image = video[:, -1] if video.ndim == 5 else video
             image_tokens, _ = self.PaliGemma.img(image[:, None], train=False)
             tokens.append(image_tokens)
-            input_mask.append(
-                einops.repeat(
-                    observation.image_masks[name], "b -> b s", s=image_tokens.shape[1]
-                )
-            )
+            input_mask.append(einops.repeat(observation.image_masks[name], "b -> b s", s=image_tokens.shape[1]))
             ar_mask += [False] * image_tokens.shape[1]
         if observation.tokenized_prompt is not None:
-            prompt_tokens = self.PaliGemma.llm(
-                observation.tokenized_prompt, method="embed"
-            )
+            prompt_tokens = self.PaliGemma.llm(observation.tokenized_prompt, method="embed")
             tokens.append(prompt_tokens)
             input_mask.append(observation.tokenized_prompt_mask)
             ar_mask += [False] * prompt_tokens.shape[1]
@@ -381,9 +350,7 @@ class Pi0MemSemanticAction(_base.Pi0MemCompress):
     ):
         del train
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
-        observation = _model.preprocess_observation(
-            preprocess_rng, observation, train=False
-        )
+        observation = _model.preprocess_observation(preprocess_rng, observation, train=False)
         if observation.frame_index is None:
             raise ValueError("ShellGame temporal masking requires frame_index")
 
@@ -396,10 +363,9 @@ class Pi0MemSemanticAction(_base.Pi0MemCompress):
 
         raw_memory, memory_tokens, tracked = self._raw_and_resampled_memory(observation)
         prefix_tokens, prefix_mask, prefix_ar_mask = self._embed_current_prefix(observation)
-        suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(
-            observation, x_t, time
-        )
-        suffix_tokens = self.ActionMemoryCrossAttention(suffix_tokens, memory_tokens)
+        suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, time)
+        if self.action_memory_injection:
+            suffix_tokens = self.ActionMemoryCrossAttention(suffix_tokens, memory_tokens)
         input_mask = jnp.concatenate((prefix_mask, suffix_mask), axis=1)
         ar_mask = jnp.concatenate((prefix_ar_mask, suffix_ar_mask), axis=0)
         attn_mask = _base.make_attn_mask(input_mask, ar_mask)
@@ -418,14 +384,10 @@ class Pi0MemSemanticAction(_base.Pi0MemCompress):
         else:
             dim_mask = jnp.asarray(self.action_loss_mask)[None, None, :]
         dimension_weights = jnp.ones((self.action_dim,), dtype=jnp.float32)
-        dimension_weights = dimension_weights.at[self.gripper_action_index].set(
-            self.gripper_loss_weight
-        )
+        dimension_weights = dimension_weights.at[self.gripper_action_index].set(self.gripper_loss_weight)
         dimension_weights = dimension_weights.at[self.real_action_dim :].set(0.0)
         dim_mask = dim_mask * dimension_weights[None, None, :]
-        loss_per_timestep = jnp.sum(
-            squared_error * dim_mask, axis=-1
-        ) / jnp.maximum(jnp.sum(dim_mask, axis=-1), 1e-8)
+        loss_per_timestep = jnp.sum(squared_error * dim_mask, axis=-1) / jnp.maximum(jnp.sum(dim_mask, axis=-1), 1e-8)
 
         frame_index = jnp.asarray(observation.frame_index, dtype=jnp.int32)
         future_offsets = 1 + jnp.arange(self.action_horizon, dtype=jnp.int32)
@@ -436,11 +398,7 @@ class Pi0MemSemanticAction(_base.Pi0MemCompress):
         temporal_valid = frame_index[..., None] + future_offsets <= last_frame[..., None]
         valid_count = jnp.sum(temporal_valid, axis=-1, keepdims=True)
         temporal_scale = self.action_horizon / jnp.maximum(valid_count, 1)
-        loss_per_timestep = (
-            loss_per_timestep
-            * temporal_valid.astype(loss_per_timestep.dtype)
-            * temporal_scale
-        )
+        loss_per_timestep = loss_per_timestep * temporal_valid.astype(loss_per_timestep.dtype) * temporal_scale
         return loss_per_timestep, {
             "history_mem": raw_memory,
             "encoder_auxes": (),
@@ -456,9 +414,7 @@ class Pi0MemSemanticAction(_base.Pi0MemCompress):
         *,
         train: bool = False,
     ):
-        loss, _ = self.compute_loss_with_memory_aux(
-            rng, observation, actions, train=train
-        )
+        loss, _ = self.compute_loss_with_memory_aux(rng, observation, actions, train=train)
         return loss
 
     def sample_actions(
@@ -473,44 +429,28 @@ class Pi0MemSemanticAction(_base.Pi0MemCompress):
         dt = -1.0 / num_steps
         batch_size = observation.state.shape[0]
         if noise is None:
-            noise = jax.random.normal(
-                rng, (batch_size, self.action_horizon, self.action_dim)
-            )
+            noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
 
-        _, memory_tokens, _ = self._raw_and_resampled_memory(observation)
-        prefix_tokens, prefix_mask, prefix_ar_mask = self._embed_current_prefix(
-            observation
-        )
+        memory_tokens = None
+        if self.action_memory_injection:
+            _, memory_tokens, _ = self._raw_and_resampled_memory(observation)
+        prefix_tokens, prefix_mask, prefix_ar_mask = self._embed_current_prefix(observation)
         prefix_attn_mask = _base.make_attn_mask(prefix_mask, prefix_ar_mask)
         positions = jnp.cumsum(prefix_mask, axis=1) - 1
-        _, kv_cache = self.PaliGemma.llm(
-            [prefix_tokens, None], mask=prefix_attn_mask, positions=positions
-        )
+        _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
 
         def step(carry):
             x_t, time = carry
-            suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = (
-                self.embed_suffix(
-                    observation, x_t, jnp.broadcast_to(time, batch_size)
-                )
+            suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(
+                observation, x_t, jnp.broadcast_to(time, batch_size)
             )
-            suffix_tokens = self.ActionMemoryCrossAttention(
-                suffix_tokens, memory_tokens
-            )
-            suffix_attn_mask = _base.make_attn_mask(
-                suffix_mask, suffix_ar_mask
-            )
-            prefix_for_suffix = einops.repeat(
-                prefix_mask, "b p -> b s p", s=suffix_tokens.shape[1]
-            )
-            full_attn_mask = jnp.concatenate(
-                (prefix_for_suffix, suffix_attn_mask), axis=-1
-            )
-            suffix_positions = (
-                jnp.sum(prefix_mask, axis=-1)[:, None]
-                + jnp.cumsum(suffix_mask, axis=-1)
-                - 1
-            )
+            if self.action_memory_injection:
+                assert memory_tokens is not None
+                suffix_tokens = self.ActionMemoryCrossAttention(suffix_tokens, memory_tokens)
+            suffix_attn_mask = _base.make_attn_mask(suffix_mask, suffix_ar_mask)
+            prefix_for_suffix = einops.repeat(prefix_mask, "b p -> b s p", s=suffix_tokens.shape[1])
+            full_attn_mask = jnp.concatenate((prefix_for_suffix, suffix_attn_mask), axis=-1)
+            suffix_positions = jnp.sum(prefix_mask, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
             (_, suffix_out), _ = self.PaliGemma.llm(
                 [None, suffix_tokens],
                 mask=full_attn_mask,
@@ -518,9 +458,7 @@ class Pi0MemSemanticAction(_base.Pi0MemCompress):
                 kv_cache=kv_cache,
                 adarms_cond=[None, adarms_cond],
             )
-            velocity = self.action_out_proj(
-                suffix_out[:, -self.action_horizon :]
-            )
+            velocity = self.action_out_proj(suffix_out[:, -self.action_horizon :])
             return x_t + dt * velocity, time + dt
 
         def cond(carry):

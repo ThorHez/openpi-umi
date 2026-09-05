@@ -29,6 +29,7 @@ from openpi.training.mem.recipes import shellgame_real_wrist_m6_direction_stage1
 from openpi.training.mem.recipes import shellgame_real_wrist_m6_direction_stage1_h32 as _stage1_h32  # noqa: E402
 from openpi.training.mem.recipes import shellgame_real_wrist_m6_direction_stage1_mixed as _stage1_mixed  # noqa: E402
 from openpi.training.mem.recipes import shellgame_real_wrist_m6_mixed as _m6_mixed  # noqa: E402
+from openpi.training.mem.recipes import shellgame_real_wrist_m6_prompt_ablation as _prompt_ablation  # noqa: E402
 from openpi.training.mem.recipes import shellgame_real_wrist_stage2_h32 as _stage2_h32  # noqa: E402
 from scripts.mem import eval_shellgame_real_m5_memory_action_probe as _m5_memory_eval  # noqa: E402
 from scripts.mem import eval_shellgame_real_m5_oracle_action_probe as _m5_oracle_eval  # noqa: E402
@@ -69,10 +70,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--samples-per-prompt", type=int, default=2)
     parser.add_argument(
         "--config-kind",
-        choices=("m6", "stage1", "stage1_h32", "mixed_stage1", "mixed_full"),
+        choices=(
+            "m6",
+            "stage1",
+            "stage1_h32",
+            "mixed_stage1",
+            "mixed_full",
+            "prompt_only_ablation",
+            "prompt_memory_ablation",
+        ),
         default="m6",
     )
     parser.add_argument("--episode-offset", type=int, default=0)
+    parser.add_argument("--split-manifest", type=Path)
+    parser.add_argument("--split-domain", choices=("old306", "cup0903"))
     parser.add_argument(
         "--episodes-per-class",
         type=int,
@@ -121,6 +132,18 @@ def xyz_delta_rms_mm(left: np.ndarray, right: np.ndarray) -> float:
     """RMS XYZ response change caused only by changing the direction prompt."""
     delta = np.asarray(left, dtype=np.float64)[..., :3] - np.asarray(right, dtype=np.float64)[..., :3]
     return float(np.sqrt(np.mean(np.square(delta))) * 1000)
+
+
+def endpoint_xy_error_mm(predicted: np.ndarray, target: np.ndarray) -> float:
+    """Euclidean XY error at the last action in the predicted chunk."""
+    delta = np.asarray(predicted, dtype=np.float64)[-1, :2] - np.asarray(target, dtype=np.float64)[-1, :2]
+    return float(np.linalg.norm(delta) * 1000)
+
+
+def endpoint_xy_delta_mm(left: np.ndarray, right: np.ndarray) -> float:
+    """Euclidean separation between two prompted trajectory endpoints."""
+    delta = np.asarray(left, dtype=np.float64)[-1, :2] - np.asarray(right, dtype=np.float64)[-1, :2]
+    return float(np.linalg.norm(delta) * 1000)
 
 
 def class_breakdown(rows: list[dict], selector_key: str, match_key: str) -> dict:
@@ -200,7 +223,19 @@ def main() -> None:
     default_dataset = Path(_stage2_h32.DATASET_ROOT) if args.config_kind == "stage1_h32" else _action_eval.DATASET
     dataset = (args.dataset or default_dataset).resolve()
     checkpoint = args.checkpoint.resolve()
-    training_episodes, validation_episodes = _m5_oracle_eval.load_split(dataset)
+    if (args.split_manifest is None) != (args.split_domain is None):
+        raise ValueError("--split-manifest and --split-domain must be provided together")
+    if args.split_manifest is not None:
+        split_payload = json.loads(args.split_manifest.resolve().read_text(encoding="utf-8"))
+        split = split_payload["episode_split"]
+        training_episodes = [
+            int(value) - args.episode_offset for value in split["training"][args.split_domain]["global_episode_ids"]
+        ]
+        validation_episodes = [
+            int(value) - args.episode_offset for value in split["validation"][args.split_domain]["global_episode_ids"]
+        ]
+    else:
+        training_episodes, validation_episodes = _m5_oracle_eval.load_split(dataset)
     labels = _m5_oracle_eval.load_labels(args.labels.resolve())
     if args.episodes_per_class < 0:
         raise ValueError("episodes-per-class must be nonnegative")
@@ -228,7 +263,15 @@ def main() -> None:
         "eval_batches": 1,
         "save_interval": 1,
     }
-    if args.config_kind == "mixed_stage1":
+    if args.config_kind in ("prompt_only_ablation", "prompt_memory_ablation"):
+        condition_mode = "prompt_only" if args.config_kind == "prompt_only_ablation" else "prompt_memory"
+        config = _prompt_ablation.make_train_config(
+            condition_mode=condition_mode,
+            checkpoint=str(checkpoint),
+            eval_batch_size=1,
+            **common_config_args,
+        )
+    elif args.config_kind == "mixed_stage1":
         config = _stage1_mixed.make_train_config(
             action_checkpoint=str(checkpoint),
             eval_batch_size=1,
@@ -308,6 +351,7 @@ def main() -> None:
                 "right_prompt": right,
                 "right_prompt_name": _m6.CUP_NAMES[right],
                 "xyz_delta_rms_mm": xyz_delta_rms_mm(predictions[left], predictions[right]),
+                "endpoint_xy_delta_mm": endpoint_xy_delta_mm(predictions[left], predictions[right]),
             }
             for left in range(3)
             for right in range(left + 1, 3)
@@ -355,6 +399,8 @@ def main() -> None:
                 "oracle_prompt_xyz_rmse_mm": float(
                     np.sqrt(np.mean(np.square(oracle_actions[..., :3] - gt_actions[..., :3]))) * 1000
                 ),
+                "deployment_endpoint_xy_error_mm": endpoint_xy_error_mm(deployment_actions, gt_actions),
+                "oracle_prompt_endpoint_xy_error_mm": endpoint_xy_error_mm(oracle_actions, gt_actions),
                 "deployment_actions": deployment_actions.tolist(),
                 "ground_truth_actions": gt_actions.tolist(),
             }
@@ -379,6 +425,9 @@ def main() -> None:
     )
     all_pairwise_deltas = [
         pair["xyz_delta_rms_mm"] for row in prompt_response_rows for pair in row["pairwise_prompt_xyz_deltas"]
+    ]
+    all_endpoint_pairwise_deltas = [
+        pair["endpoint_xy_delta_mm"] for row in prompt_response_rows for pair in row["pairwise_prompt_xyz_deltas"]
     ]
     summary = {
         "validation_episodes": len(deployment_rows),
@@ -412,6 +461,8 @@ def main() -> None:
         ),
         "mean_prompt_pairwise_xyz_delta_rms_mm": float(np.mean(all_pairwise_deltas)),
         "min_prompt_pairwise_xyz_delta_rms_mm": float(np.min(all_pairwise_deltas)),
+        "mean_prompt_pairwise_endpoint_xy_delta_mm": float(np.mean(all_endpoint_pairwise_deltas)),
+        "min_prompt_pairwise_endpoint_xy_delta_mm": float(np.min(all_endpoint_pairwise_deltas)),
         "deployment_by_memory_prompt": deployment_by_mem_prompt,
         "counterfactual_by_forced_prompt": counterfactual_by_prompt,
         "counterfactual_confusion_prompt_rows_action_cols": confusion(
@@ -422,6 +473,12 @@ def main() -> None:
         ),
         "mean_deployment_xyz_rmse_mm": float(np.mean([row["deployment_xyz_rmse_mm"] for row in deployment_rows])),
         "mean_oracle_prompt_xyz_rmse_mm": float(np.mean([row["oracle_prompt_xyz_rmse_mm"] for row in deployment_rows])),
+        "mean_deployment_endpoint_xy_error_mm": float(
+            np.mean([row["deployment_endpoint_xy_error_mm"] for row in deployment_rows])
+        ),
+        "mean_oracle_prompt_endpoint_xy_error_mm": float(
+            np.mean([row["oracle_prompt_endpoint_xy_error_mm"] for row in deployment_rows])
+        ),
     }
     per_prompt_minimum = minimum_accuracy(counterfactual_by_prompt)
     verdict_checks = {
