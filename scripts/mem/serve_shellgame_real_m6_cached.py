@@ -175,6 +175,7 @@ def main() -> None:
             eval_interval=1,
             eval_batches=1,
             save_interval=1,
+            inference_mode=True,
         )
         action_policy = policy_config.create_trained_policy(action_config, checkpoint)
         history_config = _prompt_ablation.make_train_config(
@@ -188,6 +189,7 @@ def main() -> None:
             eval_interval=1,
             eval_batches=1,
             save_interval=1,
+            inference_mode=True,
         )
         memory_policy = _shared_model_policy_view(action_policy, history_config, checkpoint)
         current_only_action = True

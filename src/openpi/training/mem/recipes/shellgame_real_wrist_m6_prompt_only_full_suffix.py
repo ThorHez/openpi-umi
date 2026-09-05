@@ -108,6 +108,7 @@ def make_train_config(
     save_interval: int = 5_000,
     resume: bool = False,
     overwrite: bool = False,
+    inference_mode: bool = False,
 ) -> Any:
     from openpi.training import config as _config
 
@@ -117,7 +118,7 @@ def make_train_config(
     if params_path.name != "params":
         params_path /= "params"
     model = dataclasses.replace(
-        _ablation.build_model_config("prompt_only"),
+        _ablation.build_model_config("prompt_only", inference_mode=inference_mode),
         direction_loss_weight=0.0,
         direction_frame_start=_stage2.CURRENT_START_FRAME,
         direction_frame_end=_stage2.CURRENT_START_FRAME,
@@ -139,7 +140,9 @@ def make_train_config(
         freeze_filter=model.get_freeze_filter_action_finetune(),
         data=_config.MultiDataConfigFactory(
             state_pad_dim=96,
-            weights=_sampler_weights(anchor_fraction),
+            # These weights are consumed only by the training loader. Avoid
+            # reading labels/manifests when reconstructing a deployed policy.
+            weights=[1.0, 1.0, 1.0, 1.0] if inference_mode else _sampler_weights(anchor_fraction),
             norm_weights=[
                 *(probability * anchor_fraction for probability in _mixed.SOURCE_PROBABILITIES),
                 *(probability * (1.0 - anchor_fraction) for probability in _mixed.SOURCE_PROBABILITIES),

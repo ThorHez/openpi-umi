@@ -164,17 +164,34 @@ def sampler_weights() -> list[float]:
     ]
 
 
-def build_model_config(condition_mode: str) -> _direction.RealM6DirectionStage1Config:
+def build_model_config(
+    condition_mode: str,
+    *,
+    inference_mode: bool = False,
+) -> _direction.RealM6DirectionStage1Config:
     if condition_mode not in CONDITION_MODES:
         raise ValueError(f"Unknown condition mode {condition_mode!r}; expected {CONDITION_MODES}")
     fields = {
         field.name: getattr(_stage2.MODEL_CONFIG, field.name) for field in dataclasses.fields(_stage2.MODEL_CONFIG)
     }
     fields["action_memory_injection"] = condition_mode == "prompt_memory"
+    # These fields are used only by the training-time auxiliary direction
+    # metrics/loss.  They do not affect parameter shapes or action sampling,
+    # so deployment must not require the original labels or datasets merely
+    # to reconstruct the checkpoint model.
+    if inference_mode:
+        final_cups = (0, 1, 2)
+        direction_xyz_centroids = tuple(
+            tuple((0.0, 0.0, 0.0) for _ in range(_stage2.MODEL_CONFIG.action_horizon))
+            for _ in range(3)
+        )
+    else:
+        final_cups = _mixed.global_final_cups()
+        direction_xyz_centroids = normalized_xyz_centroids()
     return _direction.RealM6DirectionStage1Config(
         **fields,
-        final_cups=_mixed.global_final_cups(),
-        direction_xyz_centroids=normalized_xyz_centroids(),
+        final_cups=final_cups,
+        direction_xyz_centroids=direction_xyz_centroids,
         direction_loss_weight=0.0,
         direction_temperature=5e-4,
         direction_frame_start=_stage2.CURRENT_START_FRAME,
@@ -202,12 +219,13 @@ def make_train_config(
     save_interval: int = 5_000,
     resume: bool = False,
     overwrite: bool = False,
+    inference_mode: bool = False,
 ) -> Any:
     from openpi.training import config as _config
 
     if batch_size <= 0 or batch_size % fsdp_devices:
         raise ValueError("batch_size must be positive and divisible by fsdp_devices")
-    model = build_model_config(condition_mode)
+    model = build_model_config(condition_mode, inference_mode=inference_mode)
     params_path = Path(checkpoint)
     if params_path.name != "params":
         params_path /= "params"
@@ -228,7 +246,9 @@ def make_train_config(
         freeze_filter=freeze_filter,
         data=_config.MultiDataConfigFactory(
             state_pad_dim=96,
-            weights=sampler_weights(),
+            # Sampler weights depend on training labels. They are irrelevant
+            # to policy creation and must not make deployment data-dependent.
+            weights=[1.0, 1.0] if inference_mode else sampler_weights(),
             norm_weights=list(_mixed.SOURCE_PROBABILITIES),
             datasets=_mixed.make_dataset_factories(
                 _config,
