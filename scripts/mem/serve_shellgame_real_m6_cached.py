@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: E402
-"""Serve M6 and derive its direction prompt from cached MEM classification."""
+"""Serve M6 with either cached MEM classification or an explicit test direction."""
 
 from __future__ import annotations
 
@@ -35,13 +35,39 @@ from scripts.mem.serve_shellgame_real_stage2_cached import summarize_memory_clas
 
 
 class M6CachedHistoryPolicy:
-    def __init__(self, memory_policy, action_policy, *, action_horizon: int, current_only_action: bool):
+    def __init__(
+        self,
+        memory_policy,
+        action_policy,
+        *,
+        action_horizon: int,
+        current_only_action: bool,
+        enable_forced_direction_test: bool = False,
+    ):
         self._memory_policy = memory_policy
         self._action_policy = action_policy
         self._action_horizon = int(action_horizon)
         self._current_only_action = bool(current_only_action)
+        self._enable_forced_direction_test = bool(enable_forced_direction_test)
         self._history: dict[str, object] | None = None
         self._memory: dict[str, object] | None = None
+
+    @staticmethod
+    def _forced_direction_memory(direction: object) -> dict[str, object]:
+        name = str(direction).strip().lower()
+        if name not in CUP_NAMES:
+            raise ValueError(f"Unknown forced direction {direction!r}; expected one of {CUP_NAMES}")
+        cup = CUP_NAMES.index(name)
+        probabilities = [0.0] * len(CUP_NAMES)
+        probabilities[cup] = 1.0
+        return {
+            "cup_order": list(CUP_NAMES),
+            "predicted_final_cup": cup,
+            "predicted_final_cup_name": name,
+            "predicted_final_cup_probabilities": probabilities,
+            "direction_prompt": _m6.direction_prompt(cup),
+            "direction_source": "forced_direction_test",
+        }
 
     def infer(self, obs: dict) -> dict:
         mode = obs.get("mode")
@@ -49,6 +75,26 @@ class M6CachedHistoryPolicy:
             self._history = None
             self._memory = None
             return {"cache_ready": False}
+        if mode == "set_forced_direction":
+            if not self._enable_forced_direction_test:
+                raise RuntimeError(
+                    "Forced-direction testing is disabled; restart the server with "
+                    "--enable-forced-direction-test"
+                )
+            if not self._current_only_action:
+                raise RuntimeError("Forced-direction testing requires condition-mode=prompt_only")
+            self._history = None
+            self._memory = self._forced_direction_memory(obs.get("direction"))
+            logging.warning(
+                "FORCED-DIRECTION TEST: bypassing MEM/history; cup=%s prompt=%r",
+                self._memory["predicted_final_cup_name"],
+                self._memory["direction_prompt"],
+            )
+            return {
+                "cache_ready": True,
+                "direct_action_ready": True,
+                "memory": self._memory,
+            }
         if mode == "reset_history":
             expected = {f"{VIDEO_FRAME_KEY_PREFIX}{index}" for index in range(HISTORY_FRAMES)}
             present = {key for key in obs if key.startswith(VIDEO_FRAME_KEY_PREFIX)}
@@ -83,7 +129,12 @@ class M6CachedHistoryPolicy:
             )
             return {"cache_ready": True, "memory": self._memory}
         if mode == "infer_step":
-            if self._history is None or self._memory is None:
+            if self._memory is None:
+                raise RuntimeError(
+                    "Inference session is not ready; upload reset_history or set a forced test direction first"
+                )
+            forced_direction = self._memory.get("direction_source") == "forced_direction_test"
+            if self._history is None and not (forced_direction and self._current_only_action):
                 raise RuntimeError("History is not cached; upload reset_history first")
             action_obs = {
                 key: value
@@ -155,6 +206,14 @@ def parse_args() -> argparse.Namespace:
         choices=("prompt_memory", "prompt_only"),
         default="prompt_memory",
     )
+    parser.add_argument(
+        "--enable-forced-direction-test",
+        action="store_true",
+        help=(
+            "Allow a client to bypass MEM/history and explicitly choose left/middle/right. "
+            "Test-only; requires --condition-mode prompt_only."
+        ),
+    )
     parser.add_argument("--port", type=int, default=8017)
     return parser.parse_args()
 
@@ -162,6 +221,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     checkpoint = Path(args.checkpoint).resolve()
+    if args.enable_forced_direction_test and args.condition_mode != "prompt_only":
+        raise ValueError("--enable-forced-direction-test requires --condition-mode prompt_only")
     if args.condition_mode == "prompt_only":
         if args.action_horizon != 16:
             raise ValueError("prompt_only currently supports action_horizon=16 only")
@@ -213,10 +274,15 @@ def main() -> None:
     metadata.update(
         {
             "supports_cached_infer": True,
+            "supports_forced_direction_test": args.enable_forced_direction_test,
             "history_frames": HISTORY_FRAMES,
             "total_model_frames": HISTORY_FRAMES + 1,
             "action_horizon": args.action_horizon,
-            "direction_prompt_source": "frozen_mem_final_cup",
+            "direction_prompt_source": (
+                "frozen_mem_final_cup_or_forced_test"
+                if args.enable_forced_direction_test
+                else "frozen_mem_final_cup"
+            ),
             "action_condition_mode": args.condition_mode,
             "current_only_action_input": current_only_action,
             "direction_prompt_template": _m6.PROMPT_TEMPLATE,
@@ -230,6 +296,7 @@ def main() -> None:
             action_policy,
             action_horizon=args.action_horizon,
             current_only_action=current_only_action,
+            enable_forced_direction_test=args.enable_forced_direction_test,
         ),
         host="0.0.0.0",
         port=args.port,
