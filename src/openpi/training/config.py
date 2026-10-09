@@ -1129,6 +1129,90 @@ class WBCD_Bimamual_4_views_ImageHorizon1(DataConfigFactory):
             model_transforms=model_transforms,
         )
 
+
+@dataclasses.dataclass(frozen=True)
+class WBCD_Bimamual_2_views_ImageHorizon1(DataConfigFactory):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        # "robot0_eef_pos_desk": "robot0_eef_pos_desk",
+        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        #"robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        #"robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+        # "left_wrist_1_rgb_0": "left_wrist_1_rgb_0",
+        # "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+        # "robot1_eef_pos_desk": "robot1_eef_pos_desk",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        #"robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        #"robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+        # "right_wrist_1_rgb_0": "right_wrist_1_rgb_0",
+        # "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
+        # "base_0_rgb_0": "base_0_rgb_0",
+        # "base_0_depth_0": "base_0_depth_0",
+
+        "actions": "actions",
+        "prompt": "task",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -13, 6, -13),
+    })
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.WBCD_V1_Bimanual_2_views_Horizon1()
+    data_outputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiOutputsV4()
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(self.mapping)
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                # _transforms.Transform_depth_to_3ch_image(depth_column_name="base_0_depth_0"),
+                self.data_inputs_fn()
+                ],
+            outputs=[self.data_outputs_fn()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+                _transforms.KeepModelKeys(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
 @dataclasses.dataclass(frozen=True)
 class WBCD_Bimamual_HeadView_Depth_ImageHorizon1(DataConfigFactory):
     mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
@@ -1183,6 +1267,93 @@ class WBCD_Bimamual_HeadView_Depth_ImageHorizon1(DataConfigFactory):
         data_transforms = _transforms.Group(
             inputs=[
                 _transforms.Transform_depth_to_3ch_image(depth_column_name="base_0_depth_0"),
+                self.data_inputs_fn()
+                ],
+            outputs=[self.data_outputs_fn()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+                _transforms.KeepModelKeys(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+
+@dataclasses.dataclass(frozen=True)
+class WBCD_Bimamual_4_views_ImageHorizon1_Value(DataConfigFactory):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        # "robot0_eef_pos_desk": "robot0_eef_pos_desk",
+        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        #"robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        #"robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+        "left_wrist_1_rgb_0": "left_wrist_1_rgb_0",
+        # "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+        # "robot1_eef_pos_desk": "robot1_eef_pos_desk",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        #"robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        #"robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+        "right_wrist_1_rgb_0": "right_wrist_1_rgb_0",
+        # "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
+        # "base_0_rgb_0": "base_0_rgb_0",
+        # "base_0_depth_0": "base_0_depth_0",
+
+        "actions": "actions",
+        "prompt": "task",
+        "episode_index": "episode_index",
+        "frame_index": "frame_index",
+        "value_target": "value_target",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -13, 6, -13),
+    })
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.WBCD_V1_Bimanual_4_views_Horizon1()
+    data_outputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiOutputsV4()
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(self.mapping)
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                # _transforms.Transform_depth_to_3ch_image(depth_column_name="base_0_depth_0"),
                 self.data_inputs_fn()
                 ],
             outputs=[self.data_outputs_fn()],
@@ -1290,6 +1461,102 @@ class LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Value(LeRobotUm
             data_transforms=data_transforms,
             model_transforms=model_transforms,
         )
+
+
+@dataclasses.dataclass(frozen=True)
+class WBCD_Bimamual_4_views_ImageHorizon1_ACP(DataConfigFactory):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        # "robot0_eef_pos_desk": "robot0_eef_pos_desk",
+        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        #"robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        #"robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+        "left_wrist_1_rgb_0": "left_wrist_1_rgb_0",
+        # "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+        # "robot1_eef_pos_desk": "robot1_eef_pos_desk",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        #"robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        #"robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+        "right_wrist_1_rgb_0": "right_wrist_1_rgb_0",
+        # "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
+        # "base_0_rgb_0": "base_0_rgb_0",
+        # "base_0_depth_0": "base_0_depth_0",
+
+        "actions": "actions",
+        "prompt": "task",
+        "episode_index": "episode_index",
+        "frame_index": "frame_index",
+        "value_target": "value_target",
+        # Required by ACPConditionPrompt (written by lerobot_value_infer.py).
+        "is_positive": "is_positive",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -13, 6, -13),
+    })
+
+    acp_dropout: float = 0.1
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.WBCD_V1_Bimanual_4_views_Horizon1()
+    data_outputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiOutputsV4()
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(self.mapping)
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                # _transforms.Transform_depth_to_3ch_image(depth_column_name="base_0_depth_0"),
+                self.data_inputs_fn()
+                ],
+            outputs=[self.data_outputs_fn()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ACPConditionPrompt(
+                    indicator_key="is_positive",
+                    dropout=self.acp_dropout,
+                    default_positive=True,
+                ),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+                _transforms.KeepModelKeys(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1442,6 +1709,90 @@ class LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_ACP_Inference(D
                 _transforms.Transform_depth_to_3ch_image(depth_column_name="base_0_depth_0"),
                 self.data_inputs_fn()
             ],
+            outputs=[self.data_outputs_fn()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ACPForcePositivePrompt(),  # Always use positive for inference
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+                _transforms.KeepModelKeys(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class WBCD_Bimamual_4_views_ImageHorizon1_ACP_Inference(DataConfigFactory):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        # "robot0_eef_pos_desk": "robot0_eef_pos_desk",
+        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        #"robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        #"robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+        "left_wrist_1_rgb_0": "left_wrist_1_rgb_0",
+        # "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+        # "robot1_eef_pos_desk": "robot1_eef_pos_desk",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        #"robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        #"robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+        "right_wrist_1_rgb_0": "right_wrist_1_rgb_0",
+        # "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
+        # "base_0_rgb_0": "base_0_rgb_0",
+        # "base_0_depth_0": "base_0_depth_0",
+
+        "actions": "actions",
+        "prompt": "task",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -13, 6, -13),
+    })
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.WBCD_V1_Bimanual_4_views_Horizon1()
+    data_outputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiOutputsV4()
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(self.mapping)
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                # _transforms.Transform_depth_to_3ch_image(depth_column_name="base_0_depth_0"),
+                self.data_inputs_fn()
+                ],
             outputs=[self.data_outputs_fn()],
         )
 
@@ -2725,6 +3076,117 @@ _CONFIGS = [
         episode_metadata_path=None,
         val_ratio=0.1
     ),
+    TrainConfig(
+        name="pi0_value_umi_bimanual_wbcd_multi_dataset",
+        model=_pi0_value_config_umi_bimanual,
+        freeze_filter=_pi0_value_config_umi_bimanual.get_freeze_filter_value_head_only(),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            datasets=[
+                WBCD_Bimamual_4_views_ImageHorizon1_Value(
+                    repo_id="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_cold_light_20260725_173152_to_20260725_175908_ep46",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_cold_light_20260725_173152_to_20260725_175908_ep46",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1_Value(
+                    repo_id="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_no_light_20260725_162118_to_20260725_162745_ep11",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_no_light_20260725_162118_to_20260725_162745_ep11",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1_Value(
+                    repo_id="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_no_light_20260725_163021_to_20260725_164348_ep19",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_no_light_20260725_163021_to_20260725_164348_ep19",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1_Value(
+                    repo_id="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_no_light_20260725_164427_to_20260725_170243_ep30",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_no_light_20260725_164427_to_20260725_170243_ep30",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1_Value(
+                    repo_id="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_warm_light_20260725_175930_to_20260725_181533_ep34",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_warm_light_20260725_175930_to_20260725_181533_ep34",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1_Value(
+                    repo_id="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_warm_light_20260725_181800_to_20260725_182257_ep7",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_warm_light_20260725_181800_to_20260725_182257_ep7",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1_Value(
+                    repo_id="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_white_light_20260725_170306_to_20260725_172903_ep45",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_white_light_20260725_170306_to_20260725_172903_ep45",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                )
+            ],
+        ),
+        weight_loader=CheckpointWeightLoaderWithValueHead(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=1e-4,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=60_000,
+        batch_size=72,
+        num_workers=12,
+        fsdp_devices=8,
+        log_interval=10,
+        save_interval=2000,
+        keep_period=30_000,
+        c_fail_coef=1.0,
+        value_clip_min=-1.0,
+        value_clip_max=0.0,
+        episode_metadata_path=None,
+        val_ratio=0.1
+    ),
     #
     # ACP (Advantage-Conditioned Policy) training: Pi0.5 hybrid + Advantage tag in prompt.
     # Requires dataset with ``is_positive`` column (produced by ``scripts/lerobot_value_infer.py``).
@@ -2899,6 +3361,128 @@ _CONFIGS = [
         keep_period=40000,
     ),
     TrainConfig(
+        name="pi05_acp_umi_bimanual_wbcd_multi_dataset",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            # Must match LeRobot actions shape [T, D]; datasets were converted with horizon=32.
+            action_horizon=32,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
+            # weights=[5.0, 1.0, 1.0, 0.5, 5.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            datasets=[
+                WBCD_Bimamual_4_views_ImageHorizon1_ACP(
+                    repo_id="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_cold_light_20260725_173152_to_20260725_175908_ep46",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_cold_light_20260725_173152_to_20260725_175908_ep46",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    acp_dropout=0.3,
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1_ACP(
+                    repo_id="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_no_light_20260725_162118_to_20260725_162745_ep11",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_no_light_20260725_162118_to_20260725_162745_ep11",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    acp_dropout=0.3,
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1_ACP(
+                    repo_id="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_no_light_20260725_163021_to_20260725_164348_ep19",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_no_light_20260725_163021_to_20260725_164348_ep19",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    acp_dropout=0.3,
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1_ACP(
+                    repo_id="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_no_light_20260725_164427_to_20260725_170243_ep30",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_no_light_20260725_164427_to_20260725_170243_ep30",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    acp_dropout=0.3,
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1_ACP(
+                    repo_id="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_warm_light_20260725_175930_to_20260725_181533_ep34",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_warm_light_20260725_175930_to_20260725_181533_ep34",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    acp_dropout=0.3,
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1_ACP(
+                    repo_id="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_warm_light_20260725_181800_to_20260725_182257_ep7",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_warm_light_20260725_181800_to_20260725_182257_ep7",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    acp_dropout=0.3,
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1_ACP(
+                    repo_id="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_white_light_20260725_170306_to_20260725_172903_ep45",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/one_cloth/wbcd_one_cloth_white_light_20260725_170306_to_20260725_172903_ep45",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    acp_dropout=0.3,
+                ),
+            ]
+        ),
+        # 从标准 pi05 checkpoint 初始化时，新增的 gripper_binary_head 会保留随机初始化；
+        # 后续训练保存出的 checkpoint 会自动包含这个 head。
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/root/openpi-umi/checkpoints/pi05_umi_wbcd_v3_260522_h32/260608/59999/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=20_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=8,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=15000,
+    ),
+    TrainConfig(
         name="pi05_acp_umi_bimanual_headview_depth_bimanual_infer",
         model=pi0_config.Pi0Config(
             pi05=True,
@@ -2908,6 +3492,25 @@ _CONFIGS = [
             max_token_len=512,
         ),
         data=LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_ACP_Inference(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_bimanual_v1",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_bimanual_v1",
+            ),
+            base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=())
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_bimanual_v1/params"),
+    ),
+    TrainConfig(
+        name="pi05_acp_umi_bimanual_wbcd_infer",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+        ),
+        data=WBCD_Bimamual_4_views_ImageHorizon1_ACP_Inference(
             repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_bimanual_v1",
             assets=AssetsConfig(
                 asset_id=".",
@@ -3552,10 +4155,10 @@ _CONFIGS = [
             action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
         ),
         data=WBCD_V1_Bimanual_Horizon1_Compute_Norm_Stats(
-            repo_id="/root/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+            repo_id="/root/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_evening",
             assets=AssetsConfig(
                 asset_id=".",
-                assets_dir="/root/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                assets_dir="/root/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_evening",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
@@ -4116,7 +4719,7 @@ _CONFIGS = [
             state_pad_dim=96,
             # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
             # weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
-            weights=[0.1, 0.1, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3, 0.2, 0.6, 0.6],
+            weights=[0.1, 0.1, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3, 0.2, 0.3, 0.3, 0.3, 0.3, 0.3, 1.0, 3.0, 5.0],
             datasets=[
                 WBCD_Bimamual_4_views_ImageHorizon1(
                     repo_id="/root/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
@@ -4239,9 +4842,472 @@ _CONFIGS = [
                         robot_type="ARM=2 G=2 H=0",
                     ),
                 ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0802_wbcd_hitl_with_wrist_hefei",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0802_wbcd_hitl_with_wrist_hefei",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_afternoon",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_afternoon",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_evening",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_evening",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
             ]
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_wbcd_v3_260522_h32/260602/69999/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_wbcd_v3_260522_h32/260803_hefei/44000/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=60_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=70_000,
+        batch_size=72,
+        num_workers=16,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=30_000,
+    ),
+
+    TrainConfig(
+        name="pi05_umi_wbcd_v3_260522_h32_2views_hefei",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=360,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
+            # weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            weights=[0.1, 0.1, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3, 0.2, 0.3, 0.3, 0.3, 0.3, 0.3, 1.0, 3.0, 5.0],
+            datasets=[
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0802_wbcd_hitl_with_wrist_hefei",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0802_wbcd_hitl_with_wrist_hefei",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_afternoon",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_afternoon",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_evening",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_evening",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+            ]
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_wbcd_v3_260522_h32/260608/59999/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=60_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=70_000,
+        batch_size=72,
+        num_workers=16,
+        fsdp_devices=6,
+        log_interval=10,
+        keep_period=30_000,
+    ),
+     TrainConfig(
+        name="pi05_umi_wbcd_v3_260522_h32_2views",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=360,
+        ),
+                data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
+            # weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            weights=[0.1, 0.1, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3, 0.2, 0.3, 0.3, 0.3, 0.3],
+            datasets=[
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_2_views_ImageHorizon1(
+                    repo_id="/root/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+            ]
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/root/openpi-umi/checkpoints/pi05_umi_wbcd_v3_260522_h32/260604/59999/params"),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
             peak_lr=8e-5,
@@ -4253,7 +5319,7 @@ _CONFIGS = [
         num_train_steps=60_000,
         batch_size=72,
         num_workers=16,
-        fsdp_devices=8,
+        fsdp_devices=6,
         log_interval=10,
         keep_period=30_000,
     ),

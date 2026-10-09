@@ -145,6 +145,31 @@ def load_zarr_dataset(zarr_path: str) -> Tuple[zarr.Group, str, Optional[str]]:
     return root, zarr_root, temp_dir
 
 
+def _ensure_demo_start_pose(episode_data: Dict[str, np.ndarray], robot_ids: list[int] | None = None) -> None:
+    """Fill missing robot{i}_demo_start_pose from episode-start eef pose (pos+rot, shape [T, 6])."""
+    if robot_ids is None:
+        robot_ids = []
+        for key in episode_data:
+            if key.startswith("robot") and key.endswith("_eef_pos"):
+                try:
+                    robot_ids.append(int(key[len("robot") : key.index("_")]))
+                except ValueError:
+                    continue
+        robot_ids = sorted(set(robot_ids))
+    for robot_id in robot_ids:
+        pose_key = f"robot{robot_id}_demo_start_pose"
+        if pose_key in episode_data:
+            continue
+        pos_key = f"robot{robot_id}_eef_pos"
+        rot_key = f"robot{robot_id}_eef_rot_axis_angle"
+        if pos_key not in episode_data or rot_key not in episode_data:
+            continue
+        pos = np.asarray(episode_data[pos_key])
+        rot = np.asarray(episode_data[rot_key])
+        start_pose = np.concatenate([pos[0], rot[0]], axis=-1).astype(np.float32)
+        episode_data[pose_key] = np.broadcast_to(start_pose, (len(pos), 6)).copy()
+
+
 def preload_episode_data(root, episode_start: int, episode_end: int, dataset_config: Dict = None) -> Dict[str, np.ndarray]:
     """Pre-load all data for an episode into memory."""
     data = root['data']
@@ -161,6 +186,11 @@ def preload_episode_data(root, episode_start: int, episode_end: int, dataset_con
             episode_data[key] = np.array(data[key][episode_start:episode_end])
         else:
             print(f"Warning: key '{key}' not found in dataset, skipping...")
+    # Always needed for eef_*_wrt_start; synthesize from episode-start pose if absent in zarr.
+    enabled_ids = []
+    if dataset_config is not None:
+        enabled_ids = [r["id"] for r in dataset_config.get("robots", []) if r.get("enabled", False)]
+    _ensure_demo_start_pose(episode_data, enabled_ids or None)
     return episode_data
 
 

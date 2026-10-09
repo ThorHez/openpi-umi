@@ -153,6 +153,12 @@ def get_val_mask(n_episodes, val_ratio, seed=0):
 
 
 class SequenceSampler:
+    """Sample observation histories and future actions within episode boundaries.
+
+    Robot gripper widths accept shape (T,) or (T, 1). Sampled gripper
+    observations have shape (horizon, 1); input shapes and values are preserved.
+    """
+
     def __init__(self,
                  replay_buffer: dict[str, np.ndarray],
                  episode_ends: list[int],
@@ -181,6 +187,17 @@ class SequenceSampler:
             key_horizon = key_horizon if key_horizon is not None else DEFAULT_KEY_HORIZON
             key_latency_steps = key_latency_steps if key_latency_steps is not None else DEFAULT_KEY_LATENCY_STEPS
             key_down_sample_steps = key_down_sample_steps if key_down_sample_steps is not None else DEFAULT_KEY_DOWN_SAMPLE_STEPS
+
+        replay_buffer = dict(replay_buffer)
+        for key, value in replay_buffer.items():
+            if not (key.startswith("robot") and key.endswith("_gripper_width")):
+                continue
+            width = np.asarray(value)
+            if width.ndim == 1:
+                width = width[:, np.newaxis]
+            if width.ndim != 2 or width.shape[1] != 1:
+                raise ValueError(f"{key} must have shape (T,) or (T, 1), got {width.shape}")
+            replay_buffer[key] = width
 
         gripper_width = replay_buffer['robot0_gripper_width'][:, 0]
         gripper_width_threshold = 0.08

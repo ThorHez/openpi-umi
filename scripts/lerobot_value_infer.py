@@ -827,7 +827,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--batch-size", type=int, default=72, help="Inference batch size")
     parser.add_argument("--n-step", type=int, default=50, help="N-step for advantage computation")
-    parser.add_argument("--positive-ratio", type=float, default=0.4, help="Target ratio of positive indicators per task")
+    parser.add_argument("--positive-ratio", type=float, default=0.3, help="Target ratio of positive indicators per task")
     parser.add_argument("--c-fail-coef", type=float, default=1.0, help="Failure penalty coefficient for value targets")
     parser.add_argument("--success-field", type=str, default="success", help="Field name for success label in episodes.jsonl")
     parser.add_argument("--default-success", type=str, default="true", help="Default success label if field is missing (true/false)")

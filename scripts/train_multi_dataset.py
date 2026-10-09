@@ -177,7 +177,7 @@ def main(config: _config.TrainConfig, *, data_loader=None):
                 anomaly_reason = f"Spike: {current_loss:.4f} vs recent {recent_mean:.4f}±{recent_std:.4f}"
 
         if is_anomaly:
-            import pickle
+            # import pickle
             # anomaly_file = anomaly_dir / f"step_{step:06d}_{current_loss:.4f}.pkl"
             pbar.write(f"⚠️  ANOMALY DETECTED at step {step}: {anomaly_reason}")
             # pbar.write(f"   Saving data to {anomaly_file}")
@@ -199,28 +199,28 @@ def main(config: _config.TrainConfig, *, data_loader=None):
 
         stats_interval = 10000
         if step > 0 and step % stats_interval == 0 and len(loss_history) > 10:
-            import pickle
+            # import pickle
             stats_dir = config.checkpoint_dir / "periodic_stats"
             stats_dir.mkdir(exist_ok=True)
 
-            batch_cpu = jax.device_get(batch)
+            # batch_cpu = jax.device_get(batch)
             stats_file = stats_dir / f"step_{step:06d}_{current_loss:.4f}.pkl"
 
             pbar.write(f"\n📊 Saving periodic statistics at step {step} to {stats_file}")
 
-            stats_data = {
-                "step": step,
-                "loss": current_loss,
-                "loss_history": loss_history.copy(),
-                "reason": f"Periodic stats at step {step}",
-                "observation": batch_cpu[0],
-                "actions": batch_cpu[1],
-                "info": jax.device_get(info),
-            }
+            # stats_data = {
+            #     "step": step,
+            #     "loss": current_loss,
+            #     "loss_history": loss_history.copy(),
+            #     "reason": f"Periodic stats at step {step}",
+            #     "observation": batch_cpu[0],
+            #     "actions": batch_cpu[1],
+            #     "info": jax.device_get(info),
+            # }
 
-            with open(stats_file, "wb") as f:
-                pickle.dump(stats_data, f)
-            pbar.write(f"   ✓ Statistics data saved!")
+            # with open(stats_file, "wb") as f:
+            #     pickle.dump(stats_data, f)
+            # pbar.write(f"   ✓ Statistics data saved!")
 
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
