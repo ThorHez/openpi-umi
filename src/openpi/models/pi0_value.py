@@ -139,7 +139,7 @@ class Pi0Value(Pi0):
 
     def forward_value_logits(self, obs: _model.Observation) -> jnp.ndarray:
         """Observation -> pooled prefix -> final_norm -> value_head -> logits [B, num_bins]."""
-        obs = _model.preprocess_observation(None, obs, train=False)
+        obs = self.preprocess_observation(None, obs, train=False)
         feat = self._encode_value_features(obs)
         feat = self.final_norm(feat)
         return self._value_head_logits(feat)
@@ -157,7 +157,7 @@ class Pi0Value(Pi0):
         value_targets_scalar: shape [B], in [value_min, value_max] (e.g. from
         compute_normalized_value_targets).
         """
-        obs = _model.preprocess_observation(rng, obs, train=train)
+        obs = self.preprocess_observation(rng, obs, train=train)
         feat = self._encode_value_features(obs)
         feat = self.final_norm(feat)
         logits = self._value_head_logits(feat)

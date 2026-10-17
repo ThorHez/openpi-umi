@@ -1,0 +1,106 @@
+{
+  "experiment": "three_swap_shared_endpoint_aux_260809",
+  "date": "2026-08-09",
+  "question": "Can the previously successful fixed-grid history interface learn three consecutive swaps when supervised at every swap endpoint, without action loss?",
+  "controlled_architecture": {
+    "history_encoder": "production non-causal FixedGridTemporalHistory",
+    "siglip_input": "patch embeddings only",
+    "spatial_pool": "fixed 2x2 pooling from 16x16 to 8x8 (K=64 tokens/frame)",
+    "history_shape": "60 frames",
+    "transformer_width": 256,
+    "transformer_depth": 2,
+    "attention_heads": 8,
+    "output_memory": "M=128, D=1152",
+    "readout": "one shared IntegratedCurrentReadout used for all three endpoints",
+    "action_loss_weight": 0.0
+  },
+  "endpoint_construction": {
+    "swap_0": "frames 0..29 followed by frame 29 repeated through position 59",
+    "swap_1": "frames 0..39 followed by frame 39 repeated through position 59",
+    "swap_2": "frames 0..49 followed by frame 49 repeated through position 59",
+    "reason_for_padding": "keep the production fixed 60-position interface while preventing future-frame leakage",
+    "labels": [
+      "after_swap_0",
+      "after_swap_1",
+      "after_swap_2"
+    ],
+    "joint_objective": "three shared 3-way logits factorized into one 27-way joint distribution; cross entropy equals the sum of the three endpoint cross entropies"
+  },
+  "dataset": {
+    "root": "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/shellgame_lerobot_absolute_joint",
+    "episodes": 6000,
+    "train_episodes": 5400,
+    "validation_episodes": 600,
+    "validation_batches": 100,
+    "batch_size": 6
+  },
+  "phase_readout_only": {
+    "description": "freeze the existing history encoder and train only the shared endpoint readout",
+    "source_checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_three_swap_full_integrated_history_readout_control_260808/three_swap_full60_integrated_history_readout_260808/599/params",
+    "trainable_parameters": 299012,
+    "steps": 300,
+    "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_three_swap_shared_endpoint_readout_only_260809/three_swap_shared_endpoint_readout_260809/299/params",
+    "validation": [
+      {
+        "step": 150,
+        "joint_all_three_accuracy": 0.123333,
+        "swap_0_accuracy": 0.785,
+        "swap_1_accuracy": 0.343333,
+        "swap_2_accuracy": 0.413333,
+        "loss": 2.809663
+      },
+      {
+        "step": 300,
+        "joint_all_three_accuracy": 0.13,
+        "swap_0_accuracy": 0.858333,
+        "swap_1_accuracy": 0.335,
+        "swap_2_accuracy": 0.418333,
+        "loss": 2.729756
+      }
+    ]
+  },
+  "phase_joint_aux": {
+    "description": "initialize from readout_only, then train the same shared history encoder and shared readout with endpoint classification only",
+    "trainable_parameters": 3840644,
+    "steps": 600,
+    "warmup_steps": 50,
+    "peak_learning_rate": 0.0003,
+    "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_three_swap_shared_endpoint_joint_aux_260809/three_swap_shared_endpoint_joint_aux_260809/599/params",
+    "validation": [
+      {
+        "step": 200,
+        "joint_all_three_accuracy": 0.093333,
+        "swap_0_accuracy": 0.78,
+        "swap_1_accuracy": 0.316667,
+        "swap_2_accuracy": 0.378333,
+        "loss": 2.702543
+      },
+      {
+        "step": 400,
+        "joint_all_three_accuracy": 0.151667,
+        "swap_0_accuracy": 0.985,
+        "swap_1_accuracy": 0.39,
+        "swap_2_accuracy": 0.396667,
+        "loss": 2.393936
+      },
+      {
+        "step": 600,
+        "joint_all_three_accuracy": 0.193333,
+        "swap_0_accuracy": 0.998333,
+        "swap_1_accuracy": 0.443333,
+        "swap_2_accuracy": 0.383333,
+        "loss": 2.16182
+      }
+    ]
+  },
+  "baselines": {
+    "single_endpoint_random_accuracy": 0.333333,
+    "all_three_random_accuracy": 0.037037
+  },
+  "conclusion": [
+    "The input, labels, optimizer path, and gradients are functional because swap_0 reaches 99.83% validation accuracy.",
+    "A frozen encoder exposes strong swap_0 information but nearly random swap_1 and swap_2 information, so the old final-only representation did not preserve a reusable three-swap state.",
+    "Dense endpoint supervision improves swap_1 only modestly and does not improve swap_2; the depth-2 one-shot non-causal aggregation learns the first segment far more easily than a rule that is repeatedly applied across all three swaps.",
+    "This result argues against classifier initialization or the final readout as the principal bottleneck. The next architecture test should add segment-wise or recurrent state updates with shared weights, then reuse this same endpoint evaluation unchanged."
+  ]
+}

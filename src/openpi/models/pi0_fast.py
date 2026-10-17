@@ -104,16 +104,8 @@ class Pi0FASTConfig(_model.BaseModelConfig):
 
         with at.disable_typechecking():
             observation_spec = _model.Observation(
-                images={
-                    "base_0_rgb": image_spec,
-                    "base_1_rgb": image_spec,
-                    "wrist_0_rgb": image_spec,
-                },
-                image_masks={
-                    "base_0_rgb": image_mask_spec,
-                    "base_1_rgb": image_mask_spec,
-                    "wrist_0_rgb": image_mask_spec,
-                },
+                images={key: image_spec for key in self.spec_view_keys(("base_0_rgb", "base_1_rgb", "wrist_0_rgb"))},
+                image_masks={key: image_mask_spec for key in self.spec_view_keys(("base_0_rgb", "base_1_rgb", "wrist_0_rgb"))},
                 state=jax.ShapeDtypeStruct([batch_size, self.action_dim], jnp.float32),
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 tokenized_prompt_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
@@ -134,6 +126,7 @@ class Pi0FASTConfig(_model.BaseModelConfig):
 class Pi0FAST(_model.BaseModel):
     def __init__(self, config: Pi0FASTConfig, rngs: nnx.Rngs):
         super().__init__(config.action_dim, config.action_horizon, config.max_token_len)
+        self.configure_views(config)
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         # TODO: rewrite gemma in NNX. For now, use bridge.
         llm = nnx_bridge.ToNNX(
@@ -198,8 +191,8 @@ class Pi0FAST(_model.BaseModel):
     def compute_loss(
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
     ) -> at.Float[at.Array, "*b ah"]:
-        observation = _model.preprocess_observation(
-            rng, observation, train=train, image_keys=list(observation.images.keys())
+        observation = self.preprocess_observation(
+            rng, observation, train=train
         )
 
         # Compute inputs: one big forward pass of prefix + suffix at once
@@ -242,8 +235,8 @@ class Pi0FAST(_model.BaseModel):
         temperature: float = 0.0,
     ) -> _model.Actions:
         # TODO: this is a hack to get the image keys.
-        observation = _model.preprocess_observation(
-            None, observation, train=False, image_keys=list(observation.images.keys())
+        observation = self.preprocess_observation(
+            None, observation, train=False
         )
 
         # embed inputs

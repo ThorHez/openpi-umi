@@ -190,3 +190,9 @@ third_party/
 *.png
 
 *.tar.gz
+
+ablation/
+
+ablation_results/
+
+*.mp4

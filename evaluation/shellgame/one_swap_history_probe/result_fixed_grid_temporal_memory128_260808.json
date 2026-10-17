@@ -1,0 +1,112 @@
+{
+  "experiment": "one_swap_fixed_grid_k64_memory128_260808",
+  "date": "2026-08-08",
+  "question": "Does a final learned 128-token Pi0-width memory destroy fixed-grid tracking information, or does it mainly make end-to-end optimization fail?",
+  "task": {
+    "history_frames": [0, 29],
+    "current_frame": 30,
+    "label_key": "after_first_swap_ball_cup",
+    "train_samples": 5400,
+    "validation_samples": 600,
+    "random_baseline_accuracy": 0.3333333333,
+    "majority_baseline_accuracy": 0.3483333333
+  },
+  "architecture": {
+    "input": "frozen SigLIP with_posemb [B,30,256,1152]",
+    "fixed_spatial_reduction": "16x16 to 8x8 parameter-free 2x2 average pooling",
+    "temporal_representation": "[B,30,64,256] after two factorized temporal/spatial blocks",
+    "final_memory": "learned-query compressor to [B,128,1152] with token centering and normalization",
+    "classifier_input": "final memory only",
+    "train_steps": 500,
+    "peak_learning_rate": 0.0003,
+    "batch_size": 12,
+    "diversity_weight": 0.01,
+    "gpus": [0, 1, 2, 3, 4, 5]
+  },
+  "end_to_end_from_random_memory": {
+    "description": "Train fixed-grid temporal encoder, final memory compressor, and classifier jointly from random initialization.",
+    "trainable_parameters": 3830660,
+    "validation": {
+      "step_100": {
+        "accuracy": null,
+        "loss": null,
+        "note": "Periodic validation line was omitted by bounded terminal-output truncation; training remained at chance."
+      },
+      "step_200": {
+        "accuracy": 0.3466666667,
+        "classifier_loss": 1.110371,
+        "diversity_loss": 0.3631,
+        "total_loss": 1.114002
+      },
+      "step_300": {
+        "accuracy": 0.305,
+        "classifier_loss": 1.101416,
+        "diversity_loss": 0.205245,
+        "total_loss": 1.103468
+      },
+      "step_400": {
+        "accuracy": 0.305,
+        "classifier_loss": 1.102339,
+        "diversity_loss": 0.185355,
+        "total_loss": 1.104192
+      },
+      "final": {
+        "accuracy": 0.305,
+        "classifier_loss": 1.1027419027,
+        "diversity_loss": 0.1473346353,
+        "total_loss": 1.104215249
+      }
+    },
+    "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_one_swap_fixed_grid_temporal_memory_probe_260808/one_swap_fixed_grid_k64_memory128_260808/499"
+  },
+  "pretrained_frozen_temporal": {
+    "description": "Initialize the fixed-grid temporal path from its 100%-accuracy checkpoint, freeze it, and train only the final memory compressor and classifier.",
+    "pretrained_temporal_checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_one_swap_fixed_grid_temporal_probe_260808/one_swap_fixed_grid_k64_260808/499/params",
+    "trainable_parameters": 1418628,
+    "validation": {
+      "step_100": {
+        "accuracy": 0.9983333333,
+        "classifier_loss": 0.004462,
+        "diversity_loss": 0.064343,
+        "total_loss": 0.005106
+      },
+      "step_200": {
+        "accuracy": 1.0,
+        "classifier_loss": 0.000383,
+        "diversity_loss": 0.100858,
+        "total_loss": 0.001391
+      },
+      "step_300": {
+        "accuracy": 1.0,
+        "classifier_loss": 0.000019,
+        "diversity_loss": 0.070565,
+        "total_loss": 0.000724
+      },
+      "step_400": {
+        "accuracy": 1.0,
+        "classifier_loss": 0.000005,
+        "diversity_loss": 0.043516,
+        "total_loss": 0.00044
+      },
+      "final": {
+        "accuracy": 1.0,
+        "classifier_loss": 0.0000078788,
+        "diversity_loss": 0.0247765202,
+        "total_loss": 0.0002556441
+      }
+    },
+    "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_one_swap_fixed_grid_pretrained_memory_probe_260808/one_swap_fixed_grid_pretrained_k64_memory128_260808/499"
+  },
+  "conclusion": {
+    "memory128_has_sufficient_capacity": true,
+    "final_compression_necessarily_destroys_tracking": false,
+    "naive_end_to_end_training_is_reliable": false,
+    "primary_issue": "optimization and gradient routing through a randomly initialized learned memory bottleneck",
+    "evidence": "The identical final memory compressor remains at chance when the full path is learned jointly, but reaches 99.83% by step 100 and 100% thereafter when the already successful temporal representation is frozen upstream.",
+    "training_implication": "Use staged training or a residual/near-identity initialization: first establish temporal tracking, then train the memory compressor, and only then jointly fine-tune with a lower learning rate."
+  },
+  "source_files": [
+    "/data2/hzl_workspace_for_pi_mem/openpi-umi/examples/shellgame/train_one_swap_fixed_grid_temporal_memory_probe.py",
+    "/data2/hzl_workspace_for_pi_mem/openpi-umi/examples/shellgame/train_one_swap_fixed_grid_pretrained_memory_probe.py"
+  ]
+}

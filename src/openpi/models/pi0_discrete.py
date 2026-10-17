@@ -315,7 +315,7 @@ class Pi0Discrete(_pi0.Pi0):
             Per-example cross-entropy loss: shape [batch].
         """
         preprocess_rng = rng
-        observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
+        observation = self.preprocess_observation(preprocess_rng, observation, train=train)
         
         # Get target tokens and loss mask from observation (like FAST model)
         assert observation.fast_tokenized_prompt is not None, "fast_tokenized_prompt is required for discrete loss"
@@ -401,7 +401,7 @@ class Pi0Discrete(_pi0.Pi0):
         rng, preprocess_rng, flow_rng, discrete_rng = jax.random.split(rng, 4)
         
         # === SHARED PREPROCESSING (only once!) ===
-        observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
+        observation = self.preprocess_observation(preprocess_rng, observation, train=train)
         
         # === SHARED IMAGE ENCODING (only once!) ===
         # Compute image embeddings that will be reused by both branches

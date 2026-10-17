@@ -19,7 +19,9 @@ Usage:
 """
 
 import argparse
+import errno
 import shutil
+import tarfile
 import tempfile
 import zipfile
 from pathlib import Path
@@ -97,34 +99,37 @@ def _find_zarr_root_dir(base_dir: str) -> str:
     """Locate the actual zarr group directory under ``base_dir``.
 
     A zarr group is identified by the presence of a ``.zgroup`` (v2) or
-    ``zarr.json`` (v3) file at its root. Some zip archives wrap the zarr group
-    in an extra top-level directory (e.g. ``foo.zarr/meta/...``); this helper
-    transparently descends one level if needed.
+    ``zarr.json`` (v3) file at its root. Archives may wrap the zarr group
+    in multiple directories (e.g. ``recording/replay_buffer.zarr/meta/...``).
+    Descend through unambiguous single-directory wrappers until it is found.
     """
     base = Path(base_dir)
-    if (base / ".zgroup").exists() or (base / "zarr.json").exists():
-        return str(base)
-    entries = [p for p in base.iterdir() if not p.name.startswith("__MACOSX")]
-    subdirs = [p for p in entries if p.is_dir()]
-    if len(subdirs) == 1:
-        inner = subdirs[0]
-        if (inner / ".zgroup").exists() or (inner / "zarr.json").exists():
-            print(f"Detected nested zarr root inside zip: {inner.name}/")
-            return str(inner)
+    while True:
+        if (base / ".zgroup").is_file() or (base / "zarr.json").is_file():
+            if base != Path(base_dir):
+                print(f"Detected nested zarr root: {base.relative_to(base_dir)}/")
+            return str(base)
+        entries = [p for p in base.iterdir() if not p.name.startswith("__MACOSX")]
+        subdirs = [p for p in entries if p.is_dir() and not p.is_symlink()]
+        if len(subdirs) != 1:
+            break
+        base = subdirs[0]
     raise FileNotFoundError(
         f"No zarr group (.zgroup / zarr.json) found under {base_dir}. "
-        f"Contents: {[p.name for p in entries]}"
+        f"Contents of {base}: {[p.name for p in entries]}"
     )
 
 
 def load_zarr_dataset(zarr_path: str) -> Tuple[zarr.Group, str, Optional[str]]:
     """
-    Open UMI zarr dataset from a .zip file or an uncompressed .zarr directory.
+    Open UMI zarr dataset from ZIP, TAR (including compressed TAR), or a directory.
     Returns (root, path_for_workers, cleanup_dir).
     - If zarr_path is a directory: open it directly. cleanup_dir is None.
-    - If zarr_path is a zip: extract to temp. cleanup_dir is the temp dir to rmtree
-      (caller is responsible for cleanup). Handles both flat zips (zarr files at
-      root) and zips with one wrapping directory.
+    - Archives are detected by content and extracted beside the input file to
+      keep large datasets on the same filesystem (falling back to the system
+      temporary directory for read-only input locations). cleanup_dir is the temporary
+      directory to rmtree (caller is responsible for cleanup after success).
+      Handles flat archives and multiple wrapping directories.
     """
     zarr_path = str(zarr_path)
     path = Path(zarr_path)
@@ -136,17 +141,49 @@ def load_zarr_dataset(zarr_path: str) -> Tuple[zarr.Group, str, Optional[str]]:
         return root, zarr_root, None
     if not path.exists():
         raise FileNotFoundError(f"Zarr path not found: {zarr_path}")
-    temp_dir = tempfile.mkdtemp(dir="/root")
-    print(f"Extracting zip to temporary directory: {temp_dir}")
-    with zipfile.ZipFile(zarr_path, "r") as zip_ref:
-        zip_ref.extractall(temp_dir)
-    zarr_root = _find_zarr_root_dir(temp_dir)
-    root = zarr.open(zarr_root, mode="r")
+    if zipfile.is_zipfile(path):
+        archive_format = "ZIP"
+    elif tarfile.is_tarfile(path):
+        archive_format = "TAR"
+    else:
+        raise ValueError(
+            f"Unsupported zarr archive: {zarr_path}. Expected ZIP, TAR (.tar, .tar.gz, .tar.bz2, .tar.xz), "
+            "or an uncompressed zarr directory."
+        )
+    try:
+        temp_dir = tempfile.mkdtemp(prefix="umi_zarr_", dir=path.resolve().parent)
+    except OSError as error:
+        if error.errno not in (errno.EACCES, errno.EPERM, errno.EROFS):
+            raise
+        temp_dir = tempfile.mkdtemp(prefix="umi_zarr_")
+    print(f"Extracting {archive_format} to temporary directory: {temp_dir}")
+    try:
+        destination = Path(temp_dir)
+        if archive_format == "ZIP":
+            with zipfile.ZipFile(path, "r") as archive:
+                for member in archive.infolist():
+                    if not (destination / member.filename).resolve().is_relative_to(destination):
+                        raise ValueError(f"Archive entry escapes extraction directory: {member.filename}")
+                archive.extractall(temp_dir)
+        else:
+            with tarfile.open(path, "r:*") as archive:
+                members = archive.getmembers()
+                for member in members:
+                    if not (member.isdir() or member.isfile()):
+                        raise ValueError(f"Unsupported TAR entry (expected file or directory): {member.name}")
+                    if not (destination / member.name).resolve().is_relative_to(destination):
+                        raise ValueError(f"Archive entry escapes extraction directory: {member.name}")
+                archive.extractall(temp_dir, members=members)
+        zarr_root = _find_zarr_root_dir(temp_dir)
+        root = zarr.open(zarr_root, mode="r")
+    except BaseException:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
     return root, zarr_root, temp_dir
 
 
 def _ensure_demo_start_pose(episode_data: Dict[str, np.ndarray], robot_ids: list[int] | None = None) -> None:
-    """Fill missing robot{i}_demo_start_pose from episode-start eef pose (pos+rot, shape [T, 6])."""
+    """Fill missing start poses with this episode's first [xyz, rotation-vector] pose, repeated over T frames."""
     if robot_ids is None:
         robot_ids = []
         for key in episode_data:
@@ -181,16 +218,20 @@ def preload_episode_data(root, episode_start: int, episode_end: int, dataset_con
             'robot0_demo_start_pose', 'camera0_rgb',
         ]
     episode_data = {}
+    missing_keys = []
     for key in load_keys:
         if key in data:
             episode_data[key] = np.array(data[key][episode_start:episode_end])
         else:
-            print(f"Warning: key '{key}' not found in dataset, skipping...")
+            missing_keys.append(key)
     # Always needed for eef_*_wrt_start; synthesize from episode-start pose if absent in zarr.
     enabled_ids = []
     if dataset_config is not None:
         enabled_ids = [r["id"] for r in dataset_config.get("robots", []) if r.get("enabled", False)]
     _ensure_demo_start_pose(episode_data, enabled_ids or None)
+    for key in missing_keys:
+        if key not in episode_data:
+            print(f"Warning: key '{key}' not found in dataset and could not be derived, skipping...")
     return episode_data
 
 
@@ -895,7 +936,7 @@ def convert_to_lerobot(
 def main():
     parser = argparse.ArgumentParser(description="Convert UMI zarr to LeRobot (fast v3)")
     parser.add_argument("--input", type=str, required=True,
-                        help="Path to input zarr: .zip file or uncompressed .zarr directory")
+                        help="Path to input zarr: ZIP, TAR (optionally compressed), or uncompressed directory")
     parser.add_argument("--output", type=str, required=True, help="Output directory for LeRobot dataset")
     parser.add_argument("--repo-id", type=str, required=True, help="HuggingFace repo ID")
     parser.add_argument("--fps", type=int, default=60)

@@ -321,7 +321,7 @@ class Pi0Advantage(Pi0):
         train: bool = False,
     ) -> tuple[at.Float[at.Array, "*b ah"], dict[str, jnp.ndarray]]:
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
-        obs = _model.preprocess_observation(preprocess_rng, observation, train=train)
+        obs = self.preprocess_observation(preprocess_rng, observation, train=train)
 
         # -------------------------------
         # Action branch (same as Pi0 FM)
@@ -393,7 +393,7 @@ class Pi0Advantage(Pi0):
     ) -> at.Float[at.Array, "b k"]:
         """Deterministic logits over value bins."""
         del rng
-        obs = _model.preprocess_observation(None, observation, train=False)
+        obs = self.preprocess_observation(None, observation, train=False)
         return self._predict_value_logits_from_processed_obs(obs)
 
     def sample_values(
@@ -415,7 +415,7 @@ class Pi0Advantage(Pi0):
         """Compute A = R_norm - E[V] for offline relabeling / analysis."""
         del rng, train
 
-        obs = _model.preprocess_observation(None, observation, train=False)
+        obs = self.preprocess_observation(None, observation, train=False)
 
         R_norm = self._paper_return_target_scalar(obs)                   # [B]
         value_logits = self._predict_value_logits_from_processed_obs(obs)

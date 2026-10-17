@@ -1,0 +1,97 @@
+{
+  "experiment": "three_swap_pair_fixed_grid_probe",
+  "date": "2026-08-09",
+  "question": "Do frozen SigLIP patch embeddings plus fixed 2x2 K64 pooling preserve enough visual evidence to identify each swapped cup pair?",
+  "script": "/data2/hzl_workspace_for_pi_mem/openpi-umi/examples/shellgame/train_three_swap_pair_fixed_grid_probe.py",
+  "labels": {
+    "classes": [
+      "left-middle",
+      "left-right",
+      "middle-right"
+    ],
+    "episodes": 6000,
+    "stage_counts": [
+      [1969, 1990, 2041],
+      [1970, 2009, 2021],
+      [1946, 2035, 2019]
+    ],
+    "joint_classes": 27
+  },
+  "design": {
+    "segments": [
+      "frames 20..29",
+      "frames 30..39",
+      "frames 40..49"
+    ],
+    "visual_frontend": "Frozen SigLIP patch embedding followed by fixed 2x2 pooling from 16x16 to K=64 per frame",
+    "segment_encoder": "One shared width-256 depth-2 factorized temporal/spatial Transformer",
+    "readout": "One shared attention readout and three-way classifier",
+    "recurrent_memory": false,
+    "initial_ball_slot_input": false,
+    "action_loss_weight": 0.0,
+    "batch_size": 18,
+    "steps": 600,
+    "peak_lr": 0.0003,
+    "train_samples": 5400,
+    "validation_samples": 600,
+    "gpus": [0, 1, 2, 3, 4, 5]
+  },
+  "validation": {
+    "isolation_self_test": {
+      "frames_outside_20_49_are_ignored": true,
+      "each_segment_only_affects_its_own_stage": [true, true, true]
+    },
+    "checkpoint_restore": {
+      "frozen_policy_leaves_restored": 87,
+      "new_probe_leaves_initialized": 72
+    },
+    "six_gpu_batch18_smoke_test": "passed"
+  },
+  "training_curve": {
+    "step_40": {
+      "joint_accuracy": 0.311111,
+      "loss": 2.285844
+    },
+    "step_50": {
+      "joint_accuracy": 0.977778,
+      "loss": 0.243570
+    },
+    "step_60": {
+      "joint_accuracy": 1.0,
+      "loss": 0.004538
+    },
+    "step_200_validation": {
+      "joint_accuracy": 1.0,
+      "swap_0_accuracy": 1.0,
+      "swap_1_accuracy": 1.0,
+      "swap_2_accuracy": 1.0,
+      "loss": 0.000018
+    },
+    "step_400_validation": {
+      "joint_accuracy": 1.0,
+      "swap_0_accuracy": 1.0,
+      "swap_1_accuracy": 1.0,
+      "swap_2_accuracy": 1.0,
+      "loss": 0.000001
+    },
+    "final_step_600_validation": {
+      "joint_accuracy": 1.0,
+      "swap_0_accuracy": 1.0,
+      "swap_1_accuracy": 1.0,
+      "swap_2_accuracy": 1.0,
+      "loss": 1.490115881608373e-07
+    }
+  },
+  "counterfactual_validation": {
+    "condition": "Roll the three swap clips by one sample within each validation batch while preserving the original labels",
+    "joint_accuracy": 0.0375816993,
+    "swap_0_accuracy": 0.3627450764,
+    "swap_1_accuracy": 0.3039215505,
+    "swap_2_accuracy": 0.3447712660,
+    "loss": 34.7834456699,
+    "expected_random_joint_accuracy": 0.0370370370,
+    "expected_random_stage_accuracy": 0.3333333333
+  },
+  "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_three_swap_pair_fixed_grid_probe_260809/swap_pair_full600_b18_260809/599/params",
+  "conclusion": "The frozen patch embedding and K64 pooling preserve the swap identity perfectly. The previous recurrent failure is therefore not caused by spatial compression deleting the motion evidence. The successful probe explicitly performs temporal attention within each spatial location and spatial attention within each frame before readout; the failed M128 updater instead flattens raw segment tokens and lets memory cross-attend them without a segment-internal motion encoder. The next controlled test should initialize or prepend the proven shared swap-segment encoder before the recurrent memory update, then repeat the oracle-initial-state tracking experiment."
+}

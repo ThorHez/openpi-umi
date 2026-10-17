@@ -15,13 +15,10 @@ For single-dataset configs this script behaves identically to train.py.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
-# Avoid / or overlay filling up: use $HOME/tmp for temp files if TMPDIR not set.
-if "TMPDIR" not in os.environ:
-    _tmp = Path(os.environ.get("HOME", "/root")) / "tmp"
-    _tmp.mkdir(parents=True, exist_ok=True)
-    os.environ["TMPDIR"] = os.environ["TEMP"] = os.environ["TMP"] = str(_tmp)
+from openpi.shared.runtime_paths import configure_training_cache
+
+configure_training_cache()
 
 import dataclasses
 import functools
@@ -95,13 +92,14 @@ def _create_data_loader(config: _config.TrainConfig, data_sharding):
 def main(config: _config.TrainConfig, *, data_loader=None):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
+    logging.info("Dataset cache: %s; temporary files: %s", os.environ["HF_DATASETS_CACHE"], os.environ["TMPDIR"])
 
     if config.batch_size % jax.device_count() != 0:
         raise ValueError(
             f"Batch size {config.batch_size} must be divisible by the number of devices {jax.device_count()}."
         )
 
-    jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
+    jax.config.update("jax_compilation_cache_dir", os.environ["JAX_COMPILATION_CACHE_DIR"])
 
     rng = jax.random.key(config.seed)
     train_rng, init_rng = jax.random.split(rng)
@@ -131,6 +129,12 @@ def main(config: _config.TrainConfig, *, data_loader=None):
 
     if resuming:
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
+        # Orbax may restore the sharding recorded in the checkpoint. Explicitly
+        # move the restored state onto the current mesh so runs can resume with
+        # a different FSDP device count (for example, 2 GPUs -> 4 GPUs).
+        train_state = jax.device_put(train_state, train_state_sharding, donate=True)
+        jax.block_until_ready(train_state)
+        logging.info(f"Resharded restored train state onto {config.fsdp_devices} FSDP devices")
 
     ptrain_step = jax.jit(
         functools.partial(train_step, config),

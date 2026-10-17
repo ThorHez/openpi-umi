@@ -1,0 +1,166 @@
+{
+  "experiment": "qwen_distilled_direct_visual_memory250_260825",
+  "date": "2026-08-25",
+  "question": "Can Qwen-selected teacher memory states initialize a recurrent MEM whose updater reads only compressed short visual clips plus the previous memory embedding?",
+  "student_inference_contract": {
+    "input": "previous memory [B,128,64] plus one continuous 10-frame image clip",
+    "visual_stem": "frozen shallow SigLIP patch embedding",
+    "spatial_compression": "fixed 2x2 pooling, 256 to 64 tokens per frame",
+    "clip_encoder": "trainable width-256 depth-2 factorized temporal/spatial Transformer",
+    "visual_evidence": "[B,640,64] continuous tokens",
+    "transition": "frozen shared depth-2 cross-attention recurrent updater",
+    "output": "next memory [B,128,64]",
+    "relation_or_qwen_input_at_inference": false
+  },
+  "teacher_contract": {
+    "qwen_checkpoint": "checkpoints/qwen3vl_shellgame_gt_event_lora_v1_260825/checkpoint-000375",
+    "qwen_heldout_reveal_swap_accuracy": 1.0,
+    "qwen_heldout_exact_three_event_sequence_accuracy": 1.0,
+    "teacher_memory_checkpoint": "checkpoints/shellgame_stage_slot_only_relation_recurrent_probe/stage_slot_only_random_relation_frozen_memory_1k_260821/500/params",
+    "experiment_event_source": "simulator metadata as clean cached teacher forcing, justified by the validated Qwen equivalence",
+    "important_limitation": "This validates the state-distillation mechanism; it is not a per-episode online Qwen hidden-state distillation run."
+  },
+  "loss": {
+    "memory": "mean tokenwise cosine distance + 0.1 * MSE over all three teacher stage memories",
+    "stage_slot": "cross entropy after each recurrent update",
+    "weights": {
+      "memory": 1.0,
+      "stage_slot": 0.25
+    }
+  },
+  "train": {
+    "steps": 1000,
+    "train_episodes": 4500,
+    "validation_episodes": 500,
+    "batch_size": 12,
+    "gpus": [0, 1, 2, 3, 4, 5],
+    "trainable_parameters": 2423872,
+    "frozen_parameters": 3512876223,
+    "peak_learning_rate": 0.0003,
+    "warmup_steps": 50,
+    "continuation": "step250..499 resumed with peak_lr=6e-5 and warmup=0; step500..999 resumed with peak_lr=4e-5, decay_lr=4e-6 and warmup=0, giving an effective lr of about 2.2e-5 at step500 and decaying to 4e-6"
+  },
+  "validation": {
+    "step_50": {
+      "memory_cosine_loss": 0.582770,
+      "stage_accuracy": 0.322222,
+      "final_accuracy": 0.383333,
+      "slot_accuracy": [0.300000, 0.283333, 0.383333]
+    },
+    "step_100": {
+      "memory_cosine_loss": 0.529622,
+      "stage_accuracy": 0.322222,
+      "final_accuracy": 0.266667,
+      "slot_accuracy": [0.300000, 0.400000, 0.266667]
+    },
+    "step_150": {
+      "memory_cosine_loss": 0.516708,
+      "stage_accuracy": 0.350000,
+      "final_accuracy": 0.316667,
+      "slot_accuracy": [0.400000, 0.333333, 0.316667]
+    },
+    "step_200": {
+      "memory_cosine_loss": 0.475712,
+      "stage_accuracy": 0.466667,
+      "final_accuracy": 0.416667,
+      "slot_accuracy": [0.608333, 0.375000, 0.416667]
+    },
+    "final_step_249": {
+      "loss": 0.803402,
+      "memory_cosine_loss": 0.463890,
+      "memory_mse_loss": 0.909398,
+      "stage_accuracy": 0.447222,
+      "final_accuracy": 0.383333,
+      "slot_accuracy": [0.533333, 0.425000, 0.383333]
+    },
+    "step_300": {
+      "loss": 0.768737,
+      "memory_cosine_loss": 0.444134,
+      "stage_accuracy": 0.447222,
+      "final_accuracy": 0.400000,
+      "slot_accuracy": [0.533333, 0.408333, 0.400000]
+    },
+    "step_350": {
+      "loss": 0.724712,
+      "memory_cosine_loss": 0.425839,
+      "stage_accuracy": 0.494444,
+      "final_accuracy": 0.458333,
+      "slot_accuracy": [0.616667, 0.408333, 0.458333]
+    },
+    "step_400": {
+      "loss": 0.693067,
+      "memory_cosine_loss": 0.404559,
+      "stage_accuracy": 0.611111,
+      "final_accuracy": 0.441667,
+      "slot_accuracy": [0.783333, 0.608333, 0.441667]
+    },
+    "step_450": {
+      "loss": 0.648726,
+      "memory_cosine_loss": 0.395322,
+      "stage_accuracy": 0.658333,
+      "final_accuracy": 0.475000,
+      "slot_accuracy": [0.783333, 0.716667, 0.475000]
+    },
+    "final_step_499": {
+      "loss": 0.667021,
+      "memory_cosine_loss": 0.395711,
+      "memory_mse_loss": 0.776232,
+      "stage_accuracy": 0.655556,
+      "final_accuracy": 0.525000,
+      "slot_accuracy": [0.758333, 0.683333, 0.525000]
+    },
+    "step_600": {
+      "loss": 0.481563,
+      "memory_cosine_loss": 0.293033,
+      "memory_mse_loss": 0.575489,
+      "stage_accuracy": 0.819444,
+      "final_accuracy": 0.691667,
+      "slot_accuracy": [0.908333, 0.858333, 0.691667]
+    },
+    "step_700": {
+      "loss": 0.340088,
+      "memory_cosine_loss": 0.215644,
+      "memory_mse_loss": 0.423853,
+      "stage_accuracy": 0.906944,
+      "final_accuracy": 0.825000,
+      "slot_accuracy": [0.954167, 0.941667, 0.825000]
+    },
+    "step_800": {
+      "loss": 0.328112,
+      "memory_cosine_loss": 0.186840,
+      "memory_mse_loss": 0.367394,
+      "stage_accuracy": 0.887500,
+      "final_accuracy": 0.854167,
+      "slot_accuracy": [0.879167, 0.929167, 0.854167]
+    },
+    "step_900": {
+      "loss": 0.204647,
+      "memory_cosine_loss": 0.137864,
+      "memory_mse_loss": 0.271308,
+      "stage_accuracy": 0.968056,
+      "final_accuracy": 0.941667,
+      "slot_accuracy": [0.983333, 0.979167, 0.941667]
+    },
+    "final_step_999": {
+      "loss": 0.186975,
+      "memory_cosine_loss": 0.121960,
+      "memory_mse_loss": 0.240068,
+      "stage_accuracy": 0.975000,
+      "final_accuracy": 0.941667,
+      "slot_accuracy": [1.000000, 0.983333, 0.941667]
+    }
+  },
+  "controlled_comparison": {
+    "direct_visual_random_all_step500_final_accuracy": 0.366667,
+    "direct_visual_frozen_memory_stage_only_step999_final_accuracy": 0.316667,
+    "qwen_state_distilled_step200_final_accuracy": 0.416667,
+    "qwen_state_distilled_step249_final_accuracy": 0.383333,
+    "qwen_state_distilled_step450_final_accuracy": 0.475000,
+    "qwen_state_distilled_final_step499_final_accuracy": 0.525000,
+    "qwen_state_distilled_step700_final_accuracy": 0.825000,
+    "qwen_state_distilled_step900_final_accuracy": 0.941667,
+    "qwen_state_distilled_final_step999_final_accuracy": 0.941667
+  },
+  "result": "longer_training_with_a_gentle_lr_restart_reaches_near_teacher_tracking",
+  "conclusion": "Continuing from step499 to step999 with a gentle learning-rate restart raises final held-out tracking from 52.5% to 94.2%, mean stage accuracy from 65.6% to 97.5%, and lowers memory cosine loss from 0.396 to 0.122. The three stage accuracies are 100.0%, 98.3%, and 94.2%. This rejects memory capacity and an inherently unlearnable direct-visual interface as the primary explanation for the earlier failure. The apparent step450-499 plateau was predominantly under-optimization caused by the low learning-rate tail. Remaining errors concentrate after the third recurrent update; before changing capacity or inference structure, confirm variance with fixed validation episodes and multiple seeds, then target third-update hard examples or a short low-rate continuation."
+}

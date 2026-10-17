@@ -1,0 +1,1472 @@
+{
+  "checkpoint_dir": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_mem_compress_evan_shellgame_openpi_joint_260727/my_experiment/23000",
+  "classes": [
+    "left",
+    "middle",
+    "right"
+  ],
+  "config": "pi0_mem_compress_evan_shellgame_openpi_joint_260727",
+  "dataset_root": "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/shellgame_absolute_joint_dataset",
+  "label_distribution": {
+    "train_final_slot": {
+      "left": 10,
+      "middle": 6,
+      "right": 2
+    },
+    "train_target_identity": {
+      "left": 8,
+      "middle": 6,
+      "right": 4
+    },
+    "val_donor_final_slot": {
+      "left": 2,
+      "middle": 2,
+      "right": 5
+    },
+    "val_donor_target_identity": {
+      "left": 5,
+      "middle": 2,
+      "right": 2
+    },
+    "val_final_slot": {
+      "left": 2,
+      "middle": 4,
+      "right": 3
+    },
+    "val_target_identity": {
+      "left": 2,
+      "middle": 2,
+      "right": 5
+    }
+  },
+  "modes": [
+    "normal",
+    "memory_off",
+    "shuffle_history",
+    "wrong_history",
+    "reveal_only",
+    "current_only"
+  ],
+  "probe_fit": {
+    "fused_prefix": {
+      "final_slot": {
+        "cv_accuracy_by_lambda": {
+          "0.0001": 0.7361111111111112,
+          "0.001": 0.8611111111111112,
+          "0.01": 0.6805555555555555,
+          "0.1": 0.5833333333333334,
+          "1": 0.5833333333333334,
+          "10": 0.5833333333333334,
+          "100": 0.5833333333333334,
+          "1e-05": 0.6944444444444445
+        },
+        "cv_best_accuracy": 0.8611111111111112,
+        "ridge_lambda": 0.001,
+        "training_fit_accuracy": 0.8888888888888888
+      },
+      "target_identity": {
+        "cv_accuracy_by_lambda": {
+          "0.0001": 0.5,
+          "0.001": 0.5,
+          "0.01": 0.5,
+          "0.1": 0.5416666666666666,
+          "1": 0.4583333333333333,
+          "10": 0.4583333333333333,
+          "100": 0.4583333333333333,
+          "1e-05": 0.5
+        },
+        "cv_best_accuracy": 0.5416666666666666,
+        "ridge_lambda": 0.1,
+        "training_fit_accuracy": 0.4444444444444444
+      }
+    },
+    "history_mem": {
+      "final_slot": {
+        "cv_accuracy_by_lambda": {
+          "0.0001": 0.5833333333333334,
+          "0.001": 0.5833333333333334,
+          "0.01": 0.5833333333333334,
+          "0.1": 0.5833333333333334,
+          "1": 0.5833333333333334,
+          "10": 0.5833333333333334,
+          "100": 0.5833333333333334,
+          "1e-05": 0.5833333333333334
+        },
+        "cv_best_accuracy": 0.5833333333333334,
+        "ridge_lambda": 1e-05,
+        "training_fit_accuracy": 1.0
+      },
+      "target_identity": {
+        "cv_accuracy_by_lambda": {
+          "0.0001": 0.4583333333333333,
+          "0.001": 0.4583333333333333,
+          "0.01": 0.4583333333333333,
+          "0.1": 0.4583333333333333,
+          "1": 0.4583333333333333,
+          "10": 0.4583333333333333,
+          "100": 0.4583333333333333,
+          "1e-05": 0.4583333333333333
+        },
+        "cv_best_accuracy": 0.4583333333333333,
+        "ridge_lambda": 1e-05,
+        "training_fit_accuracy": 1.0
+      }
+    }
+  },
+  "representations": [
+    "history_mem",
+    "fused_prefix"
+  ],
+  "samples": {
+    "current_only": [
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_000032",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_000582",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_001783",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003897",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003903",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_004161",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005155",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005653",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005874",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      }
+    ],
+    "memory_off": [
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_000032",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_000582",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_001783",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003897",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "middle"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003903",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_004161",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005155",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005653",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005874",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      }
+    ],
+    "normal": [
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_000032",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_000582",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "left",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_001783",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "left",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003897",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "left",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "middle"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003903",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "left",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_004161",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "left",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005155",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "left",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005653",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "left",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005874",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "left",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      }
+    ],
+    "reveal_only": [
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_000032",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_000582",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_001783",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003897",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003903",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_004161",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005155",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005653",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005874",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      }
+    ],
+    "shuffle_history": [
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_000032",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_000582",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "left",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_001783",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003897",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "middle",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_003903",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_004161",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005155",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005653",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "right",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": null,
+        "donor_final_slot": null,
+        "donor_target_identity": null,
+        "episode": "episode_005874",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      }
+    ],
+    "wrong_history": [
+      {
+        "donor_episode": "episode_000582",
+        "donor_final_slot": "left",
+        "donor_target_identity": "left",
+        "episode": "episode_000032",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "left",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "middle"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": "episode_003897",
+        "donor_final_slot": "middle",
+        "donor_target_identity": "right",
+        "episode": "episode_000582",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "left",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": "episode_004161",
+        "donor_final_slot": "right",
+        "donor_target_identity": "left",
+        "episode": "episode_001783",
+        "final_slot": "left",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "left",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": "episode_004161",
+        "donor_final_slot": "right",
+        "donor_target_identity": "left",
+        "episode": "episode_003897",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "left",
+            "target_identity": "middle"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": "episode_004161",
+        "donor_final_slot": "right",
+        "donor_target_identity": "left",
+        "episode": "episode_003903",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "left",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": "episode_005155",
+        "donor_final_slot": "middle",
+        "donor_target_identity": "middle",
+        "episode": "episode_004161",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "left",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "middle"
+          }
+        },
+        "target_identity": "left"
+      },
+      {
+        "donor_episode": "episode_005653",
+        "donor_final_slot": "right",
+        "donor_target_identity": "right",
+        "episode": "episode_005155",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "left",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "middle"
+      },
+      {
+        "donor_episode": "episode_000582",
+        "donor_final_slot": "left",
+        "donor_target_identity": "left",
+        "episode": "episode_005653",
+        "final_slot": "right",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "left",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      },
+      {
+        "donor_episode": "episode_000032",
+        "donor_final_slot": "right",
+        "donor_target_identity": "middle",
+        "episode": "episode_005874",
+        "final_slot": "middle",
+        "predictions": {
+          "fused_prefix": {
+            "final_slot": "right",
+            "target_identity": "left"
+          },
+          "history_mem": {
+            "final_slot": "left",
+            "target_identity": "left"
+          }
+        },
+        "target_identity": "right"
+      }
+    ]
+  },
+  "split": {
+    "sample_seed": 3,
+    "split_seed": 42,
+    "train_episode_ids": [
+      231,
+      503,
+      552,
+      946,
+      1062,
+      1075,
+      1406,
+      1577,
+      1980,
+      2586,
+      2859,
+      3478,
+      3713,
+      4145,
+      4406,
+      4795,
+      4853,
+      5206
+    ],
+    "val_episode_ids": [
+      32,
+      582,
+      1783,
+      3897,
+      3903,
+      4161,
+      5155,
+      5653,
+      5874
+    ],
+    "val_ratio": 0.1
+  },
+  "summaries": {
+    "current_only": {
+      "fused_prefix": {
+        "final_slot": {
+          "accuracy": 0.3333333333333333,
+          "correct": 3,
+          "feature_cosine_vs_normal_mean": 0.8296873569488525,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.8888888888888888,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 0,
+            "right": 9
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "feature_cosine_vs_normal_mean": 0.8296873569488525,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.6666666666666666,
+          "predicted_distribution": {
+            "left": 2,
+            "middle": 7,
+            "right": 0
+          }
+        }
+      },
+      "history_mem": {
+        "final_slot": {
+          "accuracy": 0.4444444444444444,
+          "correct": 4,
+          "feature_cosine_vs_normal_mean": 0.8819454908370972,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 1.0,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 1,
+            "right": 8
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "feature_cosine_vs_normal_mean": 0.8819454908370972,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.1111111111111111,
+          "predicted_distribution": {
+            "left": 9,
+            "middle": 0,
+            "right": 0
+          }
+        }
+      }
+    },
+    "memory_off": {
+      "fused_prefix": {
+        "final_slot": {
+          "accuracy": 0.3333333333333333,
+          "correct": 3,
+          "feature_cosine_vs_normal_mean": 0.938374936580658,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.8888888888888888,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 0,
+            "right": 9
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "feature_cosine_vs_normal_mean": 0.938374936580658,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.1111111111111111,
+          "predicted_distribution": {
+            "left": 9,
+            "middle": 0,
+            "right": 0
+          }
+        }
+      },
+      "history_mem": {
+        "final_slot": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "feature_cosine_vs_normal_mean": 0.999225378036499,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.0,
+          "predicted_distribution": {
+            "left": 9,
+            "middle": 0,
+            "right": 0
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "feature_cosine_vs_normal_mean": 0.999225378036499,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.0,
+          "predicted_distribution": {
+            "left": 8,
+            "middle": 1,
+            "right": 0
+          }
+        }
+      }
+    },
+    "normal": {
+      "fused_prefix": {
+        "final_slot": {
+          "accuracy": 0.3333333333333333,
+          "correct": 3,
+          "feature_cosine_vs_normal_mean": null,
+          "num_episodes": 9,
+          "predicted_distribution": {
+            "left": 8,
+            "middle": 0,
+            "right": 1
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "feature_cosine_vs_normal_mean": null,
+          "num_episodes": 9,
+          "predicted_distribution": {
+            "left": 8,
+            "middle": 1,
+            "right": 0
+          }
+        }
+      },
+      "history_mem": {
+        "final_slot": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "feature_cosine_vs_normal_mean": null,
+          "num_episodes": 9,
+          "predicted_distribution": {
+            "left": 9,
+            "middle": 0,
+            "right": 0
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "feature_cosine_vs_normal_mean": null,
+          "num_episodes": 9,
+          "predicted_distribution": {
+            "left": 8,
+            "middle": 1,
+            "right": 0
+          }
+        }
+      }
+    },
+    "reveal_only": {
+      "fused_prefix": {
+        "final_slot": {
+          "accuracy": 0.3333333333333333,
+          "correct": 3,
+          "feature_cosine_vs_normal_mean": 0.8100001811981201,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.8888888888888888,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 0,
+            "right": 9
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "feature_cosine_vs_normal_mean": 0.8099955320358276,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.7777777777777778,
+          "predicted_distribution": {
+            "left": 1,
+            "middle": 8,
+            "right": 0
+          }
+        }
+      },
+      "history_mem": {
+        "final_slot": {
+          "accuracy": 0.4444444444444444,
+          "correct": 4,
+          "feature_cosine_vs_normal_mean": 0.8745386600494385,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 1.0,
+          "predicted_distribution": {
+            "left": 0,
+            "middle": 1,
+            "right": 8
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "feature_cosine_vs_normal_mean": 0.8745386600494385,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.1111111111111111,
+          "predicted_distribution": {
+            "left": 9,
+            "middle": 0,
+            "right": 0
+          }
+        }
+      }
+    },
+    "shuffle_history": {
+      "fused_prefix": {
+        "final_slot": {
+          "accuracy": 0.4444444444444444,
+          "correct": 4,
+          "feature_cosine_vs_normal_mean": 0.8866707682609558,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.7777777777777778,
+          "predicted_distribution": {
+            "left": 1,
+            "middle": 0,
+            "right": 8
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "feature_cosine_vs_normal_mean": 0.8866707682609558,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.4444444444444444,
+          "predicted_distribution": {
+            "left": 6,
+            "middle": 3,
+            "right": 0
+          }
+        }
+      },
+      "history_mem": {
+        "final_slot": {
+          "accuracy": 0.5555555555555556,
+          "correct": 5,
+          "feature_cosine_vs_normal_mean": 0.8848130702972412,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.6666666666666666,
+          "predicted_distribution": {
+            "left": 3,
+            "middle": 1,
+            "right": 5
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "feature_cosine_vs_normal_mean": 0.8848130702972412,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.1111111111111111,
+          "predicted_distribution": {
+            "left": 9,
+            "middle": 0,
+            "right": 0
+          }
+        }
+      }
+    },
+    "wrong_history": {
+      "fused_prefix": {
+        "final_slot": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "donor_label_accuracy": 0.3333333333333333,
+          "donor_label_correct": 3,
+          "feature_cosine_vs_normal_mean": 0.989811360836029,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.2222222222222222,
+          "predicted_distribution": {
+            "left": 8,
+            "middle": 0,
+            "right": 1
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "donor_label_accuracy": 0.4444444444444444,
+          "donor_label_correct": 4,
+          "feature_cosine_vs_normal_mean": 0.989811360836029,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.2222222222222222,
+          "predicted_distribution": {
+            "left": 8,
+            "middle": 1,
+            "right": 0
+          }
+        }
+      },
+      "history_mem": {
+        "final_slot": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "donor_label_accuracy": 0.2222222222222222,
+          "donor_label_correct": 2,
+          "feature_cosine_vs_normal_mean": 0.8891814351081848,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.0,
+          "predicted_distribution": {
+            "left": 9,
+            "middle": 0,
+            "right": 0
+          }
+        },
+        "target_identity": {
+          "accuracy": 0.2222222222222222,
+          "correct": 2,
+          "donor_label_accuracy": 0.5555555555555556,
+          "donor_label_correct": 5,
+          "feature_cosine_vs_normal_mean": 0.8891814351081848,
+          "num_episodes": 9,
+          "paired_prediction_change_vs_normal_rate": 0.3333333333333333,
+          "predicted_distribution": {
+            "left": 7,
+            "middle": 2,
+            "right": 0
+          }
+        }
+      }
+    }
+  }
+}

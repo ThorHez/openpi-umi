@@ -1,0 +1,101 @@
+{
+  "experiment": "three_swap_full_integrated_control_260808",
+  "date": "2026-08-08",
+  "question": "Can the previously successful full fixed-grid Pi0 memory interface learn three swaps when action loss is removed?",
+  "controlled_input": {
+    "history_raw_frames": "0..59 inclusive, stride 1",
+    "dataset_anchor": 60,
+    "current_visual_frame": "frame 60 is replaced by frame 59 before encoding to prevent robot-approach target leakage",
+    "label_key": "final_ball_cup",
+    "classes": [
+      "left",
+      "middle",
+      "right"
+    ],
+    "dataset_episodes": 6000,
+    "train_episodes": 5400,
+    "validation_episodes": 600,
+    "label_counts_all_episodes": {
+      "left": 2010,
+      "middle": 1990,
+      "right": 2000
+    },
+    "train_augmentation": false,
+    "action_loss_weight": 0.0,
+    "classification_valid_fraction": 1.0
+  },
+  "architecture": {
+    "history_patch_encoder": "frozen SigLIP patch embedding only",
+    "spatial_reduction": "fixed 2x2 average pooling, 16x16 patches to K=64 tokens per frame",
+    "temporal_model": "non-causal factorized temporal/spatial Transformer, width 256, depth 2, 8 heads",
+    "final_memory": "M=128 tokens projected to D=1152",
+    "current_frame": "normal frozen 27-layer SigLIP path",
+    "reader": "current tokens cross-attend to history memory every 4 SigLIP layers with fixed effective gate 1.0",
+    "readout": "attention-pooled classifier over current tokens after memory reads"
+  },
+  "initialization": {
+    "one_swap_source": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_fixed_grid_integrated_reader_ce_260808/integrated_reader_k64_m128_e4_260808/299/params",
+    "one_swap_source_validation_accuracy": 1.0,
+    "one_swap_exact_leaves_restored": 157,
+    "temporal_position_extension": "copy learned positions 0..29; initialize new positions 30..59 to zero"
+  },
+  "stage_1_history_readout": {
+    "description": "Train the K64-to-M128 history path and current-token classifier; freeze the pretrained Pi0 memory reader.",
+    "trainable_parameters": 3840644,
+    "steps": 600,
+    "peak_learning_rate": 0.0003,
+    "validation": {
+      "step_100_accuracy": 0.326667,
+      "step_100_loss": 1.232336,
+      "step_200_accuracy": 0.326667,
+      "step_200_loss": 1.153678,
+      "step_300_accuracy": 0.366667,
+      "step_300_loss": 1.110872,
+      "step_400_accuracy": 0.386667,
+      "step_400_loss": 1.087425,
+      "step_500_accuracy": 0.405,
+      "step_500_loss": 1.053797,
+      "final_accuracy": 0.405,
+      "final_loss": 1.0456521606445313
+    },
+    "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_three_swap_full_integrated_history_readout_control_260808/three_swap_full60_integrated_history_readout_260808/599/params"
+  },
+  "stage_2_reader_ce": {
+    "description": "Continue from Stage 1, freeze the history path, and train only the periodic Pi0 memory readers and current-token classifier, matching the successful one-swap reader stage.",
+    "checkpoint_restore": "158/158 leaves exact; no parameters reinitialized",
+    "trainable_parameters": 143812868,
+    "steps": 300,
+    "peak_learning_rate": 0.0003,
+    "validation": {
+      "step_100_accuracy": 0.4,
+      "step_100_loss": 1.068968,
+      "step_200_accuracy": 0.396667,
+      "step_200_loss": 1.062223,
+      "final_accuracy": 0.36833333333333335,
+      "final_loss": 1.0620474243164062
+    },
+    "reader_diagnostic": {
+      "gradient_reaches_history_cross_attention": true,
+      "memory_update_to_spatial_ratio_start": 0.644076,
+      "memory_update_to_spatial_ratio_end": 1.971071,
+      "interpretation": "Reader updates became much larger without improving validation accuracy; reader under-training is not the primary bottleneck."
+    },
+    "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_three_swap_full_integrated_reader_ce_control_260808/three_swap_full60_integrated_reader_ce_stage2_260808/299/params"
+  },
+  "comparison": {
+    "random_accuracy": 0.3333333333333333,
+    "one_swap_same_interface_accuracy": 1.0,
+    "best_three_swap_accuracy": 0.405,
+    "best_three_swap_gain_over_random_percentage_points": 7.166666666666668,
+    "reliable_three_swap_tracking_learned": false
+  },
+  "conclusion": {
+    "interface_has_some_three_swap_information": true,
+    "interface_learns_reliable_three_swap_state_updates_under_this_training": false,
+    "action_loss_is_the_primary_cause": false,
+    "reader_is_the_primary_cause": false,
+    "most_likely_bottleneck": "The shallow non-causal history encoder learns weak global correlations but not a reusable sequential cup-identity update operation across three swaps.",
+    "next_control": "Attach classification losses after swap 0, swap 1, and swap 2 using one shared classifier, then measure per-swap accuracy. This distinguishes loss of identity at a particular transition from final-memory/readout compression failure."
+  },
+  "source_file": "/data2/hzl_workspace_for_pi_mem/openpi-umi/examples/shellgame/train_three_swap_full_integrated_control_probe.py"
+}

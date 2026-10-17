@@ -1,0 +1,127 @@
+digraph Pi0MemCompress {
+    // ===== Global style =====
+    rankdir=TB;
+    bgcolor="white";
+    fontname="Helvetica";
+    splines=spline;
+    nodesep=0.35;
+    ranksep=0.55;
+    compound=true;
+    node [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", color="#33333355", penwidth=1.1];
+    edge [fontname="Helvetica", fontsize=9, color="#555555", arrowsize=0.8];
+
+    // ===== Color palette =====
+    // inputs       : #ECEFF1 (gray)
+    // patch/encoder: #E3F2FD (blue)
+    // history novelty: #FFE0B2 (amber)  -> CONTRIBUTION
+    // llm          : #E8F5E9 (green)
+    // action expert: #F3E5F5 (purple)
+    // output       : #FFF9C4 (yellow)
+
+    // ---------------------------------------------------------------
+    // INPUTS
+    // ---------------------------------------------------------------
+    subgraph cluster_inputs {
+        label="Observation";
+        style="rounded,dashed"; color="#90A4AE"; fontsize=12; fontcolor="#37474F";
+        clip   [label="Video clip / camera stream\n(3 views: base, L-wrist, R-wrist)\n[B, T, H, W, C]", fillcolor="#ECEFF1"];
+        state  [label="Proprioceptive state\n[B, action_dim]", fillcolor="#ECEFF1"];
+        prompt [label="Language prompt\n(tokenized) [B, L]", fillcolor="#ECEFF1"];
+    }
+
+    // ---------------------------------------------------------------
+    // VISUAL ENCODER  (siglip_mem_compress, per camera stream)
+    // SigLIP So400m/14, depth = 27
+    // ---------------------------------------------------------------
+    subgraph cluster_vit {
+        label="Compressed-History SigLIP Encoder  (per camera, So400m/14)";
+        style="rounded,filled"; color="#64B5F6"; fillcolor="#F5FBFF"; fontsize=12; fontcolor="#0D47A1";
+
+        patch [label="Patch Embedding (Conv, p=14)\napplied to ALL T frames\n+ 2D pos-emb  ->  [B, T, N, D]", fillcolor="#E3F2FD"];
+
+        split [label="Split frames", shape=diamond, fillcolor="#E3F2FD", style="filled"];
+
+        cur   [label="Current frame tokens\nx_cur  [B, N, D]", fillcolor="#E3F2FD"];
+
+        // ----- History compression branch (NOVELTY) -----
+        subgraph cluster_hist {
+            label="Learned History Compression  (contribution)";
+            style="rounded,filled"; color="#FB8C00"; fillcolor="#FFF3E0"; fontsize=11; fontcolor="#E65100";
+
+            hist  [label="History frame tokens\n[B, T-1, N, D]  + 1D temporal pos-emb", fillcolor="#FFE0B2"];
+            resampler [label="History Resampler\nM learned memory queries cross-attend\nto flattened history  (depth = L_r)\n(optionally conditioned on pooled x_cur)", fillcolor="#FFE0B2"];
+            mem   [label="Compressed history memory\nhist_mem  [B, M, D]", fillcolor="#FFCC80", penwidth=1.6, color="#EF6C00"];
+        }
+
+        // ----- Transformer stack (current-frame only carry) -----
+        subgraph cluster_blocks {
+            label="Transformer blocks x depth  (carry current-frame tokens only)";
+            style="rounded,filled"; color="#42A5F5"; fillcolor="#EAF4FE"; fontsize=11; fontcolor="#0D47A1";
+
+            sa    [label="LN -> Spatial Self-Attention -> +residual", fillcolor="#E3F2FD"];
+            gate  [label="Gated Cross-Attention to history\n(every K layers)\ny = y_sa + sigmoid(g) . XAttn(x_cur, hist_mem)\ng: zero-init sigmoid gate", fillcolor="#FFE0B2", penwidth=1.5, color="#EF6C00"];
+            mlp   [label="LN -> MLP -> +residual", fillcolor="#E3F2FD"];
+        }
+
+        enc_norm [label="encoder_norm  ->  current visual tokens\n[B, N, D]", fillcolor="#E3F2FD"];
+        img_head [label="Linear head  ->  PaliGemma width\nimage tokens  [B, N, D_llm]", fillcolor="#E3F2FD"];
+    }
+
+    // ---------------------------------------------------------------
+    // PREFIX
+    // ---------------------------------------------------------------
+    prefix [label="Prefix tokens\n[ image tokens (3 views)  ||  language token embeddings ]", fillcolor="#E8F5E9", penwidth=1.4, color="#2E7D32"];
+
+    // ---------------------------------------------------------------
+    // SUFFIX  (action expert inputs: flow matching)
+    // ---------------------------------------------------------------
+    subgraph cluster_suffix {
+        label="Action / Flow-matching branch";
+        style="rounded,filled"; color="#AB47BC"; fillcolor="#FBF3FD"; fontsize=12; fontcolor="#6A1B9A";
+
+        noisy [label="Noisy actions x_t  +  timestep t\n(flow matching)", fillcolor="#F3E5F5"];
+        actproj [label="action_in_proj  /  time MLP\n(state token in pi0; adaRMS cond in pi0.5)", fillcolor="#F3E5F5"];
+        suffix [label="Suffix tokens\n[ state, action+time tokens ]", fillcolor="#F3E5F5", penwidth=1.4, color="#6A1B9A"];
+    }
+
+    // ---------------------------------------------------------------
+    // LLM  (PaliGemma + Action Expert mixture)
+    // ---------------------------------------------------------------
+    subgraph cluster_llm {
+        label="PaliGemma LLM  +  Action Expert  (joint blockwise-causal attention)";
+        style="rounded,filled"; color="#66BB6A"; fillcolor="#F1F8F2"; fontsize=12; fontcolor="#1B5E20";
+        llm [label="Gemma transformer (two experts)\nprefix attends bidirectionally; suffix causal\nshared self-attention across prefix+suffix", fillcolor="#E8F5E9"];
+    }
+
+    // ---------------------------------------------------------------
+    // OUTPUT
+    // ---------------------------------------------------------------
+    out [label="action_out_proj  ->  velocity v_t\nflow-matching ODE integration\n=>  action chunk  [B, action_horizon, action_dim]", fillcolor="#FFF9C4", penwidth=1.5, color="#F9A825"];
+
+    // ===== Edges =====
+    clip -> patch;
+    patch -> split;
+    split -> cur;
+    split -> hist [label="frames 0..T-2"];
+    cur  -> resampler [label="pooled cond", style=dashed, constraint=false];
+    hist -> resampler;
+    resampler -> mem;
+
+    cur -> sa;
+    mem -> gate [color="#EF6C00", penwidth=1.4];
+    sa  -> gate;
+    gate -> mlp;
+    mlp -> enc_norm [label="x depth (loop)"];
+    enc_norm -> img_head;
+
+    img_head -> prefix;
+    prompt   -> prefix [label="embed"];
+
+    state -> suffix [style=dashed];
+    noisy -> actproj;
+    actproj -> suffix;
+
+    prefix -> llm;
+    suffix -> llm;
+    llm -> out;
+}

@@ -1,0 +1,71 @@
+{
+  "experiment": "one_swap_fixed_grid_stage3_joint_260808",
+  "date": "2026-08-08",
+  "question": "After temporal tracking and final memory compression are learned in stages, can the complete history module be jointly fine-tuned without losing cup identity?",
+  "task": {
+    "history_frames": [0, 29],
+    "current_frame": 30,
+    "label_key": "after_first_swap_ball_cup",
+    "train_samples": 5400,
+    "validation_samples": 600,
+    "random_baseline_accuracy": 0.3333333333,
+    "majority_baseline_accuracy": 0.3483333333
+  },
+  "initialization": {
+    "stage_1": "Train the fixed-grid temporal tracker without the final learned memory bottleneck; final validation accuracy 100%.",
+    "stage_2": "Freeze the successful temporal tracker and train the 128-token final memory compressor and classifier; final validation accuracy 100%.",
+    "stage_2_checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_one_swap_fixed_grid_pretrained_memory_probe_260808/one_swap_fixed_grid_pretrained_k64_memory128_260808/499/params"
+  },
+  "stage_3": {
+    "description": "Load the successful Stage 2 checkpoint, unfreeze the complete fixed-grid temporal and final-memory history module, and jointly fine-tune it at one tenth of the original learning rate.",
+    "trainable_parameters": 3830660,
+    "train_steps": 200,
+    "warmup_steps": 20,
+    "peak_learning_rate": 0.00003,
+    "batch_size": 12,
+    "diversity_weight": 0.01,
+    "clip_gradient_norm": 10.0,
+    "gpus": [0, 1, 2, 3, 4, 5],
+    "validation": {
+      "step_50": {
+        "accuracy": 1.0,
+        "classifier_loss": 0.000002,
+        "diversity_loss": 0.018979,
+        "total_loss": 0.000192
+      },
+      "step_100": {
+        "accuracy": 1.0,
+        "classifier_loss": 0.00005,
+        "diversity_loss": 0.018485,
+        "total_loss": 0.000235
+      },
+      "step_150": {
+        "accuracy": 1.0,
+        "classifier_loss": 0.000004,
+        "diversity_loss": 0.018346,
+        "total_loss": 0.000187
+      },
+      "final": {
+        "accuracy": 1.0,
+        "classifier_loss": 0.0000019362980189422765,
+        "diversity_loss": 0.018256722018122673,
+        "total_loss": 0.000184503518200169
+      }
+    },
+    "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_one_swap_fixed_grid_staged_joint_probe_260808/one_swap_fixed_grid_stage3_joint_260808/199"
+  },
+  "comparison": {
+    "joint_training_from_random_final_memory_accuracy": 0.305,
+    "stage_2_frozen_temporal_accuracy": 1.0,
+    "stage_3_joint_finetune_accuracy": 1.0
+  },
+  "conclusion": {
+    "stage_3_is_stable_for_this_probe": true,
+    "semantic_tracking_survives_joint_finetuning": true,
+    "memory_token_collapse_observed": false,
+    "evidence": "All four full-validation evaluations remained at 100% accuracy; the final classifier loss was 1.94e-6 and final memory-token diversity loss remained finite at 0.0183.",
+    "scope_limit": "This validates the staged optimization schedule for the one-swap cup-identity classification diagnostic. It does not yet prove that the same schedule succeeds under Pi0 action loss or in closed-loop robot execution.",
+    "next_step": "Translate the same three-stage curriculum to action training: establish the temporal path under an easy or residual action interface, train the final memory/action interface with the temporal path frozen, then jointly fine-tune the history module at a reduced learning rate."
+  },
+  "source_file": "/data2/hzl_workspace_for_pi_mem/openpi-umi/examples/shellgame/train_one_swap_fixed_grid_staged_joint_finetune_probe.py"
+}

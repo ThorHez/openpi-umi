@@ -1,0 +1,2 @@
+"""RoboMME VideoUnmaskSwap task adapters."""
+

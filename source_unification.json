@@ -1,0 +1,401 @@
+{
+  "schema_version": 1,
+  "description": "OpenPI UMI unified source provenance and static compatibility contract. This manifest does not assert GPU training or physical-robot acceptance.",
+  "recorded_date": "2026-10-17",
+  "timezone": "Asia/Shanghai",
+  "integration_branch": "codex/unified-training",
+  "source_branches": {
+    "main": {
+      "ref": "refs/remotes/origin/main",
+      "commit": "b72a2958bac7f8a1028fbf617a97083fa4b49662"
+    },
+    "rtc": {
+      "ref": "refs/remotes/origin/rtc",
+      "commit": "aff4ee2515f2b7c16c3f7613d10c2a79fce83994"
+    },
+    "hybrid_loss": {
+      "ref": "refs/remotes/origin/hybrid_loss",
+      "commit": "fe54ae69dcaaa6df17c625c8c5f253dda33d8858"
+    },
+    "multi_dataset": {
+      "ref": "refs/remotes/origin/multi_dataset",
+      "commit": "da461b7201ab0eb3ed2b594a27e6a51f29fb54d9"
+    },
+    "value_infer": {
+      "ref": "refs/remotes/origin/value_infer",
+      "commit": "0758e7c7986936fcd7edb8d65bd86eac3ea4ee2d"
+    },
+    "recap": {
+      "ref": "refs/remotes/origin/recap",
+      "commit": "944f093c898f030d45fc93e80e73261afebc8d2e"
+    },
+    "pf": {
+      "ref": "refs/remotes/origin/pf",
+      "commit": "507a4cf2898c7e121e07d7ee264a17a5534bc970"
+    },
+    "mem": {
+      "ref": "refs/remotes/origin/mem",
+      "commit": "48be212a2da28edab554715894eb3b477845142c"
+    },
+    "mem_exp": {
+      "ref": "refs/remotes/origin/mem_exp",
+      "commit": "269354b62b7dfa09bf4af914826e90c42731170c"
+    },
+    "wbcd": {
+      "ref": "refs/remotes/origin/wbcd",
+      "commit": "6c798798c9d2ae39db005d351aa570a9fb46341e"
+    }
+  },
+  "integration": [
+    {
+      "feature": "production and WBCD baseline",
+      "sources": [
+        "wbcd"
+      ],
+      "method": "Keep the WBCD tree as the integration base, overlay the saved production changes, and preserve every production recipe fingerprint below."
+    },
+    {
+      "feature": "MEM and experiment stack",
+      "sources": [
+        "mem_exp"
+      ],
+      "method": "Merge the existing mem_exp source, documentation and tracked experiment assets onto WBCD; resolve same-name production recipes in favor of the production snapshot. This integration does not filter or delete existing tracked experiment assets or rewrite their history."
+    },
+    {
+      "feature": "ReCap",
+      "sources": [
+        "recap"
+      ],
+      "method": "Already included by WBCD ancestry.",
+      "ancestry_verified": {
+        "ancestor": "944f093c898f030d45fc93e80e73261afebc8d2e",
+        "descendant": "6c798798c9d2ae39db005d351aa570a9fb46341e"
+      }
+    },
+    {
+      "feature": "past/future memory",
+      "sources": [
+        "pf"
+      ],
+      "method": "Covered by mem_exp ancestry rather than a second conflicting merge.",
+      "ancestry_verified": {
+        "ancestor": "507a4cf2898c7e121e07d7ee264a17a5534bc970",
+        "descendant": "269354b62b7dfa09bf4af914826e90c42731170c"
+      }
+    },
+    {
+      "feature": "MEM equivalent commits",
+      "sources": [
+        "mem"
+      ],
+      "method": "The two commits after PF have stable-patch-id equivalents in mem_exp.",
+      "equivalent_patches": [
+        {
+          "mem_commit": "0ba108f12fc1b7112d58a53c5dd22413b198f171",
+          "mem_exp_commit": "15cecc33c0ec38460b68c929d28a64f3e6cbf4f4",
+          "stable_patch_id": "16a90ae2e135fc4c2246cbd328bf807a53ac06cf"
+        },
+        {
+          "mem_commit": "48be212a2da28edab554715894eb3b477845142c",
+          "mem_exp_commit": "f29b469b0493dc66d661ede9f78db57553ec8f8a",
+          "stable_patch_id": "483316e1c5dc6904668493b280157021ddb1420d"
+        }
+      ]
+    },
+    {
+      "feature": "RTC inference",
+      "sources": [
+        "rtc"
+      ],
+      "method": "Port the RTC inference behavior onto the current policy/model APIs, preserving infer_memory. Do not restore the obsolete pi0_hybrid.py.",
+      "paths": [
+        "docs/remote_inference.md",
+        "scripts/serve_policy.py",
+        "src/openpi/models/pi0.py",
+        "src/openpi/models_pytorch/pi0_pytorch.py",
+        "src/openpi/policies/policy.py",
+        "src/openpi/policies/rtc_policy.py",
+        "src/openpi/serving/websocket_policy_server.py"
+      ],
+      "interfaces": [
+        "sample_actions(rtc_actions, rtc_mask, rtc_guidance_weight)",
+        "RealTimeChunkingPolicy",
+        "Policy.infer: normalized action handoff, warmup and reset"
+      ],
+      "validation_boundary": "Wrapper numerical tests are separate from end-to-end policy, GPU latency and robot validation."
+    },
+    {
+      "feature": "legacy UMI inputs and deployment factories",
+      "sources": [
+        "hybrid_loss",
+        "multi_dataset",
+        "value_infer"
+      ],
+      "method": "Retain only missing named adapters, factories and recipes; preserve same-name production recipes. Repair the newly migrated DeskHeight mapping, Ray factory selection and CHW depth handling.",
+      "input_adapters_added": [
+        "UmiArxInputsV5",
+        "UmiArxInputs_Bimanual_v2",
+        "UmiArxInputs_Bimanual_With_Depth",
+        "UmiArxInputs_Bimanual_With_Depth_Ray",
+        "UmiArxInputs_DeskHeight_Bimanual",
+        "UmiArxInputs_Headview_Bimanual",
+        "UmiArxInputs_Headview_DeskHeight_Bimanual"
+      ],
+      "factories_added": 10,
+      "recipes_added_from_old_branches": 15
+    },
+    {
+      "feature": "upstream main baseline",
+      "sources": [
+        "main"
+      ],
+      "method": "Record the main source point for review; retain the selected WBCD dependency resolution and current training interfaces rather than replacing them wholesale with main."
+    },
+    {
+      "feature": "camera and depth contract",
+      "sources": [
+        "wbcd",
+        "mem_exp",
+        "rtc"
+      ],
+      "method": "Use configurable image/depth keys across JAX/PyTorch policies, specs and loaders. Preserve actual observed views by default and mask missing configured views.",
+      "interfaces": [
+        "BaseModelConfig.image_keys",
+        "BaseModelConfig.depth_keys",
+        "BaseModelConfig.allow_all_masked_images",
+        "BaseModel.preprocess_observation",
+        "BaseModel.configure_views"
+      ]
+    },
+    {
+      "feature": "robustness/UOT opt-in",
+      "sources": [
+        "wbcd"
+      ],
+      "local_snapshot": "robustness",
+      "method": "Port the saved source changes as opt-in UOT configuration and separate recipe names; keep the production Elec Meta SFT recipe unchanged.",
+      "recipe_names": [
+        "pi05_umi_32d_80k_95_real_umi_batch_72_v4_elec_meta_uot",
+        "pi05_umi_robustness"
+      ]
+    }
+  ],
+  "production_recipe_baseline": {
+    "source": "Saved production working tree on server-169; includes the intentional norm recipe update and Elec Meta SFT recipe.",
+    "source_head": "6c798798c9d2ae39db005d351aa570a9fb46341e",
+    "snapshot_config_path_relative_to_platform": ".local/openpi-source-snapshots/20261017/production-tree/src/openpi/training/config.py",
+    "snapshot_config_sha256": "be8f124d6f6a0d168e9cf7581d9c7ac089af09524ee45265605977b18c74d0f5",
+    "config_path": "src/openpi/training/config.py",
+    "fingerprint_algorithm": "sha256(ast.dump(TrainConfig call, include_attributes=False).encode('utf-8'))",
+    "recipe_count": 80,
+    "new_recipe_policy": "Allowed. Existing production recipe calls must remain AST-identical, including data paths, weights, optimizer and step settings.",
+    "recipes": {
+      "debug": "478af369fa3e738f316eaed6b59cbfaaada150e53937594bc7aed28ce9d4a20f",
+      "debug_pi05": "0a04d05e92f93f61021a99012ac9a35d27b371c2f4c71566f73a82350e0a762d",
+      "debug_restore": "26a0e96df8e1a60c6ee3d051f5249921e0198bf9a0b907432539e05b66c35fd7",
+      "pi05_acp_umi_bimanual_headview_depth": "7cf859fba0654d9cfdc9b8884aef0bc6e7607bfbe73ba60199ebc2e76e85b9b3",
+      "pi05_acp_umi_bimanual_headview_depth_bimanual_infer": "365983b8a7530a7c753315ec2528d3a14c30468aac90b9923e8d14f5f14cfe4f",
+      "pi05_acp_umi_bimanual_headview_depth_multi_dataset": "820c8daf8db73cc92570fe28117582522d6daa955541e0018e2217f671f6d1a7",
+      "pi05_acp_umi_bimanual_wbcd_infer": "75b22ee04c21e05b5793248cfb82dcf235e07a54e0a6b0f3b7deb8ba3ecd7d83",
+      "pi05_acp_umi_bimanual_wbcd_multi_dataset": "2a49f184293071a56f263f3cd018a1cc092cdc3a1fd299481333bb1c9da25569",
+      "pi05_aloha": "e518fd78b0bc4245972fac725f12bdefb3a8a7d6e4e3ec91cb2d7fa59f3e6cb7",
+      "pi05_aloha_pen_uncap": "1964bfece5c6a83e03785b010353de2ee5ebb6605100d65fc5163a31dcee1495",
+      "pi05_droid": "a6fa5cd4168771f79db8a8c05ecf68ac0dc9b5546bb876f7f88862d83cbcc2d5",
+      "pi05_droid_finetune": "eac00d14d944f7ef3f16feeb857656f1440ef11ab486f6adbd21fcc42a9c2da8",
+      "pi05_full_droid_finetune": "a673a10d529649f2a113f994a373a9ebe58ceadba1b40df620608e46bcde4ee8",
+      "pi05_libero": "2e3f8ff079e3c05d3485279761372395cf2bcb958cdc0e6f99ff3a7eefe311cd",
+      "pi05_umi": "408c4e4f0b4cf931387a0cb1762ea4c7f9b1e87dee6c521087981467e411e2e0",
+      "pi05_umi_10d_80k_95_real_umi_v2": "a14cc2a2f644face07f620eb7b54b240a04ad8ee0dd928c332443c5f136ab11d",
+      "pi05_umi_32d": "c2a4d1b5649f0d0c6743d175611fb290c5b733e4a8b2c98062047c4bb5911bc2",
+      "pi05_umi_32d_80k_95": "b17b3534c6aedcccb72ab348311474da60f192775d3c83ae55e68cd4fdf80b9d",
+      "pi05_umi_32d_80k_95_10d_relative": "0102555b868664c16f21ba56368c0e41af1fd53aedef370c76a057a8e3207524",
+      "pi05_umi_32d_80k_95_real_umi_batch_72": "55163a928bf435c09af0601e45cd421fc3bd1acfcdd3d4e4db555cc0de6201fd",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_compute_norm_stats": "6c10e19ddd7bf0392382fd2192a15139e5d23b4c6bf2f849f2651ac42dac4b13",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_headview_horizon1_compute_norm_stats": "58106631f89e3efe0056929f01eea26379033e83282efe4c52efab2b4a382708",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_horizon1_compute_norm_stats": "bf04104b1d9170e624e0007d05ff13c9053e7c9a945c1c24374cec8e17226eda",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_horizon1_compute_norm_stats_fsdp_2": "67f3e826da298f28e4b2492cffa76ef0b6ac64faa6c2ce10f9f9b0fb8050e945",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_horizon2_compute_norm_stats": "0e707ace66bbbfa978f693040b8cc133c65a158ee2ff0cffceb8debb41b0ec09",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_compute_norm_stats": "06cda8940c65689073ca0893848102bb1ae4e2ebc1114c993c3be97a739cbd3c",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v4": "3b07dd03065ca5c4bdd7f961dbf88cd3737fb6e0bd5f2d9c2ed2259714d69184",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v4_bimanual": "514a7860d8ffa60d5abc2d5e8752c93a8351c2d5f88ccaaeab59ac5855a860aa",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v4_bimanual_infer": "da9a925b329113eea49d428520ae088b9905803a9d57b1395b2dcd3593d5d095",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v4_elec_meta": "988b2c1acf206f2769505c057d8b5935c67ef442f768b47f40c2bf51ee9f5ada",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v4_freeze_vlm_infer": "aa4d7a21d9082835de091c0bbb67330176e49393b8cd94ee74177bf70328d12d",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v4_freeze_vlm_only": "75ff3f14569a5b5c60f4e07fe62ad9f622c62a2af34097896f40cae2e877c3d9",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid": "4eb01d6fe2880d56c5595420b5f34639708903787f3a6b28fe0f1821986c6893",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_all_data": "04066c16792381a0f6f5e180f32b2732f98ccfcae4215bc5c2bab9ca71128dcb",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_horizon_folding_260322": "999080ab7fca03b28ae43fc74994758af8cc98368e11da24e82686ce9f01f84b",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_messy_folding_260410": "fbb0d6ebe590ef74c0cca4a44ac5fafb410618de7f97928696fbe85b23642aa9",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_messy_folding_gripper_binary_260422": "f6035fdf18b689b00b32064b37c397326d227e23df1d09b67d83bb078e299254",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_two_stage_augment": "f1bfb07c81e139d02a8d436e10151c5c684d93070c63782885cec81f68c5bf60",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_infer": "f8731bae3dfb51ca2d658f4bb6a0e7720eb1c80f16f1bc99560b65aa8c0a9858",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_multi_dataset_fold_clothes": "cf2676a854dfc3e41a9b8a8d8a1b92b25c057d9a5e67e348db43102be46de96f",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_multi_task": "aadefc43acd1edf94f8d08992bdb00e6f099dc0248673e5c85d5df89d2a86c60",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v4_infer": "dc6bd0382c8e7d7139e632a238e672b727322928e3e0e0f4a8f818a08d4d04c7",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v5": "04e915831c40e9a541a8ce4367293f92af68904eb57e665c057355475b479ffc",
+      "pi05_umi_32d_80k_95_real_umi_batch_72_v5_infer": "3fbd235fece5fa86baf4d83db64d76f37cf761873bea7cc92fba45b0f19d4673",
+      "pi05_umi_32d_80k_95_real_umi_v2": "5cf9938bd1d730d895159e2add748e04cc8f0fbb8ca3d8747182df90f9e45c31",
+      "pi05_umi_32d_clean": "a22bfe95b5967d541287bcd40b0075ab8b6cff655ce96bf4c347ebe1339ac3a4",
+      "pi05_umi_32d_infer": "7009246f971751daf3c4ead0f9a4a676de0eadb50292d9bc7575d927e8732095",
+      "pi05_umi_32d_lora": "8b6e9afa6ea9f3bb3e811af7c26de1594c20199a8a2a84b585be230bf48a51a9",
+      "pi05_umi_32d_lora_v3.1": "a79d0a6e210d7da19d3d2b015b203569bc45b51a79854e85ca7706e1559d717c",
+      "pi05_umi_32d_mp": "33069116c48fba5a9325624919eb1c8a3bdda5dede00e221dacca669d6639f6e",
+      "pi05_umi_32d_retrain": "eeba80ab56baa17c50d5671a06f9e6099efb21b502d4378aa4bc5a2ba85d3365",
+      "pi05_umi_from_scratch": "e6c1d47e536266839217ff1f13a22a0eeb50e0b5a6937bad73118584bab77d5c",
+      "pi05_umi_lora": "38a2244ed76baf39c79112eaed87fabc283dd0075f5b53340b6e01aec081cbb7",
+      "pi05_umi_multi_dataset": "cfc239a5767b07c0ea285a1c868f1acb236951e456ce4b22520a0eb36684c918",
+      "pi05_umi_wbcd_v1_260511": "52b0277dee22595582437c8d61f6134cabc9715ce821c0eda3c68dd2fafa0c3e",
+      "pi05_umi_wbcd_v3_260522_h32": "a7be76fab1d02f44974a0d1557973742c41891b9207d446844d5ee8fae4efed2",
+      "pi05_umi_wbcd_v3_260522_h32_2views": "8cf8390a05c1935dda097db247b1440e7ead95056376495e13effb9415236b21",
+      "pi05_umi_wbcd_v3_260522_h32_2views_hefei": "7042dd034e2c271ff661ebcffbdadf8cb655d8de56e96e09b97871ef8aa0ace9",
+      "pi05_wbcd_bimanual_horizon1_compute_norm_stats": "7b49b7e990b7d86a28118e75f60b3d21308279c69ccce9b0a3ab2010a5b665be",
+      "pi0_aloha": "8f42eb73091fcf662b1e9d5a751cb132c9612881c407a178321c7a518b0cd836",
+      "pi0_aloha_pen_uncap": "2f84874452b760a175d6131b126307fb792a6c9bc1d0ea7c862ea64af2a693b1",
+      "pi0_aloha_sim": "d666cc3b28faabd9e86c4b2be68fdc60f26b511121df359ddc9c310c503b1caf",
+      "pi0_aloha_towel": "64592efa6ad5ac4c5ac4d91a1dc7519f65af8bca4ec89bd81292a98cb49b9c00",
+      "pi0_aloha_tupperware": "01858afb48457c8fc3292c431151f16e194155e88c38696235027c981d61279f",
+      "pi0_droid": "24918bf97ac91f41fb8887770854f33e6adb68ccf47aa297d7d6d311c97b2ae6",
+      "pi0_fast_droid": "c0e03593f763f1d04536e6c4166ee918f4eccda561228058ffb74bdc1c8dce42",
+      "pi0_fast_full_droid_finetune": "6ddfa18b1baee765ea93df000046e120cf505d43a5d4eb9d6f9e05196d05b93c",
+      "pi0_fast_libero": "b90499f65b2551b7c8826c8baecde547115997ada46f7391b2d02c178f59a270",
+      "pi0_fast_libero_low_mem_finetune": "27aa8217ec2527df3ac304f15cf1dbe9e103048dcb373bb6476b27a98dd8867c",
+      "pi0_fast_umi": "b0ffb2d006134b35b989599b51b301368d8d0c2d2cddb6828dc99a68c1af7a61",
+      "pi0_fast_umi_low_mem_finetune": "423cca8702d8f69000272fa6e47456ce6868f6f01ca7dcb0adc9bf2b3552f070",
+      "pi0_libero": "aea597c4a4d1e705834f943d90f76bddaa279c75a1d28c5180c2d46244fe9fe5",
+      "pi0_libero_low_mem_finetune": "f3acc87dfaadf01531ee666a6aa87b244862b8d35ccb24555f243256739c5b44",
+      "pi0_umi": "574192f4f3417557c56e3ae91147bd754bc8c4ca09c849b2392293f450ef9742",
+      "pi0_umi_low_mem_finetune": "6e9776a46bcedd3f73c9011ddcb4602a632e1d2a8fe6b4347c6be02ebca3f737",
+      "pi0_value_umi": "35ab8931a2dbb758965da6ab033d55aef0d84189c6e7c18ba6eb870a3d01acdf",
+      "pi0_value_umi_bimanual_headview_depth": "11c3d7bc018fba72fb60fe9d62138d6281bfe5101a105d21b277df64be313963",
+      "pi0_value_umi_bimanual_headview_depth_infer": "f0b6529e4a88432fd70ddf569fc29202b738d3f6d3ec3e6ec29a8976afc80ac2",
+      "pi0_value_umi_bimanual_headview_depth_multi_dataset": "13c83bfb00ffb8ee9a0b6e3677dc40969d4b99ee64a2848f4d96cb6a3982c512",
+      "pi0_value_umi_bimanual_wbcd_multi_dataset": "0c6cca640482600eef254644274828e48f25090a6d82485a0f2cd370d8654c4d"
+    }
+  },
+  "local_source_snapshots": [
+    {
+      "name": "production",
+      "source_directory": "server-169:/data2/hzl_workspace_for_pi/openpi-umi",
+      "source_head": "6c798798c9d2ae39db005d351aa570a9fb46341e",
+      "patch_path_relative_to_platform": ".local/openpi-source-snapshots/20261017/production.patch",
+      "patch_sha256": "d0b9a2608ab9d7c5eea6cc2a861010e43b9a58ab90ec88275e034d80170cbc7e",
+      "selected_source_tree_relative_to_platform": ".local/openpi-source-snapshots/20261017/production-tree",
+      "scope": "Selected source files only; no credentials, datasets, model weights or runtime artifacts are embedded in the manifest."
+    },
+    {
+      "name": "robustness",
+      "source_directory": "server-169:/data2/hzl_workspace_for_pi/openpi-umi-robustness",
+      "source_head": "6c798798c9d2ae39db005d351aa570a9fb46341e",
+      "patch_path_relative_to_platform": ".local/openpi-source-snapshots/20261017/robustness.patch",
+      "patch_sha256": "2f389566e83c1bff88b64f79e35ff9917c20a634da8320a032c7f354a273542d",
+      "selected_source_tree_relative_to_platform": ".local/openpi-source-snapshots/20261017/robustness-tree",
+      "scope": "Selected source files only; no credentials, datasets, model weights or runtime artifacts are embedded in the manifest."
+    }
+  ],
+  "dependency_boundaries": {
+    "base": "Retain the WBCD lock resolution for OpenPI JAX/Torch. Do not apply the stale value_infer lock/source combination.",
+    "qwen": "Keep Qwen teacher tooling in a separate environment: scripts/mem/qwen3vl_shellgame_requirements.txt pins Transformers 4.57.1 while the OpenPI base pins 4.53.2. A unified Git branch does not imply one Python environment."
+  },
+  "artifact_policy": {
+    "executed": "Keep the experiment assets already tracked by mem_exp and their existing history. No experiment asset filtering or deletion was performed during source unification.",
+    "platform_git_boundary": "The platform repository records the openpi-umi Git submodule link. The submodule source and experiment assets are not copied into the platform Git tree.",
+    "new_server_snapshots": "New platform-local server snapshots contain selected source files and patch backups only; no datasets, model weights or DTW outputs are copied into those snapshots.",
+    "future_cleanup_candidates": [
+      ".DS_Store",
+      "evaluation/shellgame/ run outputs",
+      "evalution/shellgame/ run outputs",
+      "ablation_results/ run outputs"
+    ],
+    "future_cleanup_status": "Moving experiment outputs to external artifact storage is separate future work; the candidates above are recommendations, not completed deletions."
+  },
+  "validation": {
+    "scoped_paths": [
+      "docs/remote_inference.md"
+    ],
+    "syntax_paths": [
+      "scripts/check_unified_sources.py",
+      "scripts/serve_policy.py",
+      "scripts/train.py",
+      "scripts/train_multi_dataset.py",
+      "scripts/train_uot.py",
+      "scripts/precompute_dtw_pairs.py",
+      "src/openpi/models/model.py",
+      "src/openpi/models/pi0.py",
+      "src/openpi/models/pi0_config.py",
+      "src/openpi/models/pi0_fast.py",
+      "src/openpi/models/pi0_mem.py",
+      "src/openpi/models/pi0_mem_compress.py",
+      "src/openpi/models/pi0_mem_pf.py",
+      "src/openpi/models_pytorch/pi0_pytorch.py",
+      "src/openpi/policies/policy.py",
+      "src/openpi/policies/policy_config.py",
+      "src/openpi/policies/umi_policy.py",
+      "src/openpi/policies/rtc_policy.py",
+      "src/openpi/serving/websocket_policy_server.py",
+      "src/openpi/shared/runtime_paths.py",
+      "src/openpi/training/config.py",
+      "src/openpi/training/data_loader.py",
+      "src/openpi/training/multi_data_loader.py",
+      "src/openpi/training/uot.py",
+      "src/openpi/training/uot_data_loader.py",
+      "src/openpi/transforms.py",
+      "tests/test_unified_source_manifest.py",
+      "tests/test_unified_umi_processors.py",
+      "tests/test_unified_uot.py"
+    ],
+    "conflict_marker_globs": [
+      "src/**/*.py",
+      "scripts/**/*.py",
+      "packages/**/*.py"
+    ],
+    "legacy_syntax_policy": "Only explicitly listed syntax_paths are parsed; syntax errors in unrelated historical experiment scripts are not treated as new unification regressions.",
+    "commands": [
+      "python scripts/check_unified_sources.py",
+      "python scripts/check_unified_sources.py --verify-local-snapshots",
+      "python -m unittest discover -s tests -p test_unified_source_manifest.py"
+    ]
+  },
+  "preserved_legacy_recipes": [
+    {
+      "name": "pi0_mem_compress_evan_shellgame_openpi_umi_success_260703",
+      "source_branch": "pf",
+      "source_commit": "507a4cf2898c7e121e07d7ee264a17a5534bc970",
+      "method": "Original TrainConfig expression retained; the later MEM refactor had removed this name."
+    }
+  ],
+  "verification": {
+    "date": "2026-10-17",
+    "timezone": "Asia/Shanghai",
+    "openpi_cpu_regressions": {
+      "passed": 87,
+      "warnings": 16,
+      "environment": "server-169 existing OpenPI Python 3.11, JAX 0.5.3, Flax 0.10.2, Torch 2.7.1",
+      "execution": "temporary source copy, CUDA_VISIBLE_DEVICES empty, JAX_PLATFORMS=cpu",
+      "coverage": [
+        "camera views and video/frame masks",
+        "mixed and nested batches, profiling metadata",
+        "Pi0 abstract model and freeze filters",
+        "RTC policy/server boundaries",
+        "PyTorch float image layouts",
+        "training cache bootstrap and locks",
+        "UMI legacy processors",
+        "UOT finite gradients and RGB/depth boundary",
+        "production recipe fingerprints",
+        "actual SFT/UOT/MEM/PF recipe registry"
+      ]
+    },
+    "platform_regressions": {
+      "passed": 257,
+      "command": ".venv/bin/python -m pytest -q tests/adapters tests/agent/test_provenance.py"
+    },
+    "limits": [
+      "No GPU training, checkpoint loading, convergence, or physical robot acceptance was performed.",
+      "The platform MEM template remains PLANNED pending its stage adapter.",
+      "MEM+RTC and MEM+UOT are not implemented."
+    ],
+    "local_evidence": {
+      "cpu_log": ".local/openpi-source-snapshots/20261017/cpu-tests-final.log",
+      "platform_log": ".local/openpi-source-snapshots/20261017/platform-tests.log"
+    }
+  }
+}

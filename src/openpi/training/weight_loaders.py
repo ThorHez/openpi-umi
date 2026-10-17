@@ -55,6 +55,98 @@ class CheckpointWeightLoader(WeightLoader):
 
 
 @dataclasses.dataclass(frozen=True)
+class CheckpointWeightLoaderReinitialize(WeightLoader):
+    """Load a checkpoint while deliberately reinitializing selected leaves.
+
+    This is useful for a pretraining recipe that shares a large frozen
+    backbone with an existing policy checkpoint but must train a named module
+    from scratch.  ``reinitialize_regex`` is matched against slash-separated
+    parameter paths with :func:`re.fullmatch`.
+    """
+
+    params_path: str
+    reinitialize_regex: str
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded_params = _model.restore_params(
+            download.maybe_download(self.params_path), restore_type=np.ndarray
+        )
+        flat_ref = flax.traverse_util.flatten_dict(params, sep="/")
+        flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
+        pattern = re.compile(self.reinitialize_regex)
+        reinitialized = [key for key in flat_ref if pattern.fullmatch(key)]
+        if not reinitialized:
+            raise ValueError(
+                "reinitialize_regex matched no target parameters: "
+                f"{self.reinitialize_regex!r}"
+            )
+        for key in reinitialized:
+            flat_loaded[key] = flat_ref[key]
+        logger.info(
+            "Reinitialized %d checkpoint leaves matching %r",
+            len(reinitialized),
+            self.reinitialize_regex,
+        )
+        return _merge_params(
+            flax.traverse_util.unflatten_dict(flat_loaded, sep="/"),
+            params,
+            missing_regex=".*lora.*",
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class OverlayCheckpointWeightLoader(WeightLoader):
+    """Load a complete policy checkpoint and overlay selected memory leaves.
+
+    This preserves an already-trained action policy while transplanting a
+    small, independently adapted module (for example the ShellGame relation
+    classifier) from another checkpoint with the same model structure.
+    """
+
+    params_path: str
+    overlay_params_path: str
+    overlay_regex: str
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded_params = _model.restore_params(
+            download.maybe_download(self.params_path), restore_type=np.ndarray
+        )
+        overlay_params = _model.restore_params(
+            download.maybe_download(self.overlay_params_path), restore_type=np.ndarray
+        )
+        flat_ref = flax.traverse_util.flatten_dict(params, sep="/")
+        flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
+        flat_overlay = flax.traverse_util.flatten_dict(overlay_params, sep="/")
+        pattern = re.compile(self.overlay_regex)
+        matched = sorted(key for key in flat_overlay if pattern.fullmatch(key))
+        if not matched:
+            raise ValueError(f"overlay_regex matched no overlay parameters: {self.overlay_regex!r}")
+        missing = [key for key in matched if key not in flat_ref or key not in flat_loaded]
+        if missing:
+            raise ValueError(f"Overlay parameter paths are missing from the target/base: {missing[:8]}")
+        shape_mismatches = [
+            (key, np.shape(flat_overlay[key]), np.shape(flat_ref[key]))
+            for key in matched
+            if np.shape(flat_overlay[key]) != np.shape(flat_ref[key])
+        ]
+        if shape_mismatches:
+            raise ValueError(f"Overlay parameter shape mismatch: {shape_mismatches[:8]}")
+        for key in matched:
+            flat_loaded[key] = flat_overlay[key]
+        logger.info(
+            "Overlaid %d checkpoint leaves matching %r from %s",
+            len(matched),
+            self.overlay_regex,
+            self.overlay_params_path,
+        )
+        return _merge_params(
+            flax.traverse_util.unflatten_dict(flat_loaded, sep="/"),
+            params,
+            missing_regex=".*lora.*",
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class PaliGemmaWeightLoader(WeightLoader):
     """Loads weights from the official PaliGemma checkpoint.
 
@@ -144,6 +236,122 @@ class CheckpointWeightLoaderWithGripperHead(WeightLoader):
     def load(self, params: at.Params) -> at.Params:
         loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
         return _merge_params(loaded_params, params, missing_regex=r".*(lora|gripper_binary_head).*")
+
+
+@dataclasses.dataclass(frozen=True)
+class CheckpointWeightLoaderWithMemoryCompress(WeightLoader):
+    """Loads weights from a checkpoint, gracefully handling Pi0MemCompress params.
+
+    When loading from a pretrained Pi0/Pi0.5 SigLIP checkpoint (e.g.
+    ``pi05_base``) into a Pi0MemCompress model that uses the
+    :mod:`openpi.models.siglip_mem_compress` visual encoder, the following
+    newly-introduced parameters do not exist in the checkpoint and must fall
+    back to the model's random initialization rather than failing the
+    pytree-structure check:
+
+    - ``Transformer/HistoryResampler_0/...``: the learned history compressor
+      (memory queries, cross-attention, mlp refinement layers, optional
+      current-frame conditioning projection).
+    - ``Transformer/encoderblock*/HistoryLayerNorm_0/...``,
+      ``Transformer/encoderblock*/HistoryMultiHeadDotProductAttention_0/...``,
+      and ``Transformer/encoderblock*/HistoryOutProj/...``: per-block history
+      attention branch parameters.
+    - ``Transformer/encoderblock*/history_memory_gate_logit``: per-block
+      sigmoid gate logit that controls how strongly current-frame tokens
+      attend to compressed history.
+
+    LoRA-style adapters are also allowed-missing for parity with
+    :class:`CheckpointWeightLoader`.
+    """
+
+    params_path: str
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
+        return _merge_params(
+            loaded_params,
+            params,
+            missing_regex=(
+                r".*(lora|HistoryResampler|HistoryLayerNorm_0|"
+                r"HistoryMultiHeadDotProductAttention_0|HistoryOutProj|"
+                r"history_memory_gate_logit|HistoryClassifier).*"
+            ),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class CheckpointWeightLoaderWithMemoryPF(WeightLoader):
+    """Loads weights into a Pi0MemPF (past-future temporal bottleneck) model.
+
+    Supports two checkpoint flavors:
+
+    1. **Pretrained Pi0/Pi0.5 SigLIP checkpoint** (e.g. ``pi05_base``): every
+       PF-specific parameter falls back to the model's initialization.
+    2. **Trained Pi0MemCompress checkpoint**: the ``HistoryResampler_0``
+       parameters are transparently remapped onto the PF Unified Temporal
+       Resampler so the already-trained history compressor is reused:
+
+       - ``.../HistoryResampler_0/{memory_queries, current_condition_*, out_ln}``
+         -> ``.../UTR_0/<same>``
+       - ``.../HistoryResampler_0/{query_ln_l, history_ln_l, CrossAttention_l,
+         MlpLayerNorm_l, MlpBlock_l}`` -> ``.../UTR_0/ResamplerCore_0/<same>``
+
+       The per-block history branch (``HistoryLayerNorm_0``,
+       ``HistoryMultiHeadDotProductAttention_0``, ``HistoryOutProj``,
+       ``history_memory_gate_logit``) already shares names with Pi0MemCompress
+       and loads directly. Because the PF direction-specific pieces
+       (``past_role_embedding`` zero-init, ``past_out_proj`` identity-init)
+       are no-ops at initialization, the PF history path reproduces the
+       compress checkpoint exactly at step 0.
+
+    Parameters that never exist in either checkpoint flavor (UTR future path,
+    per-block Future* branch, ``future_memory_gate_logit``, the Future Latent
+    Prior Encoder, alignment projections) always fall back to the model's
+    initialization.
+    """
+
+    params_path: str
+
+    # HistoryResampler leaves that move into the shared ResamplerCore scope.
+    _CORE_PREFIXES = ("query_ln_", "history_ln_", "CrossAttention_", "MlpLayerNorm_", "MlpBlock_")
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
+
+        flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
+        if any("/HistoryResampler_0/" in k for k in flat_loaded):
+            remapped = {}
+            n_core = n_other = 0
+            for k, v in flat_loaded.items():
+                if "/HistoryResampler_0/" in k:
+                    prefix, rest = k.split("/HistoryResampler_0/", 1)
+                    if rest.startswith(self._CORE_PREFIXES):
+                        k = f"{prefix}/UTR_0/ResamplerCore_0/{rest}"
+                        n_core += 1
+                    else:
+                        k = f"{prefix}/UTR_0/{rest}"
+                        n_other += 1
+                remapped[k] = v
+            logger.info(
+                "Pi0MemPF loader: remapped HistoryResampler_0 -> UTR_0 "
+                "(%d core leaves, %d query/condition/out leaves).",
+                n_core,
+                n_other,
+            )
+            loaded_params = flax.traverse_util.unflatten_dict(remapped, sep="/")
+
+        return _merge_params(
+            loaded_params,
+            params,
+            missing_regex=(
+                r".*(lora|UTR_0|"
+                r"HistoryLayerNorm_0|HistoryMultiHeadDotProductAttention_0|HistoryOutProj|"
+                r"history_memory_gate_logit|"
+                r"FutureLayerNorm_0|FutureMultiHeadDotProductAttention_0|FutureOutProj|"
+                r"future_memory_gate_logit|"
+                r"FuturePrior|align_proj).*"
+            ),
+        )
 
 
 @dataclasses.dataclass(frozen=True)

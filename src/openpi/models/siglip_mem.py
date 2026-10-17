@@ -19,8 +19,9 @@ Key design choices:
 Notes:
 - This file is intentionally close to openpi.models.siglip.py to make weight reuse
   easier and the code easier to diff.
-- The `scan=True` code path is intentionally not implemented in this first version.
-  Use `scan=False` when instantiating the MEM encoder.
+- The `scan=True` path preserves the original SigLIP parameter-tree style under
+  `Transformer/encoderblock/...`, while adding a per-layer temporal schedule as a
+  scanned input.
 """
 
 from __future__ import annotations
@@ -96,10 +97,21 @@ class MlpBlock(nn.Module):
 class Encoder1DBlockMEM(nn.Module):
     """Single transformer block with optional patch-aligned causal temporal attention.
 
+    Accepts two carry shapes so the same module (and the same parameter tree
+    under ``encoderblock/...``) can serve both regimes:
+
+    - 4D ``[B, T, N, D]``: standard video case, supports ``T == 1`` as well
+      as ``T > 1``.
+    - 3D ``[B, N, D]``: ``T == 1`` fast path used by :class:`Encoder` when
+      the time dim has been squeezed before entering ``nn.scan``. This keeps
+      the scan carry rank-3 — matching vanilla SigLIP exactly — so XLA does
+      not drag a phantom ``size=1`` time dim through ``scan + remat + sharding``.
+
     Args:
-        x: [B, T, N, D]
-        use_temporal: scalar bool / bool[] value determining whether this layer
-            activates the temporal branch.
+        x: ``[B, T, N, D]`` or ``[B, N, D]``.
+        use_temporal: scalar bool / bool[] determining whether this layer
+            activates the temporal branch. Ignored in the 3D fast path
+            (temporal attention is a no-op when T == 1).
         deterministic: dropout flag.
     """
 
@@ -113,7 +125,15 @@ class Encoder1DBlockMEM(nn.Module):
         out = {}
         x = sharding.activation_sharding_constraint(x)
 
-        b, t, n, d = x.shape
+        # Detect carry rank at trace time. Both ranks produce identical
+        # parameter shapes for the shared modules below, so checkpoints carry
+        # over freely between 3D and 4D call sites.
+        is_4d = x.ndim == 4
+        if is_4d:
+            b, t, n, d = x.shape
+        else:
+            b, n, d = x.shape
+            t = 1
 
         # Shared LN + attention module reused by both spatial and temporal branches.
         ln1 = nn.LayerNorm(name="LayerNorm_0", dtype=self.dtype_mm)
@@ -125,56 +145,68 @@ class Encoder1DBlockMEM(nn.Module):
             dtype=self.dtype_mm,
         )
 
-        # ------------------------------------------------------------------
         # 1) Spatial attention: apply independently on each frame.
-        # ------------------------------------------------------------------
         y = ln1(x)
-        y = y.reshape(b * t, n, d)
-        y = out["sa"] = attn(y, y)
-        y = y.reshape(b, t, n, d)
+        if is_4d:
+            y = y.reshape(b * t, n, d)
+            y = out["sa"] = attn(y, y)
+            y = y.reshape(b, t, n, d)
+        else:
+            y = out["sa"] = attn(y, y)
         y = sharding.activation_sharding_constraint(y)
         y = nn.Dropout(rate=self.dropout)(y, deterministic)
         x = out["+sa"] = x + y
 
-        # ------------------------------------------------------------------
         # 2) Optional causal temporal attention per patch index.
-        # ------------------------------------------------------------------
-        def temporal_branch(x_in):
-            y_t = ln1(x_in)
-            tpe = posemb_sincos_1d(t, d, dtype=y_t.dtype)[:, :, None, :]  # [1, T, 1, D]
-            y_t = y_t + tpe
+        # Static short-circuit: when t == 1 (3D fast path, or T=1 ablation
+        # runs with 4D carry), the temporal branch is a no-op by construction.
+        # Avoid even tracing ``jax.lax.cond`` so the dead branch never enters
+        # the HLO graph — this is what makes T=1 Pi0Mem compile-equivalent to
+        # vanilla Pi0 instead of paying a phantom temporal-branch tax inside
+        # remat+scan.
+        if t > 1:
+            def temporal_branch(x_in):
+                y_t = ln1(x_in)
+                tpe = posemb_sincos_1d(t, d, dtype=y_t.dtype)[:, :, None, :]  # [1, T, 1, D]
+                y_t = y_t + tpe
 
-            # [B, T, N, D] -> [B*N, T, D]
-            y_t = jnp.transpose(y_t, (0, 2, 1, 3)).reshape(b * n, t, d)
-            mask = nn.make_causal_mask(jnp.ones((b * n, t), dtype=jnp.bool_), dtype=jnp.bool_)
-            y_t = attn(y_t, y_t, mask=mask)
-            y_t = y_t.reshape(b, n, t, d)
-            y_t = jnp.transpose(y_t, (0, 2, 1, 3))
-            y_t = sharding.activation_sharding_constraint(y_t)
-            y_t = nn.Dropout(rate=self.dropout)(y_t, deterministic)
-            x_out = x_in + y_t
-            return x_out, y_t
+                # [B, T, N, D] -> [B*N, T, D]
+                y_t = jnp.transpose(y_t, (0, 2, 1, 3)).reshape(b * n, t, d)
+                mask = nn.make_causal_mask(jnp.ones((b * n, t), dtype=jnp.bool_), dtype=jnp.bool_)
+                y_t = attn(y_t, y_t, mask=mask)
+                y_t = y_t.reshape(b, n, t, d)
+                y_t = jnp.transpose(y_t, (0, 2, 1, 3))
+                y_t = sharding.activation_sharding_constraint(y_t)
+                y_t = nn.Dropout(rate=self.dropout)(y_t, deterministic)
+                x_out = x_in + y_t
+                return x_out, y_t
 
-        apply_temporal = jnp.logical_and(jnp.asarray(use_temporal, dtype=jnp.bool_), jnp.asarray(t > 1))
-        x, temporal_y = jax.lax.cond(
-            apply_temporal,
-            temporal_branch,
-            lambda x_in: (x_in, jnp.zeros_like(x_in)),
-            x,
-        )
+            apply_temporal = jnp.asarray(use_temporal, dtype=jnp.bool_)
+            x, temporal_y = jax.lax.cond(
+                apply_temporal,
+                temporal_branch,
+                lambda x_in: (x_in, jnp.zeros_like(x_in)),
+                x,
+            )
+        else:
+            # t == 1: temporal attention is identity by definition. Skip the
+            # branch entirely so the remat/scan compiler doesn't pay for it.
+            temporal_y = jnp.zeros_like(x)
         out["ta"] = temporal_y
         out["+ta"] = x
 
-        # ------------------------------------------------------------------
         # 3) MLP branch.
-        # ------------------------------------------------------------------
         y = nn.LayerNorm(name="LayerNorm_1", dtype=self.dtype_mm)(x)
-        y = out["mlp"] = MlpBlock(
+        mlp_block = MlpBlock(
             name="MlpBlock_0",
             mlp_dim=self.mlp_dim,
             dropout=self.dropout,
             dtype_mm=self.dtype_mm,
-        )(y.reshape(b * t, n, d), deterministic).reshape(b, t, n, d)
+        )
+        if is_4d:
+            y = out["mlp"] = mlp_block(y.reshape(b * t, n, d), deterministic).reshape(b, t, n, d)
+        else:
+            y = out["mlp"] = mlp_block(y, deterministic)
         y = sharding.activation_sharding_constraint(y)
         y = nn.Dropout(rate=self.dropout)(y, deterministic)
         x = out["+mlp"] = x + y
@@ -197,16 +229,33 @@ class Encoder(nn.Module):
     @nn.compact
     def __call__(self, x, deterministic=True):  # noqa: FBT002
         """Args:
-            x: [B, T, N, D]
+        x: [B, T, N, D]
         """
         out = {}
 
+        # T==1 fast path: drop the time dim so scan / remat / sharding
+        # constraints all operate on a 3D carry (B, N, D), matching vanilla
+        # SigLIP's compile graph exactly. We restore the time dim before
+        # returning so callers can keep relying on the (B, T, N, D) contract.
+        # Because no block can ever activate the temporal branch when T==1,
+        # we also skip the entire ``temporal_flags`` plumbing in this case.
+        drop_time = x.ndim == 4 and x.shape[1] == 1
+        if drop_time:
+            x = x.squeeze(1)
+            temporal_active = False
+        else:
+            temporal_active = self.temporal_every > 0
+
         if self.scan:
-            temporal_flags = ((jnp.arange(self.depth) + 1) % self.temporal_every == 0) if self.temporal_every > 0 else jnp.zeros((self.depth,), dtype=jnp.bool_)
+            if temporal_active:
+                temporal_flags = ((jnp.arange(self.depth) + 1) % self.temporal_every == 0)
+            else:
+                temporal_flags = jnp.zeros((self.depth,), dtype=jnp.bool_)
+
             block = nn.remat(
                 Encoder1DBlockMEM,
                 prevent_cse=False,
-                static_argnums=(3,),  # 0=self, 1=x, 2=use_temporal, 3=deterministic
+                static_argnums=(3,),  # 0=self, 1=x(carry), 2=use_temporal(xs), 3=deterministic(xs)
                 policy=getattr(jax.checkpoint_policies, self.remat_policy, None),
             )
 
@@ -214,7 +263,7 @@ class Encoder(nn.Module):
                 block,
                 variable_axes={"params": 0},
                 split_rngs={"params": True, "dropout": True},
-                in_axes=(nn.broadcast, 0, nn.broadcast),
+                in_axes=(0, nn.broadcast),
                 length=self.depth,
             )
 
@@ -237,13 +286,22 @@ class Encoder(nn.Module):
                     num_heads=self.num_heads,
                     dropout=self.dropout,
                 )
-                use_temporal = (self.temporal_every > 0) and ((lyr + 1) % self.temporal_every == 0)
-                x, out[f"block{lyr:02d}"] = block_cur(x, use_temporal=use_temporal, deterministic=deterministic)
+                use_temporal = temporal_active and ((lyr + 1) % self.temporal_every == 0)
+                x, out[f"block{lyr:02d}"] = block_cur(x, use_temporal, deterministic)
 
         out["pre_ln"] = x
-        # Final norm frame-wise / token-wise.
-        b, t, n, d = x.shape
-        x = nn.LayerNorm(name="encoder_norm", dtype=self.dtype_mm)(x.reshape(b * t, n, d)).reshape(b, t, n, d)
+        # Final norm: frame-wise when 4D, token-wise when 3D (T==1 fast path).
+        if x.ndim == 4:
+            b, t, n, d = x.shape
+            x = nn.LayerNorm(name="encoder_norm", dtype=self.dtype_mm)(
+                x.reshape(b * t, n, d)
+            ).reshape(b, t, n, d)
+        else:
+            x = nn.LayerNorm(name="encoder_norm", dtype=self.dtype_mm)(x)
+
+        # Restore the time dim so downstream code keeps the (B, T, N, D) contract.
+        if drop_time:
+            x = x[:, None, ...]
         return x, out
 
 

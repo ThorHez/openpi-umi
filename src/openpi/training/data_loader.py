@@ -1,7 +1,9 @@
 from collections.abc import Iterator, Sequence
+import functools
 import logging
 import multiprocessing
 import os
+import time
 import typing
 from typing import Literal, Protocol, SupportsIndex, TypeVar
 
@@ -53,10 +55,23 @@ class DataLoader(Protocol[T_co]):
 class TransformedDataset(Dataset[T_co]):
     def __init__(self, dataset: Dataset, transforms: Sequence[_transforms.DataTransformFn]):
         self._dataset = dataset
-        self._transform = _transforms.compose(transforms)
+        self._transforms = tuple(transforms)
 
     def __getitem__(self, index: SupportsIndex) -> T_co:
-        return self._transform(self._dataset[index])
+        perf = {}
+
+        start = time.perf_counter()
+        data = self._dataset[index]
+        perf["worker/base_getitem_s"] = time.perf_counter() - start
+
+        for transform in self._transforms:
+            name = type(transform).__name__
+            start = time.perf_counter()
+            data = transform(data)
+            perf[f"worker/{name}_s"] = perf.get(f"worker/{name}_s", 0.0) + (time.perf_counter() - start)
+
+        data["__perf"] = perf
+        return data
 
     def __len__(self) -> int:
         return len(self._dataset)
@@ -328,6 +343,8 @@ def create_torch_data_loader(
     logging.info(f"local_batch_size: {local_batch_size}")
     data_loader = TorchDataLoader(
         dataset,
+        image_keys=model_config.image_keys,
+        depth_keys=model_config.depth_keys,
         local_batch_size=local_batch_size,
         sharding=None if framework == "pytorch" else sharding,
         shuffle=(sampler is None and shuffle),  # Don't shuffle if using sampler
@@ -397,6 +414,9 @@ class TorchDataLoader:
         num_workers: int = 0,
         seed: int = 0,
         framework: str = "jax",
+        prefetch_factor: int | None = None,
+        image_keys: tuple[str, ...] | None = None,
+        depth_keys: tuple[str, ...] | None = None,
     ):
         """Create a PyTorch data loader.
 
@@ -412,6 +432,10 @@ class TorchDataLoader:
             num_workers: The number of worker processes to use. If zero, the data loader will
                 execute in the main process.
             seed: The seed to use for shuffling the data.
+            prefetch_factor: How many batches each worker prefetches in advance. Only
+                effective when num_workers>0. Defaults to PyTorch's own default (2) when
+                None. For heavy CPU dataloading (e.g. Pi0Mem T-frame video loading) values
+                of 4-8 usually keep the GPU fed.
         """
         if jax.process_count() > 1:
             raise NotImplementedError("Data loading with multiple processes is not supported.")
@@ -428,6 +452,12 @@ class TorchDataLoader:
                 jax.sharding.PartitionSpec("B"),
             )
         self._num_batches = num_batches
+        self._timing = {
+            "torch_next_s": 0.0,
+            "torch_next_max_s": 0.0,
+            "jax_shard_s": 0.0,
+            "jax_shard_max_s": 0.0,
+        }
 
         mp_context = None
         if num_workers > 0:
@@ -435,6 +465,9 @@ class TorchDataLoader:
 
         generator = torch.Generator()
         generator.manual_seed(seed)
+        extra_kwargs = {}
+        if num_workers > 0 and prefetch_factor is not None:
+            extra_kwargs["prefetch_factor"] = prefetch_factor
         self._data_loader = torch.utils.data.DataLoader(
             typing.cast(torch.utils.data.Dataset, dataset),
             batch_size=local_batch_size,
@@ -443,15 +476,21 @@ class TorchDataLoader:
             num_workers=num_workers,
             multiprocessing_context=mp_context,
             persistent_workers=num_workers > 0,
-            collate_fn=_collate_fn,
+            collate_fn=functools.partial(_collate_fn, image_keys=image_keys, depth_keys=depth_keys),
             worker_init_fn=_worker_init_fn,
             drop_last=True,
             generator=generator,
+            **extra_kwargs,
         )
 
     @property
     def torch_loader(self) -> torch.utils.data.DataLoader:
         return self._data_loader
+
+    def pop_timing(self) -> dict[str, float]:
+        timing = dict(self._timing)
+        self._timing = dict.fromkeys(self._timing, 0.0)
+        return timing
 
     def __iter__(self):
         num_items = 0
@@ -461,21 +500,107 @@ class TorchDataLoader:
                 if self._num_batches is not None and num_items >= self._num_batches:
                     return
                 try:
+                    torch_start = time.perf_counter()
                     batch = next(data_iter)
+                    torch_next_s = time.perf_counter() - torch_start
+                    self._timing["torch_next_s"] += torch_next_s
+                    self._timing["torch_next_max_s"] = max(self._timing["torch_next_max_s"], torch_next_s)
+                    perf = batch.pop("__perf", None)
+                    if isinstance(perf, dict):
+                        for key, value in perf.items():
+                            value = np.asarray(value, dtype=np.float32)
+                            mean_key = key
+                            max_key = key.removesuffix("_s") + "_max_s"
+                            mean_value = float(np.mean(value))
+                            max_value = float(np.max(value))
+                            self._timing[mean_key] = self._timing.get(mean_key, 0.0) + mean_value
+                            self._timing[max_key] = max(self._timing.get(max_key, 0.0), max_value)
                 except StopIteration:
                     break  # We've exhausted the dataset. Create a new iterator and start over.
                 num_items += 1
                 # For JAX, convert to sharded arrays; for PyTorch, return torch tensors
                 if self._sharding is not None:
-                    yield jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
+                    shard_start = time.perf_counter()
+                    batch = jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
+                    jax_shard_s = time.perf_counter() - shard_start
+                    self._timing["jax_shard_s"] += jax_shard_s
+                    self._timing["jax_shard_max_s"] = max(self._timing["jax_shard_max_s"], jax_shard_s)
+                    yield batch
                 else:
                     yield jax.tree.map(torch.as_tensor, batch)
 
 
-def _collate_fn(items):
-    """Collate the batch elements into batched numpy arrays."""
-    # Make sure to convert to numpy arrays before stacking since some of the incoming elements
-    # may be JAX arrays.
+def _collate_fn(items, *, image_keys=None, depth_keys=None):
+    """Stack samples, padding only camera fields to the batch/model view union.
+
+    This runs before JAX preprocessing: different 2/4-camera samples cannot be
+    stacked as pytrees until their image dictionaries have the same keys. Other
+    sample fields retain strict tree/shape checking.
+    """
+    if items and all(isinstance(item, dict) for item in items):
+        if any("__perf" in item for item in items):
+            # Internal instrumentation varies with each dataset's processors.
+            # Fill absent timing counters only; business fields stay strict.
+            perf_keys = sorted({key for item in items for key in (item.get("__perf") or {})})
+            items = [{**item, "__perf": {key: (item.get("__perf") or {}).get(key, 0.0)
+                                         for key in perf_keys}} for item in items]
+        if not all("image" in item for item in items):
+            # UOT pairs carry independent observations under source/target.
+            # Recurse only through matching dictionaries; missing unrelated
+            # fields retain the original strict pytree error below.
+            if all(set(item) == set(items[0]) for item in items):
+                result = {key: _collate_fn([item[key] for item in items],
+                                          image_keys=image_keys, depth_keys=depth_keys)
+                          for key in sorted(items[0])}
+                # TorchDataLoader consumes one top-level __perf dictionary.
+                # Hoist UOT source/target instrumentation with path prefixes.
+                for key, value in tuple(result.items()):
+                    if key != "__perf" and isinstance(value, dict) and "__perf" in value:
+                        nested = value.pop("__perf")
+                        result.setdefault("__perf", {}).update({f"{key}/{name}": timing
+                                                                for name, timing in nested.items()})
+                return result
+        else:
+            available = tuple(sorted({key for item in items for key in item["image"]}))
+            if not available and image_keys is None and depth_keys is None:
+                # Norm-statistics processors deliberately skip image decoding.
+                # Preserve that empty payload; actual model preprocessing still
+                # rejects image-free observations unless explicitly configured.
+                return jax.tree.map(lambda *xs: np.stack([np.asarray(x) for x in xs], axis=0), *items)
+    if items and all(isinstance(item, dict) and "image" in item for item in items):
+        available = tuple(sorted({key for item in items for key in item["image"]}))
+        images, depth = _model.resolve_view_keys(available, image_keys, depth_keys)
+        keys = (*images, *depth)
+        references = {key: next((np.asarray(item["image"][key]) for item in items if key in item["image"]), None)
+                      for key in keys}
+        any_reference = next((ref for ref in references.values() if ref is not None), None)
+        if any_reference is None:
+            raise ValueError(f"None of the configured image views {keys} are present in this batch")
+        frame_masks_present = any(item.get("frame_valid_mask") is not None for item in items)
+        normalized = []
+        for item in items:
+            item = dict(item)
+            original_images = item["image"]
+            original_masks = item.get("image_mask", {})
+            item["image"] = {}
+            item["image_mask"] = {}
+            frames = item.get("frame_valid_mask") or {}
+            if frame_masks_present:
+                item["frame_valid_mask"] = {}
+            for key in keys:
+                present = key in original_images
+                reference = references[key] if references[key] is not None else any_reference
+                image = np.asarray(original_images[key]) if present else np.zeros_like(reference)
+                mask = np.asarray(original_masks.get(key, True), dtype=bool) if present else np.asarray(False)
+                item["image"][key] = image
+                item["image_mask"][key] = mask
+                if frame_masks_present and image.ndim == 4:
+                    frame_mask = np.asarray(frames.get(key, np.ones(image.shape[0], dtype=bool)), dtype=bool)
+                    if frame_mask.shape != (image.shape[0],):
+                        raise ValueError(f"Frame mask for {key} has shape {frame_mask.shape}; expected {(image.shape[0],)}")
+                    item["frame_valid_mask"][key] = frame_mask & mask
+            normalized.append(item)
+        items = normalized
     return jax.tree.map(lambda *xs: np.stack([np.asarray(x) for x in xs], axis=0), *items)
 
 
@@ -535,10 +660,26 @@ class DataLoaderImpl(DataLoader):
     def __init__(self, data_config: _config.DataConfig, data_loader: TorchDataLoader | RLDSDataLoader):
         self._data_config = data_config
         self._data_loader = data_loader
+        self._timing = {
+            "obs_from_dict_s": 0.0,
+            "obs_from_dict_max_s": 0.0,
+        }
 
     def data_config(self) -> _config.DataConfig:
         return self._data_config
 
+    def pop_timing(self) -> dict[str, float]:
+        timing = dict(self._timing)
+        self._timing = dict.fromkeys(self._timing, 0.0)
+        if hasattr(self._data_loader, "pop_timing"):
+            timing.update(self._data_loader.pop_timing())
+        return timing
+
     def __iter__(self):
         for batch in self._data_loader:
-            yield _model.Observation.from_dict(batch), batch["actions"]
+            obs_start = time.perf_counter()
+            observation = _model.Observation.from_dict(batch)
+            obs_from_dict_s = time.perf_counter() - obs_start
+            self._timing["obs_from_dict_s"] += obs_from_dict_s
+            self._timing["obs_from_dict_max_s"] = max(self._timing["obs_from_dict_max_s"], obs_from_dict_s)
+            yield observation, batch["actions"]

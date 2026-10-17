@@ -745,9 +745,11 @@ class Transform_depth_to_3ch_image(DataTransformFn):
         if d.dtype != np.uint16:
             raise TypeError(f"depth_u16 must be uint16, got {d.dtype}")
         if d.ndim == 3 and d.shape[-1] == 1:
-            d = d[..., 0]  # (224,224,1) -> (224,224)
+            d = d[..., 0]  # (224,224,1) HWC -> (224,224)
+        elif d.ndim == 3 and d.shape[0] == 1:
+            d = d[0]  # (1,224,224) CHW -> (224,224)
         if d.ndim != 2 or d.shape != (224, 224):
-            raise ValueError(f"depth_u16 must be (224,224,1) or (224,224), got {depth_u16.shape}")
+            raise ValueError(f"depth_u16 must be (224,224,1), (1,224,224), or (224,224), got {depth_u16.shape}")
 
         # validity: RealSense 深度 0 通常表示 invalid
         valid = d > 0
@@ -852,6 +854,7 @@ class PadAndFlattenState(DataTransformFn):
 MODEL_KEYS = frozenset({
     "actions",
     "state",
+    "semantic_memory",
     "image",
     "image_mask",
     "tokenized_prompt",
@@ -868,6 +871,7 @@ MODEL_KEYS = frozenset({
     "terminal_reward",
     "episode_index",
     "frame_index",
+    "episode_length",
     "value_target",
     "index",
 })

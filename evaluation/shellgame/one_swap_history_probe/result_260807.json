@@ -1,0 +1,47 @@
+{
+  "experiment": "frozen Base history_mem -> target slot after first swap",
+  "source_checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_mem_compress_evan_shellgame_openpi_joint_260727/my_experiment_30f_s2_6gpu/23000/params",
+  "input": {
+    "history_frames": [0, 29],
+    "current_condition_frame": 30,
+    "stream": "base_rgb",
+    "classifier_reads_current_tokens": false,
+    "classifier_reads_history_mem_only": true,
+    "history_stride": 1
+  },
+  "label": {
+    "key": "after_first_swap_ball_cup",
+    "derivation": "apply raw metadata swaps[0] to initial_ball_cup",
+    "swap_0_frame_range": [20, 29],
+    "all_6000_labels_cross_checked_against_final_ball_cup": true
+  },
+  "split": {
+    "method": "held-out episodes",
+    "seed": 42,
+    "train_samples": 5400,
+    "validation_samples": 600,
+    "validation_class_counts": {
+      "left": 208,
+      "middle": 209,
+      "right": 183
+    },
+    "validation_majority_baseline_accuracy": 0.34833333333333333,
+    "random_baseline_accuracy": 0.3333333333333333
+  },
+  "optimization": {
+    "backbone_frozen": true,
+    "history_resampler_frozen": true,
+    "trainable_component": "flattened-memory linear classifier",
+    "trainable_parameters": 887043,
+    "steps": 150,
+    "batch_size": 60,
+    "peak_learning_rate": 1e-5
+  },
+  "validation": [
+    {"step": 50, "accuracy": 0.296667, "cross_entropy": 1.205531},
+    {"step": 100, "accuracy": 0.32, "cross_entropy": 1.206277},
+    {"step": 150, "accuracy": 0.29, "cross_entropy": 1.1918460083007814}
+  ],
+  "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_one_swap_frozen_history_probe_260807/one_swap_frozen_history_linear_lr1e5_260807/149",
+  "interpretation": "The trained frozen history memory does not make the post-swap target slot linearly decodable under this 31-frame stride-1 diagnostic window."
+}

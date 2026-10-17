@@ -21,17 +21,23 @@ def preprocess_observation_pytorch(
     observation,
     *,
     train: bool = False,
-    image_keys: Sequence[str] = IMAGE_KEYS,
+    image_keys: Sequence[str] | None = None,
+    depth_keys: Sequence[str] | None = None,
+    allow_all_masked_images: bool = False,
     image_resolution: tuple[int, int] = IMAGE_RESOLUTION,
 ):
-    """Torch.compile-compatible version of preprocess_observation_pytorch with simplified type annotations.
+    """Preserve actual cameras by default, or apply an explicit padded view contract.
 
-    This function avoids complex type annotations that can cause torch.compile issues.
-
-    Robust to missing image keys: any expected `image_key` that is absent from `observation.images`
-    is filled with a zero image of `image_resolution` (channels-first) and its mask is forced to
-    False. Enables mixed-view multi-dataset training (e.g. 2-view + 4-view).
+    Depth streams are resized without RGB augmentation. This image-only Torch
+    backbone rejects video tensors; temporal MEM policies use the JAX pipeline.
     """
+    depth_keys = tuple(depth_keys) if depth_keys is not None else tuple(k for k in sorted(observation.images) if "depth" in k)
+    image_keys = tuple(image_keys) if image_keys is not None else tuple(k for k in sorted(observation.images) if k not in depth_keys)
+    keys = (*image_keys, *depth_keys)
+    if not keys or len(set(keys)) != len(keys):
+        raise ValueError("Image/depth view keys must be nonempty, unique and disjoint")
+    if not any(key in observation.images for key in keys) and not allow_all_masked_images:
+        raise ValueError(f"None of the configured image views {keys} are present")
     batch_shape = observation.state.shape[:-1]
     device = observation.state.device
 
@@ -39,7 +45,7 @@ def preprocess_observation_pytorch(
     synthesized_keys: set = set()
 
     out_images = {}
-    for key in image_keys:
+    for key in keys:
         if key not in observation.images:
             # Default channels-first to match the rest of the PyTorch path.
             out_images[key] = torch.zeros(
@@ -49,10 +55,14 @@ def preprocess_observation_pytorch(
             continue
 
         image = observation.images[key]
+        if image.ndim != 4:
+            raise ValueError(f"PyTorch Pi0 expects a 4D image for {key}; use a JAX MEM policy for video")
 
-        # TODO: This is a hack to handle both [B, C, H, W] and [B, H, W, C] formats
-        # Handle both [B, C, H, W] and [B, H, W, C] formats
-        is_channels_first = image.shape[1] == 3  # Check if channels are in dimension 1
+        # Normalize either accepted input layout before spatial transforms.
+        # SigLIP always consumes BCHW, including normalized float inputs.
+        is_channels_first = image.shape[1] == 3
+        if not is_channels_first and image.shape[-1] != 3:
+            raise ValueError(f"PyTorch Pi0 expects three image channels for {key}; got {image.shape}")
 
         if is_channels_first:
             # Convert [B, C, H, W] to [B, H, W, C] for processing
@@ -62,7 +72,7 @@ def preprocess_observation_pytorch(
             logger.info(f"Resizing image {key} from {image.shape[1:3]} to {image_resolution}")
             image = image_tools.resize_with_pad_torch(image, *image_resolution)
 
-        if train:
+        if train and key not in depth_keys:
             # Convert from [-1, 1] to [0, 1] for PyTorch augmentations
             image = image / 2.0 + 0.5
 
@@ -154,11 +164,8 @@ def preprocess_observation_pytorch(
             # Back to [-1, 1]
             image = image * 2.0 - 1.0
 
-        # Convert back to [B, C, H, W] format if it was originally channels-first
-        if is_channels_first:
-            image = image.permute(0, 3, 1, 2)  # [B, H, W, C] -> [B, C, H, W]
-
-        out_images[key] = image
+        # Keep actual and synthesized views in the same backbone input layout.
+        out_images[key] = image.permute(0, 3, 1, 2)
 
     # obtain mask
     out_masks = {}
@@ -170,7 +177,13 @@ def preprocess_observation_pytorch(
             # do not mask by default
             out_masks[key] = torch.ones(batch_shape, dtype=torch.bool, device=observation.state.device)
         else:
-            out_masks[key] = observation.image_masks[key]
+            out_masks[key] = torch.as_tensor(observation.image_masks[key], dtype=torch.bool, device=device).expand(batch_shape)
+
+    if not allow_all_masked_images:
+        torch._assert_async(
+            torch.stack(tuple(out_masks.values())).any(dim=0).all(),
+            "Observation has no valid image view; check camera keys/masks or explicitly allow_all_masked_images",
+        )
 
     # Create a simple object with the required attributes instead of using the complex Observation class
     class SimpleProcessedObservation:
@@ -186,4 +199,7 @@ def preprocess_observation_pytorch(
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
+        frame_valid_masks=getattr(observation, "frame_valid_masks", None),
+        semantic_memory=getattr(observation, "semantic_memory", None),
+        action_loss_mask=getattr(observation, "action_loss_mask", None),
     )

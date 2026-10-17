@@ -1,0 +1,59 @@
+{
+  "experiment": "one_swap_resampler_linear_lr1e5_260807",
+  "description": "One-swap classification from frames 0..29 with frame 30 as current condition; frozen policy backbone, trainable HistoryResampler and classifier.",
+  "source_checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_mem_compress_evan_shellgame_openpi_joint_260727/my_experiment_30f_s2_6gpu/23000/params",
+  "output_checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_one_swap_resampler_history_probe_260807/one_swap_resampler_linear_lr1e5_260807/499",
+  "label_key": "after_first_swap_ball_cup",
+  "train_episodes": 5400,
+  "validation_episodes": 600,
+  "validation_class_counts": {
+    "left": 208,
+    "middle": 209,
+    "right": 183
+  },
+  "random_baseline_accuracy": 0.3333333333333333,
+  "majority_baseline_accuracy": 0.34833333333333333,
+  "trainable_parameters": 17756627,
+  "steps": 500,
+  "peak_lr": 0.00001,
+  "batch_size": 60,
+  "validation": {
+    "step_50": {
+      "accuracy": 0.3566666666666667,
+      "loss": 1.223485
+    },
+    "step_100": {
+      "accuracy": 0.34833333333333333,
+      "loss": 1.268587
+    },
+    "step_200": {
+      "accuracy": 0.3416666666666667,
+      "loss": 1.21117
+    },
+    "step_250": {
+      "accuracy": 0.31333333333333335,
+      "loss": 1.198198
+    },
+    "step_300": {
+      "accuracy": 0.33166666666666667,
+      "loss": 1.161353
+    },
+    "step_350": {
+      "accuracy": 0.3233333333333333,
+      "loss": 1.158663
+    },
+    "step_400": {
+      "accuracy": 0.3016666666666667,
+      "loss": 1.174067
+    },
+    "step_450": {
+      "accuracy": 0.33,
+      "loss": 1.166569
+    },
+    "final": {
+      "accuracy": 0.35333333333333333,
+      "loss": 1.1352016194661458
+    }
+  },
+  "conclusion": "Unfreezing the existing HistoryResampler does not learn a one-swap representation in 500 steps under this probe; both training and validation remain at chance/majority baseline."
+}

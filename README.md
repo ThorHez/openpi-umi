@@ -11,13 +11,110 @@ For all models, we provide _base model_ checkpoints, pre-trained on 10k+ hours o
 
 This is an experiment: $\pi_0$ was developed for our own robots, which differ from the widely used platforms such as [ALOHA](https://tonyzhaozh.github.io/aloha/) and [DROID](https://droid-dataset.github.io/), and though we are optimistic that researchers and practitioners will be able to run creative new experiments adapting $\pi_0$ to their own platforms, we do not expect every such attempt to be successful. All this is to say: $\pi_0$ may or may not work for you, but you are welcome to try it and see!
 
+## Unified training source
+
+`codex/unified-training` combines the WBCD production baseline with MEM, ReCap,
+RTC, and the older UMI input adapters. Branch SHAs, production recipe fingerprints,
+and the source of the preserved server changes are recorded in
+[`source_unification.json`](source_unification.json). Validate the source contract
+without installing the training dependencies:
+
+```bash
+python scripts/check_unified_sources.py
+```
+
+Training keeps separate entry points:
+
+| Capability | Entry point |
+| --- | --- |
+| SFT | `scripts/train.py`, `scripts/train_multi_dataset.py` |
+| ReCap value / ACP | `scripts/train_value.py`, `scripts/train_value_multi_dataset.py`, `scripts/train_advantage.py` |
+| Semantic memory stage 1 / stage 2 | `scripts/mem/train_semantic_memory.py`, `scripts/mem/train_mem.py` |
+| Optional UOT | `scripts/train_uot.py`, with an explicit `uot` configuration |
+| Optional RTC inference | `scripts/serve_policy.py`, see [remote inference](docs/remote_inference.md) |
+
+Models accept explicit `image_keys` and `depth_keys`, for example
+`Pi0Config(image_keys=("left_wrist_0_rgb", "right_wrist_0_rgb"), depth_keys=())`.
+The default `None` preserves the observation's actual views, including ShellGame
+and two/four-view UMI data. Missing selected views are zero-filled with invalid
+masks; an entirely invalid sample raises an error. Deliberate image-free
+ablations must explicitly opt into `allow_all_masked_images=True`.
+
+The existing `pi05_umi_32d_80k_95_real_umi_batch_72_v4_elec_meta` remains an SFT
+recipe. Its UOT variant has the separate suffix `_uot`; `pi05_umi_robustness`
+is the other preserved UOT recipe. UOT currently requires Pi0's single-frame
+RGB features. MEM+UOT and MEM+RTC are not enabled by combining their sources.
+
+SFT/MEM/PF/UOT entry-point caches default to this checkout's `.cache/`; explicit
+cache environment variables remain supported. Legacy ReCap value entries retain
+their `HOME/.cache/jax` compilation cache, which the platform probes separately.
+Qwen tools retain their documented independent
+Python environment. Historical tracked experiment outputs are retained.
+CPU regression tests verify source, camera, batching, and inference interfaces;
+they do not establish GPU training progress, checkpoint quality, or robot behavior.
+The platform still needs its dedicated MEM stage adapter before scheduling the
+two-stage MEM workflow.
+
 ## Updates
 
+- [Aug 2026] Added Qwen3-VL event fine-tuning and direct-visual recurrent-memory distillation for low-compute long-horizon memory.
+- [Aug 2026] Added a task-agnostic semantic-memory core, a ShellGame task adapter, and unified two-stage training entry points for supervised memory pretraining and memory-conditioned action training.
 - [Sept 2025] We released PyTorch support in openpi.
 - [Sept 2025] We released pi05, an upgraded version of pi0 with better open-world generalization.
 - [Sept 2025]: We have added an [improved idle filter](examples/droid/README_train.md#data-filtering) for DROID training.
 - [Jun 2025]: We have added [instructions](examples/droid/README_train.md) for using `openpi` to train VLAs on the full [DROID dataset](https://droid-dataset.github.io/). This is an approximate open-source implementation of the training pipeline used to train pi0-FAST-DROID. 
 
+## Semantic Memory Training
+
+The unified source includes a reusable compact-memory framework from `mem_exp` and a ShellGame reference task. Task-neutral visual-memory and action-conditioning modules live in:
+
+```text
+src/openpi/models/siglip_mem_semantic.py
+src/openpi/models/pi0_mem_semantic_action.py
+```
+
+Task-specific event definitions, frame schedules, labels, and EEF action semantics are isolated under `src/openpi/tasks/shellgame`, while training hyperparameters and dataset contracts live under `src/openpi/training/mem/recipes`.
+
+The ShellGame pipeline uses 60 fixed history frames plus one dynamic current frame. It produces a compact `[B, 128, 64]` semantic memory, resamples it into 16 action-width queries, and conditions the π₀.₅ flow action expert through cross-attention.
+
+Training has two stages:
+
+1. Supervise the semantic memory with initial-cup, swap-relation, and recurrent stage-slot labels.
+2. Load the resulting checkpoint and train the memory-conditioned absolute-EEF action policy.
+
+Run stage 1 with the standalone memory objective:
+
+```bash
+TAG=my_run
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 \
+uv run python scripts/mem/train_semantic_memory.py \
+  shellgame_semantic_memory_pretrain \
+  --exp-name "semantic_memory_${TAG}" \
+  --fsdp-devices 6
+```
+
+Then explicitly pass the stage-1 parameters into stage 2:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 \
+uv run python scripts/mem/train_mem.py \
+  pi0_mem_semantic_action_shellgame_eef7 \
+  --exp-name "semantic_action_${TAG}" \
+  --weight-loader.params-path \
+    "checkpoints/shellgame_semantic_memory_pretrain/semantic_memory_${TAG}/5999/params" \
+  --fsdp-devices 6
+```
+
+The checkpoint override is required: without it, the action recipe uses its configured default initialization instead of the newly pretrained memory. The current reference action recipe uses nominal absolute-EEF demonstrations and freezes the semantic memory and memory-to-action interface; it is a generic baseline, not a reproduction of the earlier V10 mixed-data recipe.
+
+Documentation:
+
+- [ShellGame Semantic Memory Training Steps](docs/shellgame_generic_semantic_training_steps_260821.md) describes the refactored two-stage workflow, dataset requirements, complete background commands, validation metrics, checkpoint selection, and closed-loop evaluation requirements.
+- [ShellGame MEM + Absolute EEF Stage Summary](docs/shellgame_mem_absolute_eef_stage_summary_260821.md) records the full historical iteration path and ablations, including joint replay/FK diagnostics, memory compression studies, joint-to-EEF migration, correction-data versions, deployment controls, and the V6/V10 100-episode results. It covers both legacy experiment interfaces and the evidence that motivated the refactored workflow above.
+- [Qwen3-VL to Recurrent MEM Distillation](docs/qwen_to_recurrent_mem_distillation_training_guide_260825.md) documents the structured-event teacher, direct-visual recurrent student, data schemas, LoRA and MEM training commands, ablations, and the verified 94.6% full-dataset result.
 
 ## Requirements
 

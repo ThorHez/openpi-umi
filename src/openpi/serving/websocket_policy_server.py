@@ -49,11 +49,12 @@ class WebsocketPolicyServer:
         logger.info(f"Connection from {websocket.remote_address} opened")
         packer = msgpack_numpy.Packer()
 
-        await websocket.send(packer.pack(self._metadata))
-
-        prev_total_time = None
-        while True:
-            try:
+        # Stateful policies must discard chunks and delay history on reconnect.
+        self._policy.reset()
+        try:
+            await websocket.send(packer.pack(self._metadata))
+            prev_total_time = None
+            while True:
                 start_time = time.monotonic()
                 obs = msgpack_numpy.unpackb(await websocket.recv())
 
@@ -71,16 +72,17 @@ class WebsocketPolicyServer:
                 await websocket.send(packer.pack(action))
                 prev_total_time = time.monotonic() - start_time
 
-            except websockets.ConnectionClosed:
-                logger.info(f"Connection from {websocket.remote_address} closed")
-                break
-            except Exception:
-                await websocket.send(traceback.format_exc())
-                await websocket.close(
-                    code=websockets.frames.CloseCode.INTERNAL_ERROR,
-                    reason="Internal server error. Traceback included in previous frame.",
-                )
-                raise
+        except websockets.ConnectionClosed:
+            logger.info(f"Connection from {websocket.remote_address} closed")
+        except Exception:
+            await websocket.send(traceback.format_exc())
+            await websocket.close(
+                code=websockets.frames.CloseCode.INTERNAL_ERROR,
+                reason="Internal server error. Traceback included in previous frame.",
+            )
+            raise
+        finally:
+            self._policy.reset()
 
 
 def _health_check(connection: _server.ServerConnection, request: _server.Request) -> _server.Response | None:

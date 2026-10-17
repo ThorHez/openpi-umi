@@ -79,6 +79,16 @@ class Pi0MemConfig(pi0_config.Pi0Config):
     temporal_every: int = 4
     # Which frame to use as the "current" frame for policy input (default: -1 = last frame).
     current_frame_index: int = -1
+    # Gradient checkpointing policy for siglip_mem.Encoder. Default
+    # "nothing_saveable" is the most memory-efficient but slowest setting —
+    # every spatial/temporal/MLP activation is rematerialized in the backward
+    # pass, which is especially costly at T>1 because the encoder forward
+    # runs over B*T patches. Setting this to
+    # "dots_with_no_batch_dims_saveable" or "dots_saveable" keeps QKV dot
+    # products from being recomputed and typically gives a ~30-50% speedup
+    # on Pi0Mem training at modest extra memory cost. See
+    # ``jax.checkpoint_policies`` for the full list of valid names.
+    siglip_remat_policy: str = "nothing_saveable"
 
     @override
     def create(self, rng: at.KeyArrayLike) -> "Pi0Mem":
@@ -92,16 +102,8 @@ class Pi0MemConfig(pi0_config.Pi0Config):
 
         with at.disable_typechecking():
             observation_spec = _model.Observation(
-                images={
-                    "base_0_rgb": image_spec,
-                    "left_wrist_0_rgb": image_spec,
-                    "right_wrist_0_rgb": image_spec,
-                },
-                image_masks={
-                    "base_0_rgb": image_mask_spec,
-                    "left_wrist_0_rgb": image_mask_spec,
-                    "right_wrist_0_rgb": image_mask_spec,
-                },
+                images={key: image_spec for key in self.spec_view_keys(_model.IMAGE_KEYS)},
+                image_masks={key: image_mask_spec for key in self.spec_view_keys(_model.IMAGE_KEYS)},
                 state=jax.ShapeDtypeStruct([batch_size, self.action_dim], jnp.float32),
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 tokenized_prompt_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
@@ -126,6 +128,7 @@ class Pi0Mem(_model.BaseModel):
 
     def __init__(self, config: Pi0MemConfig, rngs: nnx.Rngs):
         super().__init__(config.action_dim, config.action_horizon, config.max_token_len)
+        self.configure_views(config)
         self.pi05 = config.pi05
         # Store action loss mask if provided (for masking out padded action dimensions)
         self.action_loss_mask = config.action_loss_mask
@@ -150,10 +153,11 @@ class Pi0Mem(_model.BaseModel):
                 num_classes=paligemma_config.width,
                 variant="So400m/14",
                 pool_type="none",
-                scan=False,  # siglip_mem currently only supports scan=False
+                scan=True,  # siglip_mem currently only supports scan=False
                 dtype_mm=config.dtype,
                 temporal_every=config.temporal_every,
                 current_frame_index=config.current_frame_index,
+                remat_policy=config.siglip_remat_policy,
             )
         )
 
@@ -272,7 +276,7 @@ class Pi0Mem(_model.BaseModel):
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
     ) -> at.Float[at.Array, "*b ah"]:
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
-        observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
+        observation = self.preprocess_observation(preprocess_rng, observation, train=train)
 
         batch_shape = actions.shape[:-2]
         noise = jax.random.normal(noise_rng, actions.shape)
@@ -323,7 +327,7 @@ class Pi0Mem(_model.BaseModel):
         num_steps: int | at.Int[at.Array, ""] = 10,
         noise: at.Float[at.Array, "b ah ad"] | None = None,
     ) -> _model.Actions:
-        observation = _model.preprocess_observation(None, observation, train=False)
+        observation = self.preprocess_observation(None, observation, train=False)
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
         dt = -1.0 / num_steps

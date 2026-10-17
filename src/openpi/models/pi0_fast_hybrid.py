@@ -247,7 +247,7 @@ class Pi0FASTHybrid(pi0_fast.Pi0FAST):
         
         Alternative to FAST autoregressive sampling.
         """
-        observation = _model.preprocess_observation(None, observation, train=False)
+        observation = self.preprocess_observation(None, observation, train=False)
         
         batch_size = observation.state.shape[0]
         dt = -1.0 / num_steps

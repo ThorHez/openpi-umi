@@ -35,27 +35,10 @@ class ModelType(enum.Enum):
     PI05 = "pi05"
 
 
-# The model always expects these images
-# IMAGE_KEYS = (
-#     "base_0_rgb",
-#     "left_wrist_0_rgb",
-#     "right_wrist_0_rgb",
-# )
-IMAGE_KEYS = (
-    "left_wrist_0_rgb",
-    "right_wrist_0_rgb",
-)
-# IMAGE_KEYS = (
-#     "left_wrist_0_rgb",
-#     "left_wrist_1_rgb",
-#     "right_wrist_0_rgb",
-#     "right_wrist_1_rgb",
-# )
-
-
-DEPTH_KEYS = (
-    "base_0_depth",
-)
+# Defaults used only to initialize legacy model specifications. Runtime preprocessing
+# preserves the supplied views unless the model config explicitly selects keys.
+IMAGE_KEYS = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
+DEPTH_KEYS = ("base_0_depth",)
 
 # This may need change if we release a small model.
 IMAGE_RESOLUTION = (224, 224)
@@ -103,11 +86,17 @@ class Observation(Generic[ArrayT]):
 
     # Images, in [-1, 1] float32. Supports both single images [*b, h, w, c]
     # and video clips [*b, t, h, w, c].
-    images: dict[str, at.Float[ArrayT, "*b h w c"]]
+    # Use "..." to represent any number of batch dimensions followed by spatial dims.
+    images: dict[str, at.Float[ArrayT, "..."]]
     # Image masks, with same keys as images.
     image_masks: dict[str, at.Bool[ArrayT, "*b"]]
     # Low-dimensional robot state.
     state: at.Float[ArrayT, "*b s"]
+
+    # Optional externally computed semantic-memory tokens.  These are kept
+    # separate from robot state so a frozen memory bank can condition an
+    # action policy without inflating or normalizing the proprioceptive state.
+    semantic_memory: at.Float[ArrayT, "*b m d"] | None = None
 
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
@@ -129,6 +118,10 @@ class Observation(Generic[ArrayT]):
     # Per-sample action loss mask for mixed-dataset training (e.g. single-arm / bimanual).
     action_loss_mask: at.Float[ArrayT, "*b ad"] | None = None
 
+    # Optional frame-level validity for video observations, keyed like images.
+    # Shape is [*b, T]; False means VideoFrameDataset padded/repeated that slot.
+    frame_valid_masks: dict[str, at.Bool[ArrayT, "*b t"]] | None = None
+
     # Value model fields (for Pi0Advantage / advantage estimation).
     step_index: at.Float[ArrayT, "*b"] | None = None
     episode_T: at.Float[ArrayT, "*b"] | None = None
@@ -137,6 +130,9 @@ class Observation(Generic[ArrayT]):
     # For value training with compute_normalized_value_targets (Option B).
     episode_index: at.Float[ArrayT, "*b"] | at.Int[ArrayT, "*b"] | None = None
     frame_index: at.Float[ArrayT, "*b"] | at.Int[ArrayT, "*b"] | None = None
+    # Number of frames in the current episode. Variable-length action datasets
+    # use this to mask padded future waypoints at the end of each episode.
+    episode_length: at.Float[ArrayT, "*b"] | at.Int[ArrayT, "*b"] | None = None
     # Precomputed scalar value target from dataset (optional; shape [B] or [B, 1]).
     value_target: at.Float[ArrayT, "*b"] | at.Float[ArrayT, "*b 1"] | None = None
     # LeRobot global row index (optional; kept by KeepModelKeys for some pipelines).
@@ -158,11 +154,13 @@ class Observation(Generic[ArrayT]):
             images=data["image"],
             image_masks=data["image_mask"],
             state=data["state"],
+            semantic_memory=data.get("semantic_memory"),
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
             token_loss_mask=data.get("token_loss_mask"),
             action_loss_mask=data.get("action_loss_mask"),
+            frame_valid_masks=data.get("frame_valid_mask"),
             # Hybrid model (Pi0.5 + FAST) specific fields
             fast_tokenized_prompt=data.get("fast_tokenized_prompt"),
             fast_tokenized_prompt_mask=data.get("fast_tokenized_prompt_mask"),
@@ -175,6 +173,7 @@ class Observation(Generic[ArrayT]):
             terminal_reward=data.get("terminal_reward"),
             episode_index=data.get("episode_index"),
             frame_index=data.get("frame_index"),
+            episode_length=data.get("episode_length"),
             value_target=data.get("value_target"),
             index=data.get("index"),
         )
@@ -184,6 +183,7 @@ class Observation(Generic[ArrayT]):
         result = dataclasses.asdict(self)
         result["image"] = result.pop("images")
         result["image_mask"] = result.pop("image_masks")
+        result["frame_valid_mask"] = result.pop("frame_valid_masks")
         return result
 
 
@@ -192,112 +192,118 @@ class Observation(Generic[ArrayT]):
 Actions = at.Float[ArrayT, "*b ah ad"]
 
 
+def resolve_view_keys(
+    available_keys: Sequence[str],
+    image_keys: Sequence[str] | None = None,
+    depth_keys: Sequence[str] | None = None,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Resolve a stable view order without a task-specific global camera switch.
+
+    None preserves actual observation views. Explicit keys define a fixed model
+    contract; missing selected views are padded and masked by preprocessing.
+    """
+    available_keys = tuple(sorted(available_keys))
+    depth = tuple(depth_keys) if depth_keys is not None else tuple(k for k in available_keys if "depth" in k)
+    images = tuple(image_keys) if image_keys is not None else tuple(k for k in available_keys if k not in depth)
+    keys = (*images, *depth)
+    if not keys:
+        raise ValueError("No image views were supplied or configured")
+    if len(set(keys)) != len(keys):
+        raise ValueError(f"Image/depth view keys must be unique and disjoint: {keys}")
+    return images, depth
+
+
+def _require_valid_views(valid: at.Array) -> None:
+    """Reject all-masked samples eagerly and under JIT, without copying valid batches to the host."""
+    def fail(invalid):
+        raise ValueError("Observation has no valid image view for one or more samples; "
+                         "check image_keys, image masks and frame masks, or explicitly set "
+                         "allow_all_masked_images=True for a deliberate image-free ablation")
+
+    invalid = jnp.logical_not(jnp.all(valid))
+    if isinstance(invalid, jax.core.Tracer):
+        def report(value):
+            jax.debug.callback(fail, value)
+            return jnp.int32(0)
+        jax.lax.cond(invalid, report, lambda _: jnp.int32(0), invalid)
+    elif bool(invalid):
+        fail(invalid)
+
+
 def preprocess_observation(
     rng: at.KeyArrayLike | None,
     observation: Observation,
     *,
     train: bool = False,
-    image_keys: Sequence[str] = IMAGE_KEYS,
-    depth_keys: Sequence[str] = DEPTH_KEYS,
+    image_keys: Sequence[str] | None = None,
+    depth_keys: Sequence[str] | None = None,
     image_resolution: tuple[int, int] = IMAGE_RESOLUTION,
+    allow_all_masked_images: bool = False,
 ) -> Observation:
-    """Preprocess the observations by performing image augmentations (if train=True), resizing (if necessary), and
-    filling in a default image mask (if necessary).
+    """Resize/augment the selected views, retaining image and video validity.
 
-    Robust to missing image keys: any expected `image_key` that is absent from `observation.images` is
-    filled with a zero image of `image_resolution` and its mask is forced to False. This enables
-    mixed-view multi-dataset training (e.g. some datasets with 2 wrist views, others with 4).
+    Legacy recipes retain all actual views, including 2/3/4-camera UMI and
+    ShellGame base/wrist layouts. Explicit keys select a fixed layout for mixed
+    datasets; absent views inherit the observed video length and are masked.
+    Depth views are resized without RGB augmentation. An all-masked sample is
+    rejected unless the caller explicitly enables an image-free ablation.
     """
-
     batch_shape = observation.state.shape[:-1]
-
-    # Track which keys were synthesized (so we can force their mask to False later).
-    synthesized_keys: set[str] = set()
-
+    image_keys, depth_keys = resolve_view_keys(tuple(observation.images), image_keys, depth_keys)
+    keys = (*image_keys, *depth_keys)
+    present = [key for key in keys if key in observation.images]
+    if not present and not allow_all_masked_images:
+        raise ValueError(f"None of the configured image views {keys} are present; "
+                         f"observation provides {tuple(observation.images)}")
+    # Video placeholders must keep T; do not replace an absent stream with a 4D image.
+    leading_shape = observation.images[present[0]].shape[:-3] if present else batch_shape
     out_images = {}
-    for key in image_keys:
-        if key not in observation.images:
-            out_images[key] = jnp.zeros((*batch_shape, *image_resolution, 3), dtype=jnp.float32)
-            synthesized_keys.add(key)
-            continue
-
-        image = observation.images[key]
-        if image.shape[1:3] != image_resolution:
-            logger.info(f"Resizing image {key} from {image.shape[1:3]} to {image_resolution}")
-            image = image_tools.resize_with_pad(image, *image_resolution)
-
-        if train:
-            if rng is None:
-                # Stochastic augmax requires a key; skip augmentation if none (caller should pass rng).
-                out_images[key] = image
-                continue
-
-            # Convert from [-1, 1] to [0, 1] for augmax.
-            image = image / 2.0 + 0.5
-
-            transforms = []
-            if "wrist" not in key:
-                height, width = image.shape[1:3]
-                transforms += [
-                    augmax.RandomCrop(int(width * 0.95), int(height * 0.95)),
-                    augmax.Resize(width, height),
-                    augmax.Rotate((-5, 5)),
-                ]
-            transforms += [
-                augmax.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5),
-            ]
-            sub_rngs = jax.random.split(rng, image.shape[0])
-            image = jax.vmap(augmax.Chain(*transforms))(sub_rngs, image)
-
-            # Back to [-1, 1].
-            image = image * 2.0 - 1.0
-
-        out_images[key] = image
-
-    for depth_key in depth_keys:
-        if depth_key not in observation.images:
-            continue
-        depth = observation.images[depth_key]
-        if depth.shape[1:3] != image_resolution:
-            logger.info(f"Resizing depth {depth_key} from {depth.shape[1:3]} to {image_resolution}")
-            depth = image_tools.resize_with_pad(depth, *image_resolution)
-        # do not apply augmentations to depth
-        out_images[depth_key] = depth
-
-
-    # obtain mask
     out_masks = {}
-    for key in out_images:
-        if key in synthesized_keys:
-            # synthesized zero image -> invalid view
-            out_masks[key] = jnp.zeros(batch_shape, dtype=jnp.bool_)
-        elif key not in observation.image_masks:
-            # do not mask by default
-            out_masks[key] = jnp.ones(batch_shape, dtype=jnp.bool_)
+    out_frame_masks = {} if observation.frame_valid_masks is not None else None
+    for key in keys:
+        present_view = key in observation.images
+        if not present_view:
+            image = jnp.zeros((*leading_shape, *image_resolution, 3), dtype=jnp.float32)
+            mask = jnp.zeros(batch_shape, dtype=jnp.bool_)
         else:
-            out_masks[key] = jnp.asarray(observation.image_masks[key])
-
-    return Observation(
-        images=out_images,
-        image_masks=out_masks,
-        state=observation.state,
-        tokenized_prompt=observation.tokenized_prompt,
-        tokenized_prompt_mask=observation.tokenized_prompt_mask,
-        token_ar_mask=observation.token_ar_mask,
-        token_loss_mask=observation.token_loss_mask,
-        action_loss_mask=observation.action_loss_mask,
-        fast_tokenized_prompt=observation.fast_tokenized_prompt,
-        fast_tokenized_prompt_mask=observation.fast_tokenized_prompt_mask,
-        fast_token_ar_mask=observation.fast_token_ar_mask,
-        fast_token_loss_mask=observation.fast_token_loss_mask,
-        step_index=observation.step_index,
-        episode_T=observation.episode_T,
-        terminal_reward=observation.terminal_reward,
-        episode_index=observation.episode_index,
-        frame_index=observation.frame_index,
-        value_target=observation.value_target,
-        index=observation.index,
-    )
+            image = observation.images[key]
+            if image.ndim not in (len(batch_shape) + 3, len(batch_shape) + 4) or image.shape[-1] != 3:
+                raise ValueError(f"Expected HWC image or THWC video for {key}; got {image.shape}")
+            shape_prefix = image.shape[:-3]
+            image = image.reshape((-1, *image.shape[-3:]))
+            if image.shape[1:3] != image_resolution:
+                image = image_tools.resize_with_pad(image, *image_resolution)
+            if train and rng is not None and key not in depth_keys:
+                image = image / 2.0 + 0.5
+                transforms = []
+                if "wrist" not in key:
+                    height, width = image.shape[1:3]
+                    transforms += [augmax.RandomCrop(int(width * 0.95), int(height * 0.95)),
+                                   augmax.Resize(width, height), augmax.Rotate((-5, 5))]
+                transforms += [augmax.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5)]
+                image = jax.vmap(augmax.Chain(*transforms))(jax.random.split(rng, image.shape[0]), image)
+                image = image * 2.0 - 1.0
+            image = image.reshape((*shape_prefix, *image.shape[-3:]))
+            mask = jnp.broadcast_to(jnp.asarray(observation.image_masks.get(key, True), dtype=jnp.bool_), batch_shape)
+        if out_frame_masks is not None and image.ndim == len(batch_shape) + 4:
+            frame_shape = image.shape[:-3]
+            frame_mask = observation.frame_valid_masks.get(key)
+            if frame_mask is None or not present_view:
+                frame_mask = jnp.broadcast_to(mask[..., None], frame_shape)
+            else:
+                frame_mask = jnp.asarray(frame_mask, dtype=jnp.bool_)
+                if frame_mask.shape != frame_shape:
+                    raise ValueError(f"Frame mask for {key} has shape {frame_mask.shape}; expected {frame_shape}")
+                frame_mask = frame_mask & mask[..., None]
+            out_frame_masks[key] = frame_mask
+            mask = mask & jnp.any(frame_mask, axis=-1)
+        out_images[key] = image
+        out_masks[key] = mask
+    if not allow_all_masked_images:
+        _require_valid_views(jnp.any(jnp.stack(tuple(out_masks.values()), axis=0), axis=0))
+    # replace retains semantic memory, value targets and future optional fields.
+    return dataclasses.replace(observation, images=out_images, image_masks=out_masks,
+                               frame_valid_masks=out_frame_masks)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -312,6 +318,15 @@ class BaseModelConfig(abc.ABC):
     action_horizon: int
     # Tokenized prompt maximum length.
     max_token_len: int
+    # None keeps the actual observation views for legacy recipes. Tuples make
+    # camera order/padding explicit for a new recipe and its serving config.
+    image_keys: tuple[str, ...] | None = dataclasses.field(default=None, kw_only=True)
+    depth_keys: tuple[str, ...] | None = dataclasses.field(default=None, kw_only=True)
+    allow_all_masked_images: bool = dataclasses.field(default=False, kw_only=True)
+
+    def spec_view_keys(self, default_keys: Sequence[str] = IMAGE_KEYS) -> tuple[str, ...]:
+        images, depth = resolve_view_keys(default_keys, self.image_keys, self.depth_keys)
+        return (*images, *depth)
 
     @property
     @abc.abstractmethod
@@ -360,6 +375,19 @@ class BaseModel(nnx.Module, abc.ABC):
     action_dim: int
     action_horizon: int
     max_token_len: int
+
+    def configure_views(self, config: BaseModelConfig) -> None:
+        self.image_keys = config.image_keys
+        self.depth_keys = config.depth_keys
+        self.allow_all_masked_images = config.allow_all_masked_images
+
+    def preprocess_observation(self, rng, observation, *, train=False) -> Observation:
+        return preprocess_observation(
+            rng, observation, train=train,
+            image_keys=getattr(self, "image_keys", None),
+            depth_keys=getattr(self, "depth_keys", None),
+            allow_all_masked_images=getattr(self, "allow_all_masked_images", False),
+        )
 
     @abc.abstractmethod
     def compute_loss(

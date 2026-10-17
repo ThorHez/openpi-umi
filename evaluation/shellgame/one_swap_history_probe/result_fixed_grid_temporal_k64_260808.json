@@ -1,0 +1,96 @@
+{
+  "experiment": "one_swap_fixed_grid_k64_260808",
+  "date": "2026-08-08",
+  "question": "Can topology-preserving fixed-grid reduction retain one-swap tracking information at the same K=64 token count where learned-query framewise compression fails?",
+  "task": {
+    "history_frames": [0, 29],
+    "current_frame": 30,
+    "label_key": "after_first_swap_ball_cup",
+    "classes": ["left", "middle", "right"],
+    "train_samples": 5400,
+    "validation_samples": 600,
+    "validation_class_counts": {
+      "left": 208,
+      "middle": 209,
+      "right": 183
+    },
+    "random_baseline_accuracy": 0.3333333333,
+    "majority_baseline_accuracy": 0.3483333333
+  },
+  "architecture": {
+    "input": "frozen SigLIP with_posemb tokens [B,30,256,1152]",
+    "spatial_reduction": "parameter-free non-overlapping 2x2 average pooling on each 16x16 patch grid",
+    "reduced_grid": "8x8",
+    "tokens_per_frame": 64,
+    "topology_preserved": true,
+    "temporal_width": 256,
+    "temporal_depth": 2,
+    "temporal_heads": 8,
+    "pipeline": "fixed grid pooling -> temporal attention per fixed grid cell -> spatial attention per frame -> learned-query attention readout",
+    "final_memory_compressor": "bypassed"
+  },
+  "training": {
+    "steps": 500,
+    "warmup_steps": 50,
+    "peak_learning_rate": 0.0003,
+    "gradient_clip_norm": 10.0,
+    "batch_size": 12,
+    "fsdp_devices": 6,
+    "gpus": [0, 1, 2, 3, 4, 5],
+    "trainable_parameters": 2677251
+  },
+  "validation": {
+    "step_100": {
+      "accuracy": 0.3466666667,
+      "loss": 1.101356
+    },
+    "step_200": {
+      "accuracy": 0.5066666667,
+      "loss": 1.078082
+    },
+    "step_300": {
+      "accuracy": null,
+      "loss": null,
+      "note": "The full validation line was omitted by bounded terminal-output truncation; nearby train batches had already reached 99-100% accuracy. No value is inferred here."
+    },
+    "step_400": {
+      "accuracy": 0.995,
+      "loss": 0.015575
+    },
+    "final": {
+      "accuracy": 1.0,
+      "loss": -0.0004958789
+    }
+  },
+  "strict_comparison": {
+    "learned_query_k64": {
+      "step_100_accuracy": 0.346667,
+      "step_200_accuracy": 0.351667,
+      "step_300_accuracy": 0.348333,
+      "step_400_accuracy": 0.348333,
+      "final_accuracy": 0.305
+    },
+    "fixed_grid_k64": {
+      "step_100_accuracy": 0.346667,
+      "step_200_accuracy": 0.506667,
+      "step_400_accuracy": 0.995,
+      "final_accuracy": 1.0
+    },
+    "raw_patch_grid_k256": {
+      "step_100_accuracy": 0.346667,
+      "step_200_accuracy": 0.445,
+      "step_300_accuracy": 0.911667,
+      "step_400_accuracy": 1.0,
+      "final_accuracy": 1.0
+    }
+  },
+  "conclusion": {
+    "fixed_grid_k64_retains_one_swap_information": true,
+    "token_count_explains_learned_slot_failure": false,
+    "stable_spatial_identity_is_decisive": true,
+    "evidence": "At the identical K=64 token count, fixed-grid pooling reaches 100% while learned-query framewise compression remains at chance. Fixed-grid K=64 also matches the final accuracy of the full K=256 raw patch grid.",
+    "next_step": "Insert fixed-grid temporal reasoning before the final 128/256-token Pi0 memory compressor, then verify that classification remains high after final compression before retraining the full action policy."
+  },
+  "source_file": "/data2/hzl_workspace_for_pi_mem/openpi-umi/examples/shellgame/train_one_swap_fixed_grid_temporal_probe.py",
+  "checkpoint": "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_shellgame_one_swap_fixed_grid_temporal_probe_260808/one_swap_fixed_grid_k64_260808/499"
+}

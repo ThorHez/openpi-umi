@@ -1,0 +1,34 @@
+{
+  "mode": "fixed",
+  "device": "cuda:0",
+  "batch_size": 1,
+  "history_frames": 30,
+  "input_shape": [
+    1,
+    30,
+    256,
+    1152
+  ],
+  "output_shape": [
+    1,
+    128,
+    1152
+  ],
+  "parameter_count": 3533952,
+  "attention_score_elements": 4853760,
+  "compile_and_first_forward_seconds": 7.329982853028923,
+  "latency_ms_mean": 0.7767667411826551,
+  "latency_ms_median": 0.776230008341372,
+  "latency_ms_p90": 0.7865222520194948,
+  "history_frames_per_second": 38621.6329941263,
+  "device_memory_before": {
+    "bytes_in_use": 18284544,
+    "peak_bytes_in_use": 18284800,
+    "bytes_limit": 63875432448
+  },
+  "device_memory_after": {
+    "bytes_in_use": 33925632,
+    "peak_bytes_in_use": 119810560,
+    "bytes_limit": 63875432448
+  }
+}

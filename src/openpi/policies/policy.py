@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+import inspect
 import logging
 import pathlib
 import time
@@ -62,10 +63,28 @@ class Policy(BasePolicy):
         else:
             # JAX model setup
             self._sample_actions = nnx_utils.module_jit(model.sample_actions)
+            compute_history_classification = getattr(model, "compute_history_classification", None)
+            self._compute_history_classification = (
+                nnx_utils.module_jit(compute_history_classification)
+                if compute_history_classification is not None
+                else None
+            )
             self._rng = rng or jax.random.key(0)
+        # Inspect the class method because torch.compile may wrap the bound method.
+        sample_parameters = inspect.signature(type(model).sample_actions).parameters
+        self._supports_rtc = {"rtc_actions", "rtc_mask", "rtc_guidance_weight"}.issubset(sample_parameters)
+        self._last_model_actions: np.ndarray | None = None
 
     @override
-    def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
+    def infer(
+        self,
+        obs: dict,
+        *,
+        noise: np.ndarray | None = None,
+        rtc_actions: np.ndarray | None = None,
+        rtc_mask: np.ndarray | None = None,
+        rtc_guidance_weight: float = 5.0,
+    ) -> dict:  # type: ignore[misc]
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
         inputs = self._input_transform(inputs)
@@ -87,6 +106,25 @@ class Policy(BasePolicy):
                 noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
             sample_kwargs["noise"] = noise
 
+        if (rtc_actions is None) != (rtc_mask is None):
+            raise ValueError("rtc_actions and rtc_mask must be provided together")
+        if rtc_actions is not None:
+            if not self._supports_rtc:
+                raise ValueError("This model does not support RTC guided inference")
+            rtc_actions_array = np.asarray(rtc_actions)
+            rtc_mask_array = np.asarray(rtc_mask)
+            if rtc_actions_array.ndim == 2:
+                rtc_actions_array = rtc_actions_array[None, ...]
+            if rtc_mask_array.ndim == 1:
+                rtc_mask_array = rtc_mask_array[None, :, None]
+            if self._is_pytorch_model:
+                sample_kwargs["rtc_actions"] = torch.from_numpy(rtc_actions_array).to(self._pytorch_device)
+                sample_kwargs["rtc_mask"] = torch.from_numpy(rtc_mask_array).to(self._pytorch_device)
+            else:
+                sample_kwargs["rtc_actions"] = jnp.asarray(rtc_actions_array)
+                sample_kwargs["rtc_mask"] = jnp.asarray(rtc_mask_array)
+            sample_kwargs["rtc_guidance_weight"] = rtc_guidance_weight
+
         observation = _model.Observation.from_dict(inputs)
         start_time = time.monotonic()
         outputs = {
@@ -99,15 +137,80 @@ class Policy(BasePolicy):
         else:
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
 
+        self._last_model_actions = np.asarray(outputs["actions"]).copy()
         outputs = self._output_transform(outputs)
         outputs["policy_timing"] = {
             "infer_ms": model_time * 1000,
         }
         return outputs
 
+    def infer_memory(self, obs: dict) -> dict:
+        """Run an optional model-native history classifier on a policy observation.
+
+        This deliberately uses the same input transforms as :meth:`infer`, so
+        deployment diagnostics see exactly the images and preprocessing used by
+        action inference.  Action-only models do not expose this method and
+        fail explicitly instead of returning a proxy derived from trajectories.
+        """
+        if self._is_pytorch_model or self._compute_history_classification is None:
+            raise NotImplementedError("This policy model does not expose a history classifier")
+
+        inputs = jax.tree.map(lambda x: x, obs)
+        inputs = self._input_transform(inputs)
+        inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
+        self._rng, classifier_rng = jax.random.split(self._rng)
+        observation = _model.Observation.from_dict(inputs)
+
+        start_time = time.monotonic()
+        logits, aux = self._compute_history_classification(
+            classifier_rng,
+            observation,
+        )
+        model_time = time.monotonic() - start_time
+        outputs = {"joint_logits": logits, **aux}
+        outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
+        outputs["policy_timing"] = {"memory_infer_ms": model_time * 1000}
+        return outputs
+
     @property
     def metadata(self) -> dict[str, Any]:
         return self._metadata
+
+    @property
+    def supports_rtc(self) -> bool:
+        return self._supports_rtc
+
+    @property
+    def action_horizon(self) -> int:
+        return self._model.action_horizon if not self._is_pytorch_model else self._model.config.action_horizon
+
+    @property
+    def last_model_actions(self) -> np.ndarray | None:
+        return self._last_model_actions
+
+    def warmup_rtc(
+        self,
+        obs: dict,
+        *,
+        rtc_actions: np.ndarray,
+        rtc_mask: np.ndarray,
+        rtc_guidance_weight: float,
+    ) -> None:
+        """Warm the guided sampling path while preserving the initial chunk."""
+        previous_actions = self._last_model_actions
+        try:
+            self.infer(
+                obs,
+                rtc_actions=rtc_actions,
+                rtc_mask=rtc_mask,
+                rtc_guidance_weight=rtc_guidance_weight,
+            )
+        finally:
+            self._last_model_actions = previous_actions
+
+    @override
+    def reset(self) -> None:
+        self._last_model_actions = None
 
 
 class PolicyRecorder(_base_policy.BasePolicy):
@@ -133,3 +236,7 @@ class PolicyRecorder(_base_policy.BasePolicy):
 
         np.save(output_path, np.asarray(data))
         return results
+
+    @override
+    def reset(self) -> None:
+        self._policy.reset()

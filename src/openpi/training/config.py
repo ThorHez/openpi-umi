@@ -30,6 +30,12 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
 import openpi.models.pi0_discrete as pi0_discrete
+import openpi.models.pi0_mem as pi0_mem
+import openpi.models.pi0_mem_compress as pi0_mem_compress
+import openpi.models.pi0_mem_fixed_grid_query_action as pi0_mem_fixed_grid_query_action
+import openpi.models.pi0_mem_post_transformer as pi0_mem_post_transformer
+import openpi.models.pi0_mem_pf as pi0_mem_pf
+import openpi.models.pi0_mem_pf_safe as pi0_mem_pf_safe
 import openpi.models.pi0_value as pi0_value
 from openpi.transforms import make_bool_mask
 from openpi.models.pi0_discrete import CheckpointWeightLoaderWithDiscreteHead
@@ -2053,6 +2059,792 @@ class LeRobotUmiDataConfigPadded_V4_Bimanual_Horizon1(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(DataConfigFactory):
+    """Pi0Mem bimanual wrist-only data config.
+
+    Mirrors ``LeRobotUmiDataConfigPadded_V4_Bimanual_Horizon1`` for the
+    state/action layout, normalize masks and repack mapping, but lays the
+    image side out for Pi0Mem's video encoder:
+
+    - Image keys ``left_wrist_0_rgb_0`` / ``right_wrist_0_rgb_0`` are loaded
+      across ``num_frames`` historical frames by ``VideoFrameDataset`` (the
+      training script wraps the LeRobot dataset before transforms run).
+    - ``transforms_video.BuildVideoTensor`` then stacks the per-frame keys
+      ``<base>_<t>`` into ``<base>_video`` of shape ``(T, 3, 224, 224)``.
+    - A small inline Pi0Mem video-input transform (defined in
+      ``openpi.training.config_pi0_mem``) builds the state vector and the
+      ``image`` / ``image_mask`` dicts that Pi0Mem expects, with each image
+      having shape ``(T, 224, 224, 3)``.
+
+    NOTE: ``ResizeImages`` is intentionally omitted in ``model_transforms``
+    because frames are already 224x224 and ``image_tools.resize_with_pad``
+    does not understand a leading time dimension.
+    """
+
+    # Number of historical frames to stack per image stream (T).
+    num_frames: int = 2
+    # Stride (in raw dataset rows) between consecutive frames.
+    frame_stride: int = 1
+    # Behavior near the start of an episode: 'repeat' first valid frame, or 'zero' pad.
+    padding_mode: str = "repeat"
+    # Number of FUTURE frames appended after the current frame (Pi0MemPF
+    # past-future bottleneck training). 0 keeps the original past-only clips.
+    num_future_frames: int = 0
+    # Stride (in raw dataset rows) between consecutive future frames.
+    future_frame_stride: int = 1
+    # Single-frame image keys to expand into video (look up history in the underlying
+    # LeRobot dataset). Must match keys actually stored in the dataset.
+    image_keys: tuple[str, ...] = ("left_wrist_0_rgb_0", "right_wrist_0_rgb_0")
+
+    # Same masks as the Horizon1 sibling: 20-d bimanual actions, 38-d concatenated state.
+    normalize_masks = {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state":   make_bool_mask(6, -12, 3, -7, 6, -12, 3, -7),
+    }
+
+    @property
+    def total_frames(self) -> int:
+        """Clip length per image stream: past+current plus optional future frames."""
+        return self.num_frames + self.num_future_frames
+
+    def video_frame_config(self):
+        """VideoFrameConfig consumed by the Pi0Mem training script's data loader."""
+        from openpi.training.mem.video_dataset import VideoFrameConfig
+
+        return VideoFrameConfig(
+            image_keys=tuple(self.image_keys),
+            num_frames=self.num_frames,
+            frame_stride=self.frame_stride,
+            padding_mode=self.padding_mode,
+            num_future_frames=self.num_future_frames,
+            future_frame_stride=self.future_frame_stride,
+        )
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        return dataclasses.replace(config, normalize_masks=self.normalize_masks)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Imported lazily to avoid a hard dependency from config.py on the
+        # Pi0Mem-specific helper module.
+        import openpi.training.config_pi0_mem as _config_pi0_mem
+        from openpi import transforms_video as _transforms_video
+
+        # The per-frame image keys produced by VideoFrameDataset are
+        #   "<image_key>_<t>" for t in [0, total_frames), laid out as
+        #   [oldest_past, ..., current, future...] (future only for Pi0MemPF).
+        # The repack mapping keeps those keys (they will be stacked next).
+        per_frame_keys = {
+            f"{k}_{t}": f"{k}_{t}"
+            for k in self.image_keys
+            for t in range(self.total_frames)
+        }
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        # State (same as Horizon1).
+                        "robot0_eef_pos": "robot0_eef_pos",
+                        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+                        "robot0_gripper_width": "robot0_gripper_width",
+                        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+                        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+                        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+                        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+                        "robot1_eef_pos": "robot1_eef_pos",
+                        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+                        "robot1_gripper_width": "robot1_gripper_width",
+                        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+                        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+                        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+                        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+                        # Per-frame images (e.g. left_wrist_0_rgb_0_0 .. _T-1).
+                        **per_frame_keys,
+                        "actions": "actions",
+                        "prompt": "task",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                _transforms_video.BuildVideoTensor(
+                    image_keys=tuple(self.image_keys),
+                    num_frames=self.total_frames,
+                    output_keys={k: f"{k}_video" for k in self.image_keys},
+                ),
+                _config_pi0_mem.UmiInputsV4_Bimanual_Video(num_frames=self.total_frames),
+            ],
+        )
+
+        # Same model_transforms as the Horizon1 sibling, minus ResizeImages.
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Bimamual_HeadView_Depth_Horizon1_Pi0Mem(DataConfigFactory):
+    """Pi0Mem data config for bimanual wrist + head RGB/depth streams.
+
+    Mirrors ``LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid``
+    on state/action layout, while expanding every image stream into a T-frame
+    video tensor for Pi0Mem / Pi0MemCompress.
+    """
+
+    num_frames: int = 2
+    frame_stride: int = 1
+    padding_mode: str = "repeat"
+    image_keys: tuple[str, ...] = (
+        "left_wrist_0_rgb_0",
+        "right_wrist_0_rgb_0",
+        "base_0_rgb_0",
+        "base_0_depth_0",
+    )
+    depth_image_keys: tuple[str, ...] = ("base_0_depth_0",)
+
+    normalize_masks = {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -12, 3, -7, 6, -12, 3, -7),
+    }
+
+    def video_frame_config(self):
+        """VideoFrameConfig consumed by the Pi0Mem training script's data loader."""
+        from openpi.training.mem.video_dataset import VideoFrameConfig
+
+        return VideoFrameConfig(
+            image_keys=tuple(self.image_keys),
+            num_frames=self.num_frames,
+            frame_stride=self.frame_stride,
+            padding_mode=self.padding_mode,
+        )
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        return dataclasses.replace(config, normalize_masks=self.normalize_masks)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        import openpi.training.config_pi0_mem as _config_pi0_mem
+        from openpi import transforms_video as _transforms_video
+
+        per_frame_keys = {
+            f"{k}_{t}": f"{k}_{t}"
+            for k in self.image_keys
+            for t in range(self.num_frames)
+        }
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "robot0_eef_pos": "robot0_eef_pos",
+                        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+                        "robot0_gripper_width": "robot0_gripper_width",
+                        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+                        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+                        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+                        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+                        "robot1_eef_pos": "robot1_eef_pos",
+                        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+                        "robot1_gripper_width": "robot1_gripper_width",
+                        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+                        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+                        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+                        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+                        **per_frame_keys,
+                        "actions": "actions",
+                        "prompt": "task",
+                    }
+                )
+            ]
+        )
+
+        depth_frame_transforms = [
+            _transforms.Transform_depth_to_3ch_image(depth_column_name=f"{key}_{t}")
+            for key in self.depth_image_keys
+            for t in range(self.num_frames)
+        ]
+        data_transforms = _transforms.Group(
+            inputs=[
+                *depth_frame_transforms,
+                _transforms_video.BuildVideoTensor(
+                    image_keys=tuple(self.image_keys),
+                    num_frames=self.num_frames,
+                    output_keys={k: f"{k}_video" for k in self.image_keys},
+                ),
+                _config_pi0_mem.UmiInputsV4_Bimanual_HeadView_Depth_Video(num_frames=self.num_frames),
+            ],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_shellgame_Pi0Mem(DataConfigFactory):
+    """Pi0Mem data config for bimanual wrist + head RGB/depth streams.
+
+    Mirrors ``LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid``
+    on state/action layout, while expanding every image stream into a T-frame
+    video tensor for Pi0Mem / Pi0MemCompress.
+    """
+
+    num_frames: int = 16
+    frame_stride: int = 10
+    padding_mode: str = "repeat"
+    num_future_frames: int = 0
+    future_frame_stride: int = 1
+    image_keys: tuple[str, ...] = (
+        "left_wrist_0_rgb_0",
+        "left_wrist_0_rgb_1",
+    )
+    # depth_image_keys: tuple[str, ...] = ("base_0_depth_0",)
+
+    normalize_masks = {
+        "actions": make_bool_mask(10),
+        "state": make_bool_mask(10),
+    }
+
+    @property
+    def total_frames(self) -> int:
+        return self.num_frames + self.num_future_frames
+
+    def video_frame_config(self):
+        """VideoFrameConfig consumed by the Pi0Mem training script's data loader."""
+        from openpi.training.mem.video_dataset import VideoFrameConfig
+
+        return VideoFrameConfig(
+            image_keys=tuple(self.image_keys),
+            num_frames=self.num_frames,
+            frame_stride=self.frame_stride,
+            padding_mode=self.padding_mode,
+            num_future_frames=self.num_future_frames,
+            future_frame_stride=self.future_frame_stride,
+        )
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        return dataclasses.replace(config, normalize_masks=self.normalize_masks)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        import openpi.training.config_pi0_mem as _config_pi0_mem
+        from openpi import transforms_video as _transforms_video
+
+        per_frame_keys = {
+            f"{k}_{t}": f"{k}_{t}"
+            for k in self.image_keys
+            for t in range(self.total_frames)
+        }
+        # VideoFrameDataset emits this nested mask; keep it through Repack so
+        # UmiInputs can forward it onto Observation.frame_valid_masks.
+        frame_valid_mask_keys = {
+            "video_frame_valid_mask": {
+                k: f"video_frame_valid_mask/{k}" for k in self.image_keys
+            }
+        }
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "robot0_eef_pos": "observation.robot0_eef_pos",
+                        "robot0_eef_rot_axis_angle": "observation.robot0_eef_rot_axis_angle",
+                        "robot0_gripper_width": "observation.robot0_gripper_width",
+                        **per_frame_keys,
+                        **frame_valid_mask_keys,
+                        "actions": "actions",
+                        "prompt": "task",
+                        # Kept out of policy inputs; used only by optional
+                        # episode-level diagnostics in the MEM trainer.
+                        "episode_index": "episode_index",
+                        "frame_index": "frame_index",
+                    }
+                )
+            ]
+        )
+
+        # depth_frame_transforms = [
+        #     _transforms.Transform_depth_to_3ch_image(depth_column_name=f"{key}_{t}")
+        #     for key in self.depth_image_keys
+        #     for t in range(self.num_frames)
+        # ]
+        data_transforms = _transforms.Group(
+            inputs=[
+                # *depth_frame_transforms,
+                _transforms_video.BuildVideoTensor(
+                    image_keys=tuple(self.image_keys),
+                    num_frames=self.total_frames,
+                    output_keys={k: f"{k}_video" for k in self.image_keys},
+                ),
+                _config_pi0_mem.UmiInputsV4_Shellgame_Video(num_frames=self.total_frames),
+            ],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_shellgame_Pi0Mem_Joint(DataConfigFactory):
+    """Pi0Mem data config for bimanual wrist + head RGB/depth streams.
+
+    Mirrors ``LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid``
+    on state/action layout, while expanding every image stream into a T-frame
+    video tensor for Pi0Mem / Pi0MemCompress.
+    """
+
+    num_frames: int = 16
+    frame_stride: int = 10
+    padding_mode: str = "repeat"
+    num_future_frames: int = 0
+    future_frame_stride: int = 1
+    image_keys: tuple[str, ...] = (
+        "left_wrist_0_rgb_0",
+        "left_wrist_0_rgb_1",
+    )
+    # depth_image_keys: tuple[str, ...] = ("base_0_depth_0",)
+
+    normalize_masks = {
+        "actions": make_bool_mask(8),
+        "state": make_bool_mask(8),
+    }
+
+    @property
+    def total_frames(self) -> int:
+        return self.num_frames + self.num_future_frames
+
+    def video_frame_config(self):
+        """VideoFrameConfig consumed by the Pi0Mem training script's data loader."""
+        from openpi.training.mem.video_dataset import VideoFrameConfig
+
+        return VideoFrameConfig(
+            image_keys=tuple(self.image_keys),
+            num_frames=self.num_frames,
+            frame_stride=self.frame_stride,
+            padding_mode=self.padding_mode,
+            num_future_frames=self.num_future_frames,
+            future_frame_stride=self.future_frame_stride,
+        )
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        return dataclasses.replace(config, normalize_masks=self.normalize_masks)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        import openpi.training.config_pi0_mem as _config_pi0_mem
+        from openpi import transforms_video as _transforms_video
+
+        per_frame_keys = {
+            f"{k}_{t}": f"{k}_{t}"
+            for k in self.image_keys
+            for t in range(self.total_frames)
+        }
+        # VideoFrameDataset emits this nested mask; keep it through Repack so
+        # UmiInputs can forward it onto Observation.frame_valid_masks.
+        frame_valid_mask_keys = {
+            "video_frame_valid_mask": {
+                k: f"video_frame_valid_mask/{k}" for k in self.image_keys
+            }
+        }
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "robot0_joint_pos": "observation.robot0_joint_pos",
+                        "robot0_gripper_width": "observation.robot0_gripper_width",
+                        **per_frame_keys,
+                        **frame_valid_mask_keys,
+                        "actions": "actions",
+                        "prompt": "task",
+                        # Optional MEM classification diagnostics use these
+                        # only as labels/masks, never as policy inputs.
+                        "episode_index": "episode_index",
+                        "frame_index": "frame_index",
+                    }
+                )
+            ]
+        )
+
+        # depth_frame_transforms = [
+        #     _transforms.Transform_depth_to_3ch_image(depth_column_name=f"{key}_{t}")
+        #     for key in self.depth_image_keys
+        #     for t in range(self.num_frames)
+        # ]
+        data_transforms = _transforms.Group(
+            inputs=[
+                # *depth_frame_transforms,
+                _transforms_video.BuildVideoTensor(
+                    image_keys=tuple(self.image_keys),
+                    num_frames=self.total_frames,
+                    output_keys={k: f"{k}_video" for k in self.image_keys},
+                ),
+                _config_pi0_mem.UmiInputsV4_Shellgame_Video_Joint(num_frames=self.total_frames),
+            ],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+            ],
+            # The model predicts its padded 32-D action space, while this
+            # dataset's normalization statistics describe the real 8-D
+            # absolute-joint action. Slice before policy unnormalization and
+            # discard the padded state output for the same reason.
+            outputs=[
+                _transforms.ChunkActions(target_dim=8),
+                _transforms.DropKeys(keys=("state",)),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_shellgame_Base(DataConfigFactory):
+    """Pi0Mem data config for bimanual wrist + head RGB/depth streams.
+
+    Mirrors ``LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid``
+    on state/action layout, while expanding every image stream into a T-frame
+    video tensor for Pi0Mem / Pi0MemCompress.
+    """
+
+    # num_frames: int = 16
+    # frame_stride: int = 10
+    # padding_mode: str = "repeat"
+    # num_future_frames: int = 0
+    # future_frame_stride: int = 1
+    image_keys: tuple[str, ...] = (
+        "left_wrist_0_rgb_0",
+        "left_wrist_0_rgb_1",
+    )
+    # depth_image_keys: tuple[str, ...] = ("base_0_depth_0",)
+
+    normalize_masks = {
+        "actions": make_bool_mask(7),
+        "state": make_bool_mask(10),
+    }
+
+    # @property
+    # def total_frames(self) -> int:
+    #     return self.num_frames + self.num_future_frames
+
+    # def video_frame_config(self):
+    #     """VideoFrameConfig consumed by the Pi0Mem training script's data loader."""
+    #     from openpi.training.mem.video_dataset import VideoFrameConfig
+
+    #     return VideoFrameConfig(
+    #         image_keys=tuple(self.image_keys),
+    #         num_frames=self.num_frames,
+    #         frame_stride=self.frame_stride,
+    #         padding_mode=self.padding_mode,
+    #         num_future_frames=self.num_future_frames,
+    #         future_frame_stride=self.future_frame_stride,
+    #     )
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        return dataclasses.replace(config, normalize_masks=self.normalize_masks)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        import openpi.training.config_pi0_mem as _config_pi0_mem
+        from openpi import transforms_video as _transforms_video
+
+        # per_frame_keys = {
+        #     f"{k}_{t}": f"{k}_{t}"
+        #     for k in self.image_keys
+        #     for t in range(self.total_frames)
+        # }
+        # VideoFrameDataset emits this nested mask; keep it through Repack so
+        # UmiInputs can forward it onto Observation.frame_valid_masks.
+        # frame_valid_mask_keys = {
+        #     "video_frame_valid_mask": {
+        #         k: f"video_frame_valid_mask/{k}" for k in self.image_keys
+        #     }
+        # }
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "robot0_eef_pos": "observation.robot0_eef_pos",
+                        "robot0_eef_rot_axis_angle": "observation.robot0_eef_rot_axis_angle",
+                        "robot0_gripper_width": "observation.robot0_gripper_width",
+                        "left_wrist_0_rgb_0": "observation.left_wrist_0_rgb_0",
+                        "left_wrist_0_rgb_1": "observation.left_wrist_0_rgb_1",
+                        # **per_frame_keys,
+                        # **frame_valid_mask_keys,
+                        "actions": "actions",
+                        "prompt": "task",
+                    }
+                )
+            ]
+        )
+
+        # depth_frame_transforms = [
+        #     _transforms.Transform_depth_to_3ch_image(depth_column_name=f"{key}_{t}")
+        #     for key in self.depth_image_keys
+        #     for t in range(self.num_frames)
+        # ]
+        data_transforms = _transforms.Group(
+            inputs=[
+                # *depth_frame_transforms,
+                # _transforms_video.BuildVideoTensor(
+                #     image_keys=tuple(self.image_keys),
+                #     num_frames=self.total_frames,
+                #     output_keys={k: f"{k}_video" for k in self.image_keys},
+                # ),
+                _config_pi0_mem.UmiInputsV4_Shellgame_Base(),
+            ],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_shellgame_Pi0Mem_Inference(LeRobotUmiDataConfig_shellgame_Pi0Mem):
+    """Shellgame Pi0Mem inference pipeline without future observations."""
+
+    num_future_frames: int = 0
+    action_dim: int = 10
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create(assets_dirs, model_config)
+        model_transforms = config.model_transforms.push(
+            outputs=[
+                _transforms.ChunkActions(self.action_dim),
+                _transforms.DropKeys(keys=("state",)),
+            ]
+        )
+        return dataclasses.replace(config, model_transforms=model_transforms)
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_shellgame_Base_Inference(LeRobotUmiDataConfig_shellgame_Base):
+    """Shellgame Pi0Mem inference pipeline without future observations."""
+
+    num_future_frames: int = 0
+    action_dim: int = 7
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create(assets_dirs, model_config)
+        model_transforms = config.model_transforms.push(
+            outputs=[
+                _transforms.ChunkActions(self.action_dim),
+                _transforms.DropKeys(keys=("state",)),
+            ]
+        )
+        return dataclasses.replace(config, model_transforms=model_transforms)
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(DataConfigFactory):
+    """Pi0Mem bimanual wrist-only data config.
+
+    Mirrors ``LeRobotUmiDataConfigPadded_V4_Bimanual_Horizon1`` for the
+    state/action layout, normalize masks and repack mapping, but lays the
+    image side out for Pi0Mem's video encoder:
+
+    - Image keys ``left_wrist_0_rgb_0`` / ``right_wrist_0_rgb_0`` are loaded
+      across ``num_frames`` historical frames by ``VideoFrameDataset`` (the
+      training script wraps the LeRobot dataset before transforms run).
+    - ``transforms_video.BuildVideoTensor`` then stacks the per-frame keys
+      ``<base>_<t>`` into ``<base>_video`` of shape ``(T, 3, 224, 224)``.
+    - A small inline Pi0Mem video-input transform (defined in
+      ``openpi.training.config_pi0_mem``) builds the state vector and the
+      ``image`` / ``image_mask`` dicts that Pi0Mem expects, with each image
+      having shape ``(T, 224, 224, 3)``.
+
+    NOTE: ``ResizeImages`` is intentionally omitted in ``model_transforms``
+    because frames are already 224x224 and ``image_tools.resize_with_pad``
+    does not understand a leading time dimension.
+    """
+
+    # Number of historical frames to stack per image stream (T).
+    num_frames: int = 2
+    # Stride (in raw dataset rows) between consecutive frames.
+    frame_stride: int = 1
+    # Behavior near the start of an episode: 'repeat' first valid frame, or 'zero' pad.
+    padding_mode: str = "repeat"
+    # Single-frame image keys to expand into video (look up history in the underlying
+    # LeRobot dataset). Must match keys actually stored in the dataset.
+    image_keys: tuple[str, ...] = ("left_wrist_0_rgb_0", "right_wrist_0_rgb_0", "left_wrist_1_rgb_0", "right_wrist_1_rgb_0")
+
+    # Same masks as the Horizon1 sibling: 20-d bimanual actions, 38-d concatenated state.
+    normalize_masks = {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state":   make_bool_mask(6, -13, 6, -13),
+    }
+
+    def video_frame_config(self):
+        """VideoFrameConfig consumed by the Pi0Mem training script's data loader."""
+        from openpi.training.mem.video_dataset import VideoFrameConfig
+
+        return VideoFrameConfig(
+            image_keys=tuple(self.image_keys),
+            num_frames=self.num_frames,
+            frame_stride=self.frame_stride,
+            padding_mode=self.padding_mode,
+        )
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        return dataclasses.replace(config, normalize_masks=self.normalize_masks)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Imported lazily to avoid a hard dependency from config.py on the
+        # Pi0Mem-specific helper module.
+        import openpi.training.config_pi0_mem as _config_pi0_mem
+        from openpi import transforms_video as _transforms_video
+
+        # The per-frame image keys produced by VideoFrameDataset are
+        #   "<image_key>_<t>" for t in [0, num_frames).
+        # The repack mapping keeps those keys (they will be stacked next).
+        per_frame_keys = {
+            f"{k}_{t}": f"{k}_{t}"
+            for k in self.image_keys
+            for t in range(self.num_frames)
+        }
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        # State (same as Horizon1).
+                        "robot0_eef_pos": "robot0_eef_pos",
+                        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+                        "robot0_gripper_width": "robot0_gripper_width",
+                        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+                        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+                        # "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+                        # "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+                        "robot1_eef_pos": "robot1_eef_pos",
+                        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+                        "robot1_gripper_width": "robot1_gripper_width",
+                        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+                        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+                        # "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+                        # "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+                        # Per-frame images (e.g. left_wrist_0_rgb_0_0 .. _T-1).
+                        **per_frame_keys,
+                        "actions": "actions",
+                        "prompt": "task",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                _transforms_video.BuildVideoTensor(
+                    image_keys=tuple(self.image_keys),
+                    num_frames=self.num_frames,
+                    output_keys={k: f"{k}_video" for k in self.image_keys},
+                ),
+                _config_pi0_mem.WBCD_V1_Bimanual_Video(num_frames=self.num_frames),
+            ],
+        )
+
+        # Same model_transforms as the Horizon1 sibling, minus ResizeImages.
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class WBCD_V1_Bimanual_Horizon1_Compute_Norm_Stats(DataConfigFactory):
     """
     UMI data config for bimanual (V4).
@@ -2102,6 +2894,80 @@ class WBCD_V1_Bimanual_Horizon1_Compute_Norm_Stats(DataConfigFactory):
 
         data_transforms = _transforms.Group(
             inputs=[umi_policy.WBCD_V4_Bimanual_Horizon1_Compute_Norm_Stats()],
+            outputs=[umi_policy.UmiOutputsV4()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class Shellgame_Compute_Norm_Stats(DataConfigFactory):
+    """
+    UMI data config for bimanual (V4).
+    """
+
+    normalize_masks = {
+        "actions": make_bool_mask(3, -6, 1),
+        "state": make_bool_mask(3, -6, 1),
+    }
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "robot0_eef_pos": "observation.robot0_eef_pos",
+                        "robot0_eef_rot_axis_angle": "observation.robot0_eef_rot_axis_angle",
+                        "robot0_gripper_width": "observation.robot0_gripper_width",
+                        # "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+                        # "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+                        #"robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+                        #"robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+                        #"left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+                        # "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
+                        # "robot1_eef_pos": "robot1_eef_pos",
+                        # "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+                        # "robot1_gripper_width": "robot1_gripper_width",
+                        # "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+                        # "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+                        #"robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+                        #"robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+                        #"right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+                        # "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
+                        # "base_0_rgb_0": "base_0_rgb_0",
+                        "actions": "actions",
+                        "prompt": "task",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[umi_policy.Shellgame_Compute_Norm_Stats()],
             outputs=[umi_policy.UmiOutputsV4()],
         )
 
@@ -2554,6 +3420,11 @@ class MultiDataConfigFactory(DataConfigFactory):
     repo_id: str = "multi"
     datasets: list[DataConfigFactory] = dataclasses.field(default_factory=list)
     weights: list[float] | None = None  # None = uniform; same length as datasets
+    # Optional source-level weights used only when merging normalization
+    # statistics.  This is separate from ``weights`` because the latter is a
+    # per-row sampler weight: differently sized datasets need inverse-size
+    # correction to realize a desired source mixture.
+    norm_weights: list[float] | None = None
     state_pad_dim: int | None = None
     use_merged_norm_stats: bool = True
 
@@ -2579,7 +3450,7 @@ class MultiDataConfigFactory(DataConfigFactory):
         if self.use_merged_norm_stats:
             stats_dict_list = [dc.norm_stats for dc in all_configs if dc.norm_stats is not None]
             if stats_dict_list:
-                merge_weights = self.weights
+                merge_weights = self.norm_weights if self.norm_weights is not None else self.weights
                 if merge_weights is None or len(merge_weights) != len(all_configs):
                     merge_weights = [1.0] * len(all_configs)
                 weights_for_merge = [merge_weights[i] for i, dc in enumerate(all_configs) if dc.norm_stats is not None]
@@ -2751,6 +3622,665 @@ class LeRobotDROIDDataConfig(DataConfigFactory):
         )
 
 
+# Additional data factories retained from multi_dataset and value_infer.
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Bimamual_DeskHeight_ImageHorizon1_Hybrid(LeRobotUmiDataConfig_Hybrid):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        "robot0_eef_desk_height": "robot0_eef_desk_height",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+        # "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_desk_height": "robot1_eef_desk_height",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+        # "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
+        # "base_0_rgb_0": "base_0_rgb_0",
+        "actions": "actions",
+        "prompt": "task",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(4, -12, 3, -7, 4, -12, 3, -7),
+    })
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiInputsV4_Bimanual_DeskHeight_Horizon1()
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Bimamual_HeadView_DeskHeight_ImageHorizon1_Hybrid(LeRobotUmiDataConfig_Hybrid):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        "robot0_eef_desk_height": "robot0_eef_desk_height",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+        # "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_desk_height": "robot1_eef_desk_height",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+        # "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
+        "base_0_rgb_0": "base_0_rgb_0",
+        "actions": "actions",
+        "prompt": "task",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(4, -12, 3, -7, 4, -12, 3, -7),
+    })
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiInputsV4_Bimanual_HeadView_DeskHeight_Horizon1()
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Bimamual_HeadView_DeskHeight_ImageHorizon2_Hybrid(LeRobotUmiDataConfig_Hybrid):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        "robot0_eef_desk_height": "robot0_eef_desk_height",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        # "left_wrist_0_rgb_0": "left_wrist_0_rgb_0",
+        "left_wrist_0_rgb_1": "left_wrist_0_rgb_1",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_desk_height": "robot1_eef_desk_height",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        # "right_wrist_0_rgb_0": "right_wrist_0_rgb_0",
+        "right_wrist_0_rgb_1": "right_wrist_0_rgb_1",
+
+        "base_0_rgb_1": "base_head_rgb_1",
+        "actions": "actions",
+        "prompt": "task",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(4, -12, 3, -7, 4, -12, 3, -7),
+    })
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiInputsV4_Bimanual_HeadView_DeskHeight_Horizon2()
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Inference(DataConfigFactory):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "observation.robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "observation.robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "observation.robot0_gripper_width",
+        "robot0_eef_rot_axis_angle_wrt_start": "observation.robot0_eef_rot_axis_angle_wrt_start",
+        "camera0_rgb": "camera0_rgb",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7),
+        "state": make_bool_mask(3, -13),
+    })
+
+    prompt: str = "pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box"
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiArxInputs()
+    data_outputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiArxOutputs()
+
+    robot_type: str = "ARM=1 G=0 H=0"
+    action_target_dim: int = 10
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(self.mapping)
+            ]
+        )
+
+        data_inputs = self.data_inputs_fn()
+        if hasattr(data_inputs, 'prompt'):
+            data_inputs = dataclasses.replace(data_inputs, prompt=self.prompt)
+        data_transforms = _transforms.Group(
+            inputs=[data_inputs],
+            outputs=[self.data_outputs_fn()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                    robot_type=self.robot_type,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+
+            ],
+            outputs=[
+                _transforms.DropKeys(keys=("state",)),
+                _transforms.ChunkActions(target_dim=self.action_target_dim),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Single_Inference(LeRobotUmiDataConfig_Inference):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "observation.robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "observation.robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "observation.robot0_gripper_width",
+        "robot0_eef_rot_axis_angle_wrt_start": "observation.robot0_eef_rot_axis_angle_wrt_start",
+        "camera0_rgb": "camera0_rgb",
+    })
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Bimanual_Inference(LeRobotUmiDataConfig_Inference):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "camera0_rgb": "camera0_rgb",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "camera1_rgb": "camera1_rgb",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(3, -12, 3, 7, 3, -12, 3, 7),
+    })
+
+    robot_type: str = "ARM=2 G=0 H=0"
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiArxInputs_Bimanual()
+    data_outputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiArxOutputs()
+
+    action_target_dim: int = 20
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Bimanual_Inference_v2(LeRobotUmiDataConfig_Inference):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "camera0_rgb": "camera0_rgb",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "camera1_rgb": "camera1_rgb",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -12, 3, 7, 6, -12, 3, 7),
+    })
+
+    robot_type: str = "ARM=2 G=0 H=0"
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiArxInputs_Bimanual_v2()
+    data_outputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiArxOutputs()
+
+    action_target_dim: int = 20
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Bimanual_Inference_With_Depth(LeRobotUmiDataConfig_Inference):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "camera0_rgb": "camera0_rgb",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "camera1_rgb": "camera1_rgb",
+
+        # "base_0_rgb": "camera_rs_rgb",
+        # "base_0_depth": "camera_rs_depth",
+        "base_0_rgb": "base_0_rgb",
+        "base_0_depth": "base_0_depth",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -12, 3, 7, 6, -12, 3, 7),
+    })
+
+    robot_type: str = "ARM=2 G=1 H=0"
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiArxInputs_Bimanual_With_Depth()
+    data_outputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiArxOutputs()
+
+    action_target_dim: int = 20
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(self.mapping)
+            ]
+        )
+
+        data_inputs = self.data_inputs_fn()
+        if hasattr(data_inputs, 'prompt'):
+            data_inputs = dataclasses.replace(data_inputs, prompt=self.prompt)
+        data_transforms = _transforms.Group(
+            inputs=[
+                _transforms.Transform_depth_to_3ch_image(depth_column_name="base_0_depth"),
+                data_inputs,
+            ],
+            outputs=[self.data_outputs_fn()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                    robot_type=self.robot_type,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+
+            ],
+            outputs=[
+                _transforms.DropKeys(keys=("state",)),
+                _transforms.ChunkActions(target_dim=self.action_target_dim),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_Bimanual_Inference_With_Depth_Ray(LeRobotUmiDataConfig_Inference):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_gripper_width": "robot0_gripper_width",
+        "robot0_eef_pos_wrt_start": "robot0_eef_pos_wrt_start",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "camera0_rgb": "camera0_rgb",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_pos_wrt_start": "robot1_eef_pos_wrt_start",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "camera1_rgb": "camera1_rgb",
+
+        # "base_0_rgb": "camera_rs_rgb",
+        # "base_0_depth": "camera_rs_depth",
+        "head_rgb": "head_rgb",
+    })
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(6, -12, 3, 7, 6, -12, 3, 7),
+    })
+
+    robot_type: str = "ARM=2 G=1 H=0"
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiArxInputs_Bimanual_With_Depth_Ray()
+    data_outputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiArxOutputs()
+
+    action_target_dim: int = 20
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(self.mapping)
+            ]
+        )
+
+        data_inputs = self.data_inputs_fn()
+        if hasattr(data_inputs, 'prompt'):
+            data_inputs = dataclasses.replace(data_inputs, prompt=self.prompt)
+        data_transforms = _transforms.Group(
+            inputs=[
+                _transforms.Transform_depth_to_3ch_image(depth_column_name="base_0_depth"),
+                data_inputs,
+            ],
+            outputs=[self.data_outputs_fn()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                    robot_type=self.robot_type,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+
+            ],
+            outputs=[
+                _transforms.DropKeys(keys=("state",)),
+                _transforms.ChunkActions(target_dim=self.action_target_dim),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfig_DeskHeight_Bimanual_Inference(LeRobotUmiDataConfig_Inference):
+    mapping: dict[str, str] = dataclasses.field(default_factory=lambda: {
+        "robot0_eef_pos": "robot0_eef_pos",
+        "robot0_eef_rot_axis_angle": "robot0_eef_rot_axis_angle",
+        "robot0_eef_desk_height": "robot0_eef_desk_height",
+        "robot0_gripper_width": "robot0_gripper_width",
+        "robot0_eef_rot_axis_angle_wrt_start": "robot0_eef_rot_axis_angle_wrt_start",
+        "robot0_eef_pos_wrt1": "robot0_eef_pos_wrt1",
+        "robot0_eef_rot_axis_angle_wrt1": "robot0_eef_rot_axis_angle_wrt1",
+        "camera0_rgb": "camera0_rgb",
+        "robot1_eef_pos": "robot1_eef_pos",
+        "robot1_eef_desk_height": "robot1_eef_desk_height",
+        "robot1_eef_rot_axis_angle": "robot1_eef_rot_axis_angle",
+        "robot1_gripper_width": "robot1_gripper_width",
+        "robot1_eef_rot_axis_angle_wrt_start": "robot1_eef_rot_axis_angle_wrt_start",
+        "robot1_eef_pos_wrt0": "robot1_eef_pos_wrt0",
+        "robot1_eef_rot_axis_angle_wrt0": "robot1_eef_rot_axis_angle_wrt0",
+        "camera1_rgb": "camera1_rgb",
+    })
+
+    robot_type: str = "ARM=2 G=0 H=1"
+
+    normalize_masks: dict[str, tuple[bool, ...]] = dataclasses.field(default_factory=lambda: {
+        "actions": make_bool_mask(3, -7, 3, -7),
+        "state": make_bool_mask(4, -12, 3, 7, 4, -12, 3, 7),
+    })
+
+    data_inputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiArxInputs_DeskHeight_Bimanual()
+    data_outputs_fn: tyro.conf.Suppress[Any] = lambda: umi_policy.UmiArxOutputs()
+
+    action_target_dim: int = 20
+
+
+@dataclasses.dataclass(frozen=True)
+class ShellgameCupEvalConfig:
+    """Task-level validation for absolute-joint ShellGame policies.
+
+    This evaluates the first grasp decision without stepping a controller:
+    predicted joint chunks are converted to EEF positions with MuJoCo FK and
+    assigned to the nearest settled cup.  The evaluator is intentionally
+    opt-in because it depends on the ShellGame raw dataset and Robosuite.
+    """
+
+    enabled: bool = False
+    raw_dataset_root: str = ""
+    robosuite_root: str = ""
+    interval: int = 1000
+    num_episodes: int = 24
+    batch_size: int = 8
+    num_sampling_steps: int = 4
+    sample_seed: int = 260806
+    selection_radius: float = 0.06
+
+
+@dataclasses.dataclass(frozen=True)
+class ShellgameMemoryClassifierConfig:
+    """Diagnostic supervision for final cup location from history_mem.
+
+    Labels are read from LeRobot ``meta/episodes.jsonl`` and indexed by the
+    sample's episode_index. The frame range must contain only observations for
+    which the label is already determined and still visible in the configured
+    history window.
+    """
+
+    enabled: bool = False
+    episodes_metadata_path: str = ""
+    label_key: str = "final_ball_cup"
+    classes: tuple[str, ...] = ("left", "middle", "right")
+    min_frame_index: int = 49
+    max_frame_index: int = 64
+    loss_weight: float = 1.0
+    action_loss_weight: float = 1.0
+    # Optional diagnostic mode: select exactly this many frame-range samples
+    # per class. A value of zero uses the complete dataset split.
+    overfit_samples_per_class: int = 0
+    # Evaluate on the exact same balanced subset. This intentionally measures
+    # memorization capacity, not held-out generalization.
+    overfit_same_samples_for_validation: bool = False
+    # Disable stochastic image augmentation during classifier training. This
+    # is useful for a fixed-input memorization sanity check, especially for
+    # video where the default preprocessing augments every frame independently.
+    disable_train_augmentation: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfigPadded_V4_Norm_stats(DataConfigFactory):
+    """
+    UMI data config that pads 7-dim actions to 32-dim AFTER normalization.
+    """
+
+    normalize_masks = {
+        "actions": make_bool_mask(3, -7),
+        "state": make_bool_mask(3, -13),
+    }
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "robot0_eef_pos": "observation.robot0_eef_pos",
+                        "robot0_eef_rot_axis_angle": "observation.robot0_eef_rot_axis_angle",
+                        "robot0_gripper_width": "observation.robot0_gripper_width",
+                        "robot0_eef_rot_axis_angle_wrt_start": "observation.robot0_eef_rot_axis_angle_wrt_start",
+                        # "left_wrist_0_rgb_0": "observation.left_wrist_0_rgb_0",
+                        # "left_wrist_0_rgb_1": "observation.left_wrist_0_rgb_1",
+                        "actions": "actions",
+                        "prompt": "task",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[umi_policy.UmiInputsV4_Norm_stats()],
+            outputs=[umi_policy.UmiOutputsV4()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+                _transforms.KeepModelKeys(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfigPadded_V4_ImageHorizon1(DataConfigFactory):
+    """
+    UMI data config that pads 7-dim actions to 32-dim AFTER normalization.
+    """
+
+    normalize_masks = {
+        "actions": make_bool_mask(3, -7),
+        "state": make_bool_mask(3, -13),
+    }
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "robot0_eef_pos": "observation.robot0_eef_pos",
+                        "robot0_eef_rot_axis_angle": "observation.robot0_eef_rot_axis_angle",
+                        "robot0_gripper_width": "observation.robot0_gripper_width",
+                        "robot0_eef_rot_axis_angle_wrt_start": "observation.robot0_eef_rot_axis_angle_wrt_start",
+                        "left_wrist_0_rgb_0": "observation.left_wrist_0_rgb_0",
+                        # "left_wrist_0_rgb_1": "observation.left_wrist_0_rgb_1",
+                        "actions": "actions",
+                        "prompt": "task",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[umi_policy.UmiInputsV4_Horizon1()],
+            outputs=[umi_policy.UmiOutputsV4()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+                _transforms.KeepModelKeys(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+@dataclasses.dataclass(frozen=True)
+class UOTConfig:
+    """Sim-and-Real Co-Training 的 Ours 配置；此处把 source/target 泛化为跨场景数据。"""
+
+    enabled: bool = False
+    pair_info_path: str = ""
+    target_dataset_index: int = -1
+    # 每个训练 batch 从各数据集抽样的概率；论文主实验为 source:target=0.9:0.1。
+    bc_dataset_probabilities: tuple[float, ...] = ()
+    ot_batch_size: int = 128
+    alignment_weight: float = 0.1
+    embedding_cost_scale: float = 1.0
+    label_cost_scale: float = 1.0
+    entropy_reg: float = 5e-4
+    marginal_relaxation: float = 1e-3
+    sinkhorn_iterations: int = 1000
+    dtw_distance_cutoff: float = 5.0
+    dtw_distance_sharpness: float = 10.0
+    temporal_window: int = 10
+
+
 @dataclasses.dataclass(frozen=True)
 class TrainConfig:
     # Name of the config. Must be unique. Will be used to reference this config.
@@ -2784,6 +4314,9 @@ class TrainConfig:
     # Determines the data to be trained on.
     data: DataConfigFactory = dataclasses.field(default_factory=FakeDataConfig)
 
+    # Used only by scripts/train_uot.py; ordinary training keeps its existing behavior.
+    uot: UOTConfig | None = None
+
     # Base directory for config assets (e.g., norm stats).
     assets_base_dir: str = "./assets"
     # Base directory for checkpoints.
@@ -2793,6 +4326,9 @@ class TrainConfig:
     seed: int = 42
     # Global batch size.
     batch_size: int = 32
+    # Optional global validation batch size. Defaults to the training batch size.
+    # This is useful for small held-out splits that cannot fill a training batch.
+    eval_batch_size: int | None = None
     # Number of workers to use for the data loader. Increasing this number will speed up data loading but
     # will increase memory and CPU usage.
     num_workers: int = 2
@@ -2801,6 +4337,8 @@ class TrainConfig:
 
     # How often (in steps) to log training metrics.
     log_interval: int = 100
+    # If true, include detailed data-loader/per-step timing metrics in logs.
+    log_perf_metrics: bool = False
     # How often (in steps) to save checkpoints.
     save_interval: int = 1000
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
@@ -2838,6 +4376,14 @@ class TrainConfig:
     # Number of validation batches per evaluation round.
     eval_batches: int = 10
 
+    # Optional task-level ShellGame joint-to-FK cup-selection validation.
+    shellgame_cup_eval: ShellgameCupEvalConfig = dataclasses.field(default_factory=ShellgameCupEvalConfig)
+    # Optional capacity diagnostic: predict the final cup location directly
+    # from compressed visual history. Disabled for normal policy training.
+    shellgame_memory_classifier: ShellgameMemoryClassifierConfig = dataclasses.field(
+        default_factory=ShellgameMemoryClassifierConfig
+    )
+
     @property
     def assets_dirs(self) -> pathlib.Path:
         """Get the assets directory for this config."""
@@ -2874,6 +4420,159 @@ _pi0_value_config_umi_bimanual = pi0_value.Pi0ValueConfig(
     value_max=0.0,
     value_head_dropout=0.1,
     soft_value_targets=True,
+)
+
+# Isolated PF-safe stage-1 model. Keep this object shared by ``model`` and the
+# freeze filter so config changes cannot silently make the two disagree.
+# Both history and future bottlenecks are intentionally small because this
+# version initializes directly from Pi0.5 base rather than requiring shape
+# compatibility with a trained Pi0MemCompress history checkpoint.
+_pi0_mem_pf_safe_shellgame_joint_model = pi0_mem_pf_safe.Pi0MemPFSafeConfig(
+    pi05=True,
+    action_dim=32,
+    action_horizon=16,
+    action_loss_mask=(1.0,) * 8 + (0.0,) * 24,
+    max_token_len=256,
+    num_frames=30,
+    frame_stride=2,
+    memory_every=27,
+    history_memory_tokens=64,
+    history_resampler_depth=1,
+    history_use_current_condition=True,
+    history_gate_init=-6.9,
+    history_gate_fixed=None,
+    history_gate_lr_multiplier=5.0,
+    diversity_weight=1e-3,
+    current_frame_index=-1,
+    current_frame_corrupt_sample_prob=0.0,
+    current_frame_dropout_prob=0.0,
+    current_frame_mask_prob=0.0,
+    current_frame_corrupt_loss_weight=0.0,
+    num_future_frames=10,
+    future_frame_stride=2,
+    future_latent_tokens=32,
+    future_gate_init=-6.9,
+    future_gate_fixed=None,
+    prior_encoder_depth=2,
+    lambda_prior=1.0,
+    lambda_post=1.0,
+    lambda_align=0.01,
+    lambda_reg=1e-3,
+    align_warmup_steps=2_000,
+    align_ramp_steps=3_000,
+    latent_variance_target=0.5,
+)
+
+# Capacity probe initialized from the trained 30-frame joint checkpoint. Only
+# HistoryResampler and the linear HistoryClassifier remain trainable.
+_shellgame_history_classifier_probe_model = pi0_mem_compress.Pi0MemCompressConfig(
+    pi05=True,
+    action_dim=32,
+    action_horizon=16,
+    action_loss_mask=(1.0,) * 8 + (0.0,) * 24,
+    max_token_len=256,
+    # One diagnostic sample per episode: frames 0..59 are history and frame
+    # 60 is current (the scripted swaps are complete at this point).
+    num_frames=61,
+    memory_every=1,
+    history_memory_tokens=256,
+    history_resampler_depth=1,
+    history_use_current_condition=True,
+    history_gate_fixed=1.0,
+    history_gate_lr_multiplier=1.0,
+    diversity_weight=0.0,
+    current_frame_index=-1,
+    current_frame_corrupt_sample_prob=0.0,
+    current_frame_dropout_prob=0.0,
+    current_frame_mask_prob=0.0,
+    current_frame_corrupt_loss_weight=0.0,
+    history_classifier_num_classes=3,
+)
+
+# Formal generic action model following the controlled query-action probe.  It
+# retains a 60-frame stride-1 history, encodes historical patches through the
+# lightweight fixed-grid temporal path, and exposes the resulting memory to
+# the Pi0.5 action expert only through a dedicated learned-query interface.
+_shellgame_joint_fixed_grid_query_action_model = (
+    pi0_mem_fixed_grid_query_action.Pi0MemFixedGridQueryActionConfig(
+        pi05=True,
+        action_dim=32,
+        action_horizon=16,
+        action_loss_mask=(1.0,) * 8 + (0.0,) * 24,
+        max_token_len=256,
+        num_frames=60,
+        current_frame_index=-1,
+        # Build history memory, but do not route it through the old periodic
+        # current-image readers.  The dedicated action cross-attention is the
+        # sole history-to-action path in this controlled formal model.
+        memory_every=0,
+        history_memory_tokens=128,
+        history_resampler_depth=1,
+        history_use_current_condition=False,
+        history_gate_fixed=None,
+        diversity_weight=1e-3,
+        current_frame_corrupt_sample_prob=0.0,
+        current_frame_dropout_prob=0.0,
+        current_frame_mask_prob=0.0,
+        current_frame_corrupt_loss_weight=0.0,
+        temporal_width=256,
+        temporal_depth=2,
+        temporal_heads=8,
+        spatial_pool_factor=2,
+        action_memory_query_tokens=16,
+        action_memory_query_width=256,
+        action_memory_query_depth=2,
+        action_memory_query_heads=4,
+        action_memory_cross_attention_heads=8,
+        action_memory_gate_init=1.0,
+    )
+)
+
+# Isolated capacity experiment: compress frames 0..59 first, then run the
+# compressed memory and frame 60 through pretrained SigLIP blocks.  The first
+# 18 blocks keep the two token groups separate; the last 9 jointly update them.
+_shellgame_history_post_transformer_probe_model = (
+    pi0_mem_post_transformer.Pi0MemPostTransformerConfig(
+        pi05=True,
+        action_dim=32,
+        action_horizon=16,
+        action_loss_mask=(1.0,) * 8 + (0.0,) * 24,
+        max_token_len=256,
+        num_frames=61,
+        history_memory_tokens=256,
+        history_resampler_depth=1,
+        history_use_current_condition=True,
+        history_joint_start_layer=18,
+        diversity_weight=0.0,
+        current_frame_index=-1,
+        current_frame_corrupt_sample_prob=0.0,
+        current_frame_dropout_prob=0.0,
+        current_frame_mask_prob=0.0,
+        current_frame_corrupt_loss_weight=0.0,
+        history_classifier_num_classes=3,
+    )
+)
+
+# Import task recipes only after the shared config dataclasses are defined.
+# This keeps task-specific data and model policy code out of this registry.
+from openpi.training.mem.recipes import shellgame_semantic_action as _shellgame_semantic_action_recipe  # noqa: E402
+from openpi.training.mem.recipes import shellgame_real_memory_adapt as _shellgame_real_memory_adapt_recipe  # noqa: E402
+from openpi.training.mem.recipes import shellgame_real_wrist_stage2 as _shellgame_real_wrist_stage2_recipe  # noqa: E402
+
+_shellgame_semantic_action_train_config = (
+    _shellgame_semantic_action_recipe.make_train_config()
+)
+_shellgame_real_wrist_stage2_train_config = (
+    _shellgame_real_wrist_stage2_recipe.make_train_config()
+)
+_shellgame_real_memory_adapt_train_config = (
+    _shellgame_real_memory_adapt_recipe.make_train_config()
+)
+
+# Temporary import compatibility for local experiment scripts. New code should
+# import the task recipe directly from openpi.training.mem.recipes.
+LeRobotUmiDataConfig_shellgame_Pi0Mem_AbsoluteEEF7 = (
+    _shellgame_semantic_action_recipe.data_config_type()
 )
 
 # Use `get_config` if you need to get a config by name in your code.
@@ -4088,11 +5787,11 @@ _CONFIGS = [
             action_horizon=16,
             action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
         ),
-        data=LeRobotUmiDataConfigPadded_V4(
-            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
+        data=LeRobotUmiDataConfigPadded_V4_Norm_stats(
+            repo_id="/data2/hzl_workspace_for_pi/openpi-umi/data/collect_demo_zmq_10_14",
             assets=AssetsConfig(
                 asset_id=".",
-                assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
+                assets_dir="/data2/hzl_workspace_for_pi/openpi-umi/data/collect_demo_zmq_10_14",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
@@ -4159,6 +5858,28 @@ _CONFIGS = [
             assets=AssetsConfig(
                 asset_id=".",
                 assets_dir="/root/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_evening",
+            ),
+            base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+        ),
+        batch_size=512,
+        num_workers=8,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=10000,
+    ),
+    TrainConfig(
+        name="pi05_shellgame_norm_stats",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=Shellgame_Compute_Norm_Stats(
+            repo_id="/data2/hzl_workspace_for_pi_mem/robosuite/outputs/shellgame_lerobot_current_frame_action",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/data2/hzl_workspace_for_pi_mem/robosuite/outputs/shellgame_lerobot_current_frame_action",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
@@ -4705,6 +6426,1873 @@ _CONFIGS = [
         fsdp_devices=8,
         log_interval=10,
         keep_period=30_000,
+    ),
+    # =====================================================================
+    # Pi0Mem wrist-only twin of the 260322 fold-clothes hybrid config.
+    # Same 4 datasets / weights / schedule as the HeadView+Depth Pi0Mem entry
+    # above, but every child uses the bimanual wrist-only factory
+    # (LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem) — i.e. NO base_0_rgb
+    # and NO base_0_depth streams. Only left_wrist_0_rgb + right_wrist_0_rgb
+    # are loaded as T-frame video tensors. Pi0Mem.embed_prefix iterates over
+    # whatever keys are in obs.images, so dropping the base streams is a
+    # data-side concern only — no model code changes required.
+    # Launch:
+    #   XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/mem/train_pi0_mem.py \
+    #     pi0_mem_umi_32d_60k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322 \
+    #     --exp-name=my_experiment [--overwrite | --resume]
+    # =====================================================================
+    TrainConfig(
+        name="pi0_mem_umi_32d_60k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322",
+        model=pi0_mem.Pi0MemConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+            num_frames=1,
+            temporal_every=4,
+            # siglip_remat_policy="dots_with_no_batch_dims_saveable",
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    num_frames=1,
+                )
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=60_000,
+        batch_size=72,
+        num_workers=24,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=30_000,
+    ),
+    # =====================================================================
+    # Pi0MemCompress wrist-only twin of the Pi0Mem entry directly above.
+    # Same dataset / weights / schedule / batch / LR, but the visual
+    # backbone is openpi.models.siglip_mem_compress (compressed-history MEM)
+    # instead of openpi.models.siglip_mem (per-block temporal attention).
+    # Reuses the same Pi0Mem-aware DataConfig (LeRobotUmiDataConfig_Bimamual_
+    # Horizon1_Pi0Mem) — the data pipeline is identical, only the model
+    # changes. Launch with the compress training script:
+    #   XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/mem/train_pi0_mem_compress.py \
+    #     pi0_mem_compress_umi_32d_60k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322 \
+    #     --exp-name=my_experiment [--overwrite | --resume]
+    # =====================================================================
+    TrainConfig(
+        name="pi0_mem_compress_umi_32d_60k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322",
+        model=pi0_mem_compress.Pi0MemCompressConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+            num_frames=16,
+            memory_every=4,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+            # history_gate_init=-4.6,
+            #history_gate_init=0.0,
+            # Fixed-gate experiment: uncomment one of these to force the memory
+            # branch open instead of learning sigmoid(history_memory_gate_logit).
+            # history_gate_fixed=0.5,
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=20.0,
+            # siglip_remat_policy="dots_with_no_batch_dims_saveable",
+            diversity_weight=0.01,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4
+                )
+            ],
+        ),
+        # Pi0MemCompress adds HistoryResampler_0/... and per-block
+        # history_memory_gate_logit which are NOT present in pi05_base. Use
+        # the memory-aware loader so those new params fall back to the
+        # model's random init instead of failing pytree-structure validation.
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=25_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=24,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=5_000,
+    ),
+    # =====================================================================
+    # Pi0MemPF (Past-Future Temporal Bottleneck) twin of the fold-clothes
+    # Pi0MemCompress config directly above.
+    #
+    # Same dataset / schedule / batch, but:
+    #   - clips carry num_future_frames=8 future frames after the current one
+    #     (layout [oldest_past ... current, future...]; data factory must use
+    #     matching num_future_frames / future_frame_stride),
+    #   - the visual backbone is openpi.models.siglip_pf (shared UTR compresses
+    #     past -> Hmem and future -> Zpost; dual gated GTCA injection),
+    #   - a Future Latent Prior Encoder predicts Zprior from current + Hmem +
+    #     language + state, trained with prior/posterior dual-branch action
+    #     losses plus latent alignment/regularization,
+    #   - inference (sample_actions) keeps only the prior branch and needs NO
+    #     future frames.
+    # Launch:
+    #   XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/mem/train_pi0_mem_pf.py \
+    #     pi0_mem_pf_umi_32d_30k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322 \
+    #     --exp-name=my_experiment [--overwrite | --resume]
+    # =====================================================================
+    TrainConfig(
+        name="pi0_mem_pf_umi_32d_30k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322",
+        model=pi0_mem_pf.Pi0MemPFConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+            # Past side (identical to the compress twin).
+            num_frames=32,
+            frame_stride=5,
+
+            memory_every=1,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=20.0,
+            diversity_weight=0.01,
+            # Future side.
+            num_future_frames=10,
+            future_frame_stride=5,
+            future_latent_tokens=64,
+            future_gate_fixed=1.0,
+            prior_encoder_depth=2,
+
+            lambda_prior=1.0,
+            lambda_post=1.0,
+            lambda_align=1.0,
+            lambda_reg=1e-4,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                )
+            ],
+        ),
+        # PF-aware loader: falls back to init for UTR / Future* / FuturePrior /
+        # gate params, and transparently remaps HistoryResampler_0 -> UTR_0
+        # when pointed at a trained Pi0MemCompress checkpoint instead of
+        # pi05_base (recommended: reuse your trained history compressor).
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryPF(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=25_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=24,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=5_000,
+    ),
+    # =====================================================================
+    # History-required variant of the fixed-gate Pi0MemCompress run above.
+    #
+    # Goal: make the policy stay accurate when current-frame evidence is
+    # incomplete, so the clean history path has a direct reason to become useful.
+    #
+    # Added training-only mechanisms in scripts/mem/train_pi0_mem_compress.py:
+    #   - current_frame_dropout_prob: sometimes blank the current frame while
+    #     keeping history intact.
+    #   - current_frame_mask_prob: softly mask current-frame pixels.
+    #   - current_frame_corrupt_loss_weight: add a normalized second action
+    #     loss on the corrupted-current / clean-history view.
+    #
+    # Launch:
+    #   XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/mem/train_pi0_mem_compress.py \
+    #     pi0_mem_compress_umi_32d_30k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322_history_required \
+    #     --exp-name=my_experiment --overwrite
+    # =====================================================================
+    TrainConfig(
+        name="pi0_mem_compress_umi_32d_30k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322_history_required",
+        model=pi0_mem_compress.Pi0MemCompressConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+            num_frames=16,
+            memory_every=4,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=20.0,
+            diversity_weight=0.01,
+            current_frame_dropout_prob=0.25,
+            current_frame_mask_prob=0.15,
+            current_frame_corrupt_loss_weight=1.0,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                )
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=25_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=24,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=5_000,
+    ),
+    # =====================================================================
+    # Light MEM pressure variant for the fixed-gate Pi0MemCompress run.
+    #
+    # Use this when time is limited and the goal is to keep clean END100
+    # performance close to the original fixed-gate memory model while still
+    # giving the history branch a mild training signal. Compared with
+    # history_required above, this keeps clean action loss dominant:
+    #
+    #   normalized_action_loss = (clean + 0.25 * corrupt_current) / 1.25
+    #
+    # Launch:
+    #   XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/mem/train_pi0_mem_compress.py \
+    #     pi0_mem_compress_umi_32d_30k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322_history_light \
+    #     --exp-name=my_experiment --overwrite
+    # =====================================================================
+    TrainConfig(
+        name="pi0_mem_compress_umi_32d_30k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322_history_light",
+        model=pi0_mem_compress.Pi0MemCompressConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+            num_frames=16,
+            memory_every=4,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=20.0,
+            diversity_weight=0.01,
+            current_frame_dropout_prob=0.10,
+            current_frame_mask_prob=0.05,
+            current_frame_corrupt_loss_weight=0.25,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                )
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=25_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=24,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=5_000,
+    ),
+    TrainConfig(
+        name="pi0_mem_compress_umi_wbcd_history_light_v2_260623",
+        model=pi0_mem_compress.Pi0MemCompressConfig(
+            # pi05=True,
+            # action_dim=32,
+            # action_horizon=32,
+            # action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            # max_token_len=360,
+            # num_frames=8,
+            # memory_every=4,
+            # history_memory_tokens=256,
+            # history_resampler_depth=1,
+            # history_use_current_condition=True,
+            # history_gate_fixed=1.0,
+            # history_gate_lr_multiplier=20.0,
+            # diversity_weight=0.01,
+            # current_frame_dropout_prob=0.05,
+            # current_frame_mask_prob=0.05,
+            # current_frame_corrupt_loss_weight=0.25,
+
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+
+            num_frames=8,
+            memory_every=4,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=1.0,
+
+            diversity_weight=0.01,
+
+            # current_frame_index=-1,
+            # current_frame_dropout_prob=0.05,
+            # current_frame_mask_prob=0.0,
+            # current_frame_corrupt_sample_prob=0.3,
+
+
+            current_frame_index=-1,
+            # current_frame_dropout_prob=0.1,
+            # current_frame_mask_prob=0.0,
+            # current_frame_corrupt_sample_prob=0.5,
+            # current_frame_corrupt_loss_weight=0.0,
+
+
+            current_frame_corrupt_sample_prob = 1.0,
+            current_frame_dropout_prob = 0.3,
+            current_frame_mask_prob = 0.0,
+            current_frame_corrupt_loss_weight = 0.0
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            weights=[1.0, 1.0],
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_Horizon1_Pi0Mem(
+                    repo_id="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/fold_clothes_messy_demostration/horizon_cloth_folding_advantage_messy_demostration_20260408_ep85_gripper_bin",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/fold_clothes_messy_demostration/horizon_cloth_folding_advantage_messy_demostration_20260408_ep85_gripper_bin",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    num_frames=8,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_Horizon1_Pi0Mem(
+                    repo_id="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/fold_clothes_messy_demostration/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/fold_clothes_messy_demostration/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    num_frames=8,
+                    frame_stride=4,
+                )
+            ],
+        ),
+        # weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+        #     "gs://openpi-assets/checkpoints/pi05_base/params"
+        # ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_mem_compress_umi_wbcd_history_light_v2_260623/260623/59999/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=32,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=15_000,
+    ),
+
+    TrainConfig(
+        name="pi0_mem_compress_evan_shellgame_openpi_260727",
+        model=pi0_mem_compress.Pi0MemCompressConfig(
+            # pi05=True,
+            # action_dim=32,
+            # action_horizon=32,
+            # action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            # max_token_len=360,
+            # num_frames=8,
+            # memory_every=4,
+            # history_memory_tokens=256,
+            # history_resampler_depth=1,
+            # history_use_current_condition=True,
+            # history_gate_fixed=1.0,
+            # history_gate_lr_multiplier=20.0,
+            # diversity_weight=0.01,
+            # current_frame_dropout_prob=0.05,
+            # current_frame_mask_prob=0.05,
+            # current_frame_corrupt_loss_weight=0.25,
+
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+            max_token_len=256,
+
+            num_frames=32,
+            memory_every=1,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=1.0,
+
+            diversity_weight=0.01,
+
+            # current_frame_index=-1,
+            # current_frame_dropout_prob=0.05,
+            # current_frame_mask_prob=0.0,
+            # current_frame_corrupt_sample_prob=0.3,
+
+
+            current_frame_index=-1,
+            # current_frame_dropout_prob=0.1,
+            # current_frame_mask_prob=0.0,
+            # current_frame_corrupt_sample_prob=0.5,
+            # current_frame_corrupt_loss_weight=0.0,
+
+
+            current_frame_corrupt_sample_prob = 1.0,
+            current_frame_dropout_prob = 0.3,
+            current_frame_mask_prob = 0.0,
+            current_frame_corrupt_loss_weight = 0.0
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_shellgame_Pi0Mem(
+                    repo_id="/data2/hzl_workspace_for_pi_mem/robosuite/outputs/shellgame_lerobot_current_frame_action",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi_mem/robosuite/outputs/shellgame_lerobot_current_frame_action",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+                        robot_type="ARM=1 G=0 H=0",
+                    ),
+                    num_frames=32,
+                    frame_stride=5,
+                ),
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        # weight_loader=weight_loaders.CheckpointWeightLoader(
+        #     "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_mem_compress_umi_wbcd_history_light_v2_260623/260623/59999/params"
+        # ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=32,
+        fsdp_devices=6,
+        log_interval=10,
+        keep_period=15_000,
+    ),
+
+    TrainConfig(
+        name="pi0_mem_compress_evan_shellgame_openpi_joint_260727",
+        model=pi0_mem_compress.Pi0MemCompressConfig(
+            # pi05=True,
+            # action_dim=32,
+            # action_horizon=32,
+            # action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            # max_token_len=360,
+            # num_frames=8,
+            # memory_every=4,
+            # history_memory_tokens=256,
+            # history_resampler_depth=1,
+            # history_use_current_condition=True,
+            # history_gate_fixed=1.0,
+            # history_gate_lr_multiplier=20.0,
+            # diversity_weight=0.01,
+            # current_frame_dropout_prob=0.05,
+            # current_frame_mask_prob=0.05,
+            # current_frame_corrupt_loss_weight=0.25,
+
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 8 + (0.0,) * 24,
+            max_token_len=256,
+
+            num_frames=30,
+            memory_every=1,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=1.0,
+
+            diversity_weight=0.01,
+
+            # current_frame_index=-1,
+            # current_frame_dropout_prob=0.05,
+            # current_frame_mask_prob=0.0,
+            # current_frame_corrupt_sample_prob=0.3,
+
+
+            current_frame_index=-1,
+            # current_frame_dropout_prob=0.1,
+            # current_frame_mask_prob=0.0,
+            # current_frame_corrupt_sample_prob=0.5,
+            # current_frame_corrupt_loss_weight=0.0,
+
+
+            current_frame_corrupt_sample_prob = 1.0,
+            current_frame_dropout_prob = 0.3,
+            current_frame_mask_prob = 0.0,
+            current_frame_corrupt_loss_weight = 0.0
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_shellgame_Pi0Mem_Joint(
+                    repo_id="/data2/hzl_workspace_for_pi_mem/robosuite/outputs/shellgame_lerobot_absolute_joint",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi_mem/robosuite/outputs/shellgame_lerobot_absolute_joint",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 8 + (0.0,) * 24,
+                        robot_type="ARM=1 G=0 H=0",
+                    ),
+                    num_frames=30,
+                    frame_stride=2,
+                ),
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        # weight_loader=weight_loaders.CheckpointWeightLoader(
+        #     "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_mem_compress_umi_wbcd_history_light_v2_260623/260623/59999/params"
+        # ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=54,
+        num_workers=16,
+        fsdp_devices=2,
+        log_interval=10,
+        keep_period=15_000,
+        val_ratio=0.1,
+        eval_interval=1_000,
+        eval_batches=10,
+        shellgame_cup_eval=ShellgameCupEvalConfig(
+            enabled=True,
+            raw_dataset_root=(
+                "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                "shellgame_absolute_joint_dataset"
+            ),
+            robosuite_root="/data2/hzl_workspace_for_pi_mem/robosuite",
+            interval=1_000,
+            num_episodes=24,
+            batch_size=6,
+            num_sampling_steps=4,
+            sample_seed=260806,
+            selection_radius=0.06,
+        ),
+    ),
+
+    _shellgame_semantic_action_train_config,
+    _shellgame_real_wrist_stage2_train_config,
+    _shellgame_real_memory_adapt_train_config,
+
+    TrainConfig(
+        name="pi0_mem_fixed_grid_query_action_shellgame_joint_260810",
+        model=_shellgame_joint_fixed_grid_query_action_model,
+        freeze_filter=(
+            _shellgame_joint_fixed_grid_query_action_model.get_freeze_filter_action_memory_finetune()
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_shellgame_Pi0Mem_Joint(
+                    repo_id=(
+                        "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                        "shellgame_lerobot_absolute_joint"
+                    ),
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir=(
+                            "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                            "shellgame_lerobot_absolute_joint"
+                        ),
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 8 + (0.0,) * 24,
+                        robot_type="ARM=1 G=0 H=0",
+                    ),
+                    num_frames=60,
+                    frame_stride=1,
+                ),
+            ],
+        ),
+        # Warm-start the action expert and the proven action-memory reader from
+        # the successful controlled experiment.  Fixed-grid history parameters
+        # and width-dependent query input projections remain newly initialized.
+        weight_loader=pi0_mem_fixed_grid_query_action.QueryActionCheckpointLoader(
+            "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/"
+            "pi0_shellgame_three_swap_query_crossattn_pi_joint_action_260810/"
+            "query_crossattn_pi_flow_action300_b12_260810/299/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=3e-5,
+            decay_steps=20_000,
+            decay_lr=3e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=20_000,
+        batch_size=12,
+        num_workers=12,
+        fsdp_devices=6,
+        log_interval=10,
+        save_interval=1_000,
+        keep_period=5_000,
+        val_ratio=0.1,
+        eval_interval=500,
+        eval_batches=20,
+        wandb_enabled=False,
+        shellgame_cup_eval=ShellgameCupEvalConfig(
+            enabled=True,
+            raw_dataset_root=(
+                "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                "shellgame_absolute_joint_dataset"
+            ),
+            robosuite_root="/data2/hzl_workspace_for_pi_mem/robosuite",
+            interval=500,
+            num_episodes=60,
+            batch_size=6,
+            num_sampling_steps=4,
+            sample_seed=260810,
+            selection_radius=0.06,
+        ),
+    ),
+
+    # Decision-focused continuation of the formal query-action run.  The
+    # dedicated entry point oversamples frames 59..70 to 80% while retaining
+    # all later grasp rows at 20%; validation remains uniformly post-swap.
+    TrainConfig(
+        name="pi0_mem_fixed_grid_query_action_decision_weighted_shellgame_joint_260810",
+        model=_shellgame_joint_fixed_grid_query_action_model,
+        freeze_filter=(
+            _shellgame_joint_fixed_grid_query_action_model.get_freeze_filter_action_memory_finetune()
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_shellgame_Pi0Mem_Joint(
+                    repo_id=(
+                        "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                        "shellgame_lerobot_absolute_joint"
+                    ),
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir=(
+                            "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                            "shellgame_lerobot_absolute_joint"
+                        ),
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 8 + (0.0,) * 24,
+                        robot_type="ARM=1 G=0 H=0",
+                    ),
+                    num_frames=60,
+                    frame_stride=1,
+                ),
+            ],
+        ),
+        weight_loader=pi0_mem_fixed_grid_query_action.QueryActionCheckpointLoader(
+            "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/"
+            "pi0_mem_fixed_grid_query_action_shellgame_joint_260810/"
+            "formal_postswap_60f_s1_query16_20k_6gpu_260810_v2/2000/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=100,
+            peak_lr=3e-5,
+            decay_steps=5_000,
+            decay_lr=3e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=5_000,
+        batch_size=12,
+        num_workers=12,
+        fsdp_devices=6,
+        log_interval=10,
+        save_interval=500,
+        keep_period=1_000,
+        val_ratio=0.1,
+        eval_interval=250,
+        eval_batches=20,
+        wandb_enabled=False,
+        shellgame_cup_eval=ShellgameCupEvalConfig(
+            enabled=True,
+            raw_dataset_root=(
+                "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                "shellgame_absolute_joint_dataset"
+            ),
+            robosuite_root="/data2/hzl_workspace_for_pi_mem/robosuite",
+            interval=250,
+            num_episodes=60,
+            batch_size=6,
+            num_sampling_steps=4,
+            sample_seed=260810,
+            selection_radius=0.06,
+        ),
+    ),
+
+    # Controlled causal test: use only target-decision rows and freeze the
+    # complete Pi0 action expert.  Any action-loss improvement must pass
+    # through the fixed-grid history encoder and direct memory interface.
+    TrainConfig(
+        name="pi0_mem_fixed_grid_query_action_memory_only_shellgame_joint_260810",
+        model=_shellgame_joint_fixed_grid_query_action_model,
+        freeze_filter=(
+            _shellgame_joint_fixed_grid_query_action_model.get_freeze_filter_memory_path_only()
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_shellgame_Pi0Mem_Joint(
+                    repo_id=(
+                        "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                        "shellgame_lerobot_absolute_joint"
+                    ),
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir=(
+                            "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                            "shellgame_lerobot_absolute_joint"
+                        ),
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 8 + (0.0,) * 24,
+                        robot_type="ARM=1 G=0 H=0",
+                    ),
+                    num_frames=60,
+                    frame_stride=1,
+                ),
+            ],
+        ),
+        weight_loader=pi0_mem_fixed_grid_query_action.QueryActionCheckpointLoader(
+            "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/"
+            "pi0_mem_fixed_grid_query_action_decision_weighted_shellgame_joint_260810/"
+            "decision80_postswap_from2000_5k_6gpu_260810/1000/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=100,
+            peak_lr=3e-5,
+            decay_steps=2_000,
+            decay_lr=3e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=2_000,
+        batch_size=12,
+        num_workers=12,
+        fsdp_devices=6,
+        log_interval=10,
+        save_interval=500,
+        keep_period=1_000,
+        val_ratio=0.1,
+        eval_interval=250,
+        eval_batches=20,
+        wandb_enabled=False,
+        shellgame_cup_eval=ShellgameCupEvalConfig(
+            enabled=True,
+            raw_dataset_root=(
+                "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                "shellgame_absolute_joint_dataset"
+            ),
+            robosuite_root="/data2/hzl_workspace_for_pi_mem/robosuite",
+            interval=250,
+            num_episodes=60,
+            batch_size=6,
+            num_sampling_steps=4,
+            sample_seed=260810,
+            selection_radius=0.06,
+        ),
+    ),
+
+    # Diagnostic only: can the compressed memory learn the final ball slot
+    # when directly supervised? This is classification-only and does not
+    # produce a policy checkpoint intended for deployment.
+    TrainConfig(
+        name="pi0_mem_compress_shellgame_joint_history_classifier_probe_260807",
+        model=_shellgame_history_classifier_probe_model,
+        freeze_filter=_shellgame_history_classifier_probe_model.get_freeze_filter_history_classifier_probe(),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_shellgame_Pi0Mem_Joint(
+                    repo_id=(
+                        "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                        "shellgame_lerobot_absolute_joint"
+                    ),
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir=(
+                            "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                            "shellgame_lerobot_absolute_joint"
+                        ),
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 8 + (0.0,) * 24,
+                        robot_type="ARM=1 G=0 H=0",
+                    ),
+                    num_frames=61,
+                    frame_stride=1,
+                ),
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/"
+            "pi0_mem_compress_evan_shellgame_openpi_joint_260727/"
+            "my_experiment_30f_s2_6gpu/23000/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=100,
+            peak_lr=1e-5,
+            decay_steps=2_000,
+            decay_lr=1e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=2_000,
+        batch_size=72,
+        num_workers=16,
+        fsdp_devices=6,
+        log_interval=10,
+        save_interval=500,
+        keep_period=500,
+        val_ratio=0.1,
+        eval_interval=200,
+        # Five batches cover 360 held-out samples and keep the 61-frame
+        # diagnostic evaluation short enough to monitor during training.
+        eval_batches=5,
+        shellgame_memory_classifier=ShellgameMemoryClassifierConfig(
+            enabled=True,
+            episodes_metadata_path=(
+                "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                "shellgame_lerobot_absolute_joint/meta/episodes.jsonl"
+            ),
+            label_key="final_ball_cup",
+            classes=("left", "middle", "right"),
+            min_frame_index=60,
+            max_frame_index=60,
+            loss_weight=1.0,
+            action_loss_weight=0.0,
+        ),
+    ),
+
+    # Memorization sanity check for the diagnostic history classifier. It uses
+    # the exact same 30 examples per class for training and validation; success
+    # therefore means optimization/capacity works, not that the model generalizes.
+    TrainConfig(
+        name="pi0_mem_compress_shellgame_joint_history_classifier_overfit_260807",
+        model=_shellgame_history_classifier_probe_model,
+        freeze_filter=_shellgame_history_classifier_probe_model.get_freeze_filter_history_classifier_probe(),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_shellgame_Pi0Mem_Joint(
+                    repo_id=(
+                        "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                        "shellgame_lerobot_absolute_joint"
+                    ),
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir=(
+                            "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                            "shellgame_lerobot_absolute_joint"
+                        ),
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 8 + (0.0,) * 24,
+                        robot_type="ARM=1 G=0 H=0",
+                    ),
+                    num_frames=61,
+                    frame_stride=1,
+                ),
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/"
+            "pi0_mem_compress_evan_shellgame_openpi_joint_260727/"
+            "my_experiment_30f_s2_6gpu/23000/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=20,
+            peak_lr=1e-5,
+            decay_steps=500,
+            decay_lr=1e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=10.0),
+        ema_decay=None,
+        num_train_steps=500,
+        batch_size=30,
+        num_workers=8,
+        fsdp_devices=6,
+        log_interval=10,
+        save_interval=250,
+        keep_period=250,
+        # Kept positive to enable the validation path; overfit mode replaces
+        # the ordinary split with the exact same balanced 90-sample subset.
+        val_ratio=0.1,
+        eval_interval=50,
+        eval_batches=3,
+        shellgame_memory_classifier=ShellgameMemoryClassifierConfig(
+            enabled=True,
+            episodes_metadata_path=(
+                "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                "shellgame_lerobot_absolute_joint/meta/episodes.jsonl"
+            ),
+            label_key="final_ball_cup",
+            classes=("left", "middle", "right"),
+            min_frame_index=60,
+            max_frame_index=60,
+            loss_weight=1.0,
+            action_loss_weight=0.0,
+            overfit_samples_per_class=30,
+            overfit_same_samples_for_validation=True,
+            disable_train_augmentation=True,
+        ),
+    ),
+
+    # Isolated post-compression-Transformer capacity test.  It intentionally
+    # uses the same balanced 90 episodes as the preceding overfit probe, but
+    # does not change the original Pi0MemCompress implementation or config.
+    TrainConfig(
+        name="pi0_mem_post_transformer_shellgame_joint_classifier_overfit_260807",
+        model=_shellgame_history_post_transformer_probe_model,
+        freeze_filter=(
+            _shellgame_history_post_transformer_probe_model.get_freeze_filter_history_classifier_probe()
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_shellgame_Pi0Mem_Joint(
+                    repo_id=(
+                        "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                        "shellgame_lerobot_absolute_joint"
+                    ),
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir=(
+                            "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                            "shellgame_lerobot_absolute_joint"
+                        ),
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 8 + (0.0,) * 24,
+                        robot_type="ARM=1 G=0 H=0",
+                    ),
+                    num_frames=61,
+                    frame_stride=1,
+                ),
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/"
+            "pi0_mem_compress_evan_shellgame_openpi_joint_260727/"
+            "my_experiment_30f_s2_6gpu/23000/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=20,
+            peak_lr=1e-5,
+            decay_steps=500,
+            decay_lr=1e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=10.0),
+        ema_decay=None,
+        num_train_steps=500,
+        # Joint sequence length is 512, so use one sample per each of six GPUs.
+        batch_size=6,
+        num_workers=8,
+        fsdp_devices=6,
+        log_interval=10,
+        save_interval=250,
+        keep_period=250,
+        val_ratio=0.1,
+        eval_interval=50,
+        eval_batches=15,
+        shellgame_memory_classifier=ShellgameMemoryClassifierConfig(
+            enabled=True,
+            episodes_metadata_path=(
+                "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                "shellgame_lerobot_absolute_joint/meta/episodes.jsonl"
+            ),
+            label_key="final_ball_cup",
+            classes=("left", "middle", "right"),
+            min_frame_index=60,
+            max_frame_index=60,
+            loss_weight=1.0,
+            action_loss_weight=0.0,
+            overfit_samples_per_class=30,
+            overfit_same_samples_for_validation=True,
+            disable_train_augmentation=True,
+        ),
+    ),
+
+    # Clean, memory-free pi0.5 baseline for ShellGame. This intentionally uses
+    # only the current wrist and third-person images: it is the control against
+    # which recurrent/semantic-memory policies should be compared.
+    TrainConfig(
+        name="pi05_shellgame_baseline_v1",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            max_token_len=256,
+            # The dataset contains raw robosuite OSC actions (6 arm + gripper).
+            # Keep the 32-D pi0.5 head for checkpoint compatibility, but never
+            # train the 25 zero-padding dimensions.
+            action_loss_mask=(1.0,) * 7 + (0.0,) * 25,
+        ),
+        data=LeRobotUmiDataConfig_shellgame_Base_Inference(
+            repo_id=(
+                "/data2/hzl_workspace_for_pi_mem/openpi-umi/"
+                "data/shellgame_static_phase_instruction_dataset2"
+            ),
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir=(
+                    "/data2/hzl_workspace_for_pi_mem/openpi-umi/"
+                    "data/shellgame_static_phase_instruction_dataset2"
+                ),
+            ),
+            base_config=UmiDataConfig(
+                action_loss_mask=(1.0,) * 7 + (0.0,) * 25,
+                robot_type="ARM=1 G=0 H=0",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=32,
+        num_workers=16,
+        fsdp_devices=2,
+        log_interval=10,
+        save_interval=1_000,
+        # A full checkpoint is about 42 GiB on this checkout. Retain only the
+        # latest one so the baseline remains safe on the shared data volume.
+        keep_period=None,
+        wandb_enabled=False,
+    ),
+
+    TrainConfig(
+        name="pi0_base_evan_shellgame_openpi_260727",
+        model=pi0_config.Pi0Config(
+            # pi05=True,
+            # action_dim=32,
+            # action_horizon=32,
+            # action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            # max_token_len=360,
+            # num_frames=8,
+            # memory_every=4,
+            # history_memory_tokens=256,
+            # history_resampler_depth=1,
+            # history_use_current_condition=True,
+            # history_gate_fixed=1.0,
+            # history_gate_lr_multiplier=20.0,
+            # diversity_weight=0.01,
+            # current_frame_dropout_prob=0.05,
+            # current_frame_mask_prob=0.05,
+            # current_frame_corrupt_loss_weight=0.25,
+
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+            max_token_len=256,
+
+            # num_frames=32,
+            # memory_every=1,
+            # history_memory_tokens=256,
+            # history_resampler_depth=1,
+            # history_use_current_condition=True,
+
+            # history_gate_fixed=1.0,
+            # history_gate_lr_multiplier=1.0,
+
+            # diversity_weight=0.01,
+
+            # current_frame_index=-1,
+            # current_frame_dropout_prob=0.05,
+            # current_frame_mask_prob=0.0,
+            # current_frame_corrupt_sample_prob=0.3,
+
+
+            # current_frame_index=-1,
+            # current_frame_dropout_prob=0.1,
+            # current_frame_mask_prob=0.0,
+            # current_frame_corrupt_sample_prob=0.5,
+            # current_frame_corrupt_loss_weight=0.0,
+
+
+            # current_frame_corrupt_sample_prob = 1.0,
+            # current_frame_dropout_prob = 0.3,
+            # current_frame_mask_prob = 0.0,
+            # current_frame_corrupt_loss_weight = 0.0
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_shellgame_Base(
+                    repo_id="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/shellgame_static_phase_instruction_dataset",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/shellgame_static_phase_instruction_dataset",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+                        robot_type="ARM=1 G=0 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_shellgame_Base(
+                    repo_id="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/shellgame_static_phase_instruction_dataset2",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/shellgame_static_phase_instruction_dataset2",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+                        robot_type="ARM=1 G=0 H=0",
+                    ),
+                ),
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        # weight_loader=weight_loaders.CheckpointWeightLoader(
+        #     "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_mem_compress_umi_wbcd_history_light_v2_260623/260623/59999/params"
+        # ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=32,
+        fsdp_devices=6,
+        log_interval=10,
+        keep_period=15_000,
+    ),
+
+    TrainConfig(
+        name="pi0_mem_compress_evan_shellgame_openpi_260727_infer",
+        model=pi0_mem_compress.Pi0MemCompressConfig(
+            # pi05=True,
+            # action_dim=32,
+            # action_horizon=32,
+            # action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            # max_token_len=360,
+            # num_frames=8,
+            # memory_every=4,
+            # history_memory_tokens=256,
+            # history_resampler_depth=1,
+            # history_use_current_condition=True,
+            # history_gate_fixed=1.0,
+            # history_gate_lr_multiplier=20.0,
+            # diversity_weight=0.01,
+            # current_frame_dropout_prob=0.05,
+            # current_frame_mask_prob=0.05,
+            # current_frame_corrupt_loss_weight=0.25,
+
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+            max_token_len=256,
+
+            num_frames=32,
+            memory_every=1,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=1.0,
+
+            diversity_weight=0.01,
+
+            # current_frame_index=-1,
+            # current_frame_dropout_prob=0.05,
+            # current_frame_mask_prob=0.0,
+            # current_frame_corrupt_sample_prob=0.3,
+
+
+            current_frame_index=-1,
+            # current_frame_dropout_prob=0.1,
+            # current_frame_mask_prob=0.0,
+            # current_frame_corrupt_sample_prob=0.5,
+            # current_frame_corrupt_loss_weight=0.0,
+
+
+            current_frame_corrupt_sample_prob = 0.0,
+            current_frame_dropout_prob = 0.0,
+            current_frame_mask_prob = 0.0,
+            current_frame_corrupt_loss_weight = 0.0
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_shellgame_Pi0Mem_Inference(
+                    repo_id="/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_mem_compress_evan_shellgame_openpi_260727/my_experiment/8000_cp",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_mem_compress_evan_shellgame_openpi_260727/my_experiment/8000_cp",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+                        robot_type="ARM=1 G=0 H=0",
+                    ),
+                    num_frames=32,
+                    frame_stride=5,
+                ),
+            ],
+        ),
+    ),
+
+    TrainConfig(
+        name="pi0_base_evan_shellgame_openpi_260727_infer",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+            max_token_len=256,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_shellgame_Base_Inference(
+                    repo_id="/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_base_evan_shellgame_openpi_260727/my_experiment/15000",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_base_evan_shellgame_openpi_260727/my_experiment/15000/assets",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+                        robot_type="ARM=1 G=0 H=0",
+                    ),
+                ),
+            ],
+        ),
+    ),
+
+    # PF-safe v1: preserve the trained Pi0.5/history policy and adapt only the
+    # isolated temporal bottleneck. Run with train_pi0_mem_pf_safe.py; the
+    # original PF config and trainer above/below remain unchanged.
+    TrainConfig(
+        name="pi0_mem_pf_safe_evan_shellgame_joint_260806",
+        model=_pi0_mem_pf_safe_shellgame_joint_model,
+        freeze_filter=_pi0_mem_pf_safe_shellgame_joint_model.get_freeze_filter_temporal_only(),
+        data=MultiDataConfigFactory(
+            # FuturePrior/Ps is initialized for model.action_dim inputs. The
+            # real joint state occupies the first 8 dimensions; pad it to 32,
+            # not the legacy multi-dataset width of 96.
+            state_pad_dim=32,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_shellgame_Pi0Mem_Joint(
+                    repo_id=(
+                        "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                        "shellgame_lerobot_absolute_joint"
+                    ),
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir=(
+                            "/data2/hzl_workspace_for_pi_mem/robosuite/outputs/"
+                            "shellgame_lerobot_absolute_joint"
+                        ),
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 8 + (0.0,) * 24,
+                        robot_type="ARM=1 G=0 H=0",
+                    ),
+                    num_frames=30,
+                    frame_stride=2,
+                    num_future_frames=10,
+                    future_frame_stride=2,
+                ),
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryPF(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=30_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=16,
+        num_workers=16,
+        fsdp_devices=1,
+        log_interval=10,
+        keep_period=15_000,
+    ),
+
+    TrainConfig(
+        name="pi0_mem_pf_evan_shellgame_openpi_umi_success_pf_260709",
+        model=pi0_mem_pf.Pi0MemPFConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 7 + (0.0,) * 25,
+            max_token_len=512,
+
+            num_frames=12,
+            frame_stride=5,
+            memory_every=1,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=1.0,
+
+            diversity_weight=0.01,
+
+            current_frame_index=-1,
+            # current_frame_corrupt_sample_prob=1.0,
+            # current_frame_dropout_prob=0.3,
+            current_frame_corrupt_sample_prob=0.0,
+            current_frame_dropout_prob=0.0,
+            current_frame_mask_prob=0.0,
+            current_frame_corrupt_loss_weight=0.0,
+
+            num_future_frames=12,
+            future_frame_stride=5,
+            future_latent_tokens=256,
+            future_gate_fixed=1.0,
+            prior_encoder_depth=2,
+            lambda_prior=1.0,
+            lambda_post=1.0,
+            lambda_align=1.0,
+            lambda_reg=1e-4,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=32,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_shellgame_Pi0Mem(
+                    repo_id="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/shellgame_success_dataset_follow",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/shellgame_success_dataset_follow",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 7 + (0.0,) * 25,
+                        robot_type="ARM=1 G=0 H=0",
+                    ),
+                ),
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryPF(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=20_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=32,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=15_000,
+    ),
+    TrainConfig(
+        name="pi0_mem_pf_evan_shellgame_openpi_umi_success_pf_260709_infer",
+        # Keep the complete PF architecture so trained checkpoints restore
+        # exactly. sample_actions uses only the prior branch at inference.
+        model=pi0_mem_pf.Pi0MemPFConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+            max_token_len=512,
+
+            num_frames=20,
+            frame_stride=5,
+            memory_every=1,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=1.0,
+
+            diversity_weight=0.01,
+
+            current_frame_index=-1,
+            current_frame_corrupt_sample_prob=0.0,
+            current_frame_dropout_prob=0.0,
+            current_frame_mask_prob=0.0,
+            current_frame_corrupt_loss_weight=0.0,
+
+            num_future_frames=20,
+            future_frame_stride=5,
+            future_latent_tokens=64,
+            future_gate_fixed=1.0,
+            prior_encoder_depth=2,
+            lambda_prior=1.0,
+            lambda_post=1.0,
+            lambda_align=1.0,
+            lambda_reg=1e-4,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=32,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_shellgame_Pi0Mem_Inference(
+                    repo_id="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/shellgame_openpi_umi_success_follow_fps20",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/shellgame_openpi_umi_success_follow_fps20",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+                        robot_type="ARM=1 G=0 H=0",
+                    ),
+                    # Inference has no access to future observations.
+                    num_frames=20,
+                    frame_stride=5,
+                    num_future_frames=0,
+                    future_frame_stride=5,
+                ),
+            ],
+        ),
+    ),
+
+    # =====================================================================
+    TrainConfig(
+        name="pi0_mem_compress_umi_wbcd_history_light_v1_260605",
+        model=pi0_mem_compress.Pi0MemCompressConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=360,
+            num_frames=8,
+            memory_every=4,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=20.0,
+            diversity_weight=0.01,
+            current_frame_dropout_prob=0.05,
+            current_frame_mask_prob=0.05,
+            current_frame_corrupt_loss_weight=0.25,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[0.1, 0.1, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3, 0.2, 0.6, 0.6],
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=8,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=8,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=8,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=8,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=8,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=8,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=8,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=8,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=8,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=8,
+                    frame_stride=4,
+                ),
+                LeRobotUmiDataConfig_Bimamual_WBCD_4Views_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                    num_frames=8,
+                    frame_stride=4,
+                )
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "/data1/hzl_workspace_for_pi/openpi-umi/checkpoints/260602/69999/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=60_000,
+        batch_size=72,
+        num_workers=24,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=30_000,
+    ),
+
+    # =====================================================================
+    # Pure current-frame baseline for the Pi0MemCompress experiment above.
+    #
+    # Motivation: ablation diagnostics on the fixed-gate memory run showed that
+    # the history branch changes predictions, but the largest changes tend to
+    # *increase* GT MSE. This config keeps the exact same UMI data, action
+    # layout, optimizer, schedule, batch, and training script, while disabling
+    # the compressed-history path:
+    #
+    #   - memory_every=0: no Transformer block reads history memory.
+    #   - history_memory_tokens=0: no HistoryResampler is instantiated.
+    #   - diversity_weight=0.0: no auxiliary memory-token loss.
+    #
+    # The visual encoder still receives the same video tensor shape from the
+    # Pi0Mem-aware data loader, but only the configured current frame contributes
+    # to the policy. Use this as the fair "no-history" baseline against the
+    # fixed-gate compressed-memory checkpoint.
+    #
+    # Launch:
+    #   XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/mem/train_pi0_mem_compress.py \
+    #     pi0_mem_compress_umi_32d_30k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322_current_only \
+    #     --exp-name=my_experiment --overwrite
+    # =====================================================================
+    TrainConfig(
+        name="pi0_mem_compress_umi_32d_30k_batch_72_v4_bimanual_wrist_only_horizon1_fold_clothes_260322_current_only",
+        model=pi0_mem_compress.Pi0MemCompressConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+            num_frames=16,
+            memory_every=0,
+            history_memory_tokens=0,
+            history_resampler_depth=1,
+            history_use_current_condition=False,
+            history_gate_fixed=0.0,
+            diversity_weight=0.0,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_Horizon1_Pi0Mem(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/fold_clothes_action_finetuning/horizon_cloth_folding_test_20260427_120313_to_20260427_124451_ep51",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=4,
+                )
+            ],
+        ),
+        # Still use the memory-compress-aware loader because the target visual
+        # encoder creates history gate params even when memory_every=0. Missing
+        # keys from pi05_base are therefore expected and should keep random init.
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=25_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=24,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=5_000,
     ),
     TrainConfig(
         name="pi05_umi_wbcd_v3_260522_h32",
@@ -6221,7 +9809,839 @@ _CONFIGS = [
     #
     # RoboArena configs.
     #
+    # Public recipe names retained from the earlier multi_dataset/value_infer branches.
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_headview_deskheight_horizon2_compute_norm_stats",
+        model=pi0_discrete.Pi0DiscreteConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+            enable_discrete_head=True,
+            fast_model_tokenizer_kwargs={
+                "fast_tokenizer_path": "/root/fast_tokenizer"
+            },
+        ),
+        data=LeRobotUmiDataConfig_Bimamual_HeadView_DeskHeight_ImageHorizon2_Hybrid(
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_with_desk_height_20260216_all_clean",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_with_desk_height_20260216_all_clean",
+            ),
+            base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+        ),
+        batch_size=512,
+        num_workers=8,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=10000,
+    ),
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_bimanual_deskheight_horizon1_compute_norm_stats",
+        model=pi0_discrete.Pi0DiscreteConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+            enable_discrete_head=True,
+            fast_model_tokenizer_kwargs={
+                "fast_tokenizer_path": "/root/fast_tokenizer"
+            },
+        ),
+        data=LeRobotUmiDataConfig_Bimamual_DeskHeight_ImageHorizon1_Hybrid(
+            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_merge_fold_clothes_mason_ray_cyrus_24_07_exclude_25_all_with_desk_height_clean",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_merge_fold_clothes_mason_ray_cyrus_24_07_exclude_25_all_with_desk_height_clean",
+            ),
+            base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+        ),
+        batch_size=512,
+        num_workers=8,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=10000,
+    ),
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_messy_folding_gripper_binary_260413",
+        model=pi0_gripper.Pi0GripperConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+            gripper_binary_indices=(9, 19),
+            gripper_binary_threshold=0.02,
+            gripper_binary_loss_weight=0.5,
+            gripper_binary_close_value=0.0,
+            gripper_binary_open_value=0.085,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
+            weights=[1.0, 1.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
+            datasets=[
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/cloth_folding_hitl_replay_buffer_0407_gripper_bin",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/cloth_folding_hitl_replay_buffer_0407_gripper_bin",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260408_ep85_gripper_bin",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260408_ep85_gripper_bin",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
+                    repo_id="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/root/openpi-umi/data/horizon_cloth_folding_advantage_messy_demostration_20260409_ep83_gripper_bin",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=1 H=0",
+                    ),
+                ),
+            ]
+        ),
+        # 从标准 pi05 checkpoint 初始化时，新增的 gripper_binary_head 会保留随机初始化；
+        # 后续训练保存出的 checkpoint 会自动包含这个 head。
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithGripperHead(
+            "/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_horizon_folding_260322/my_experiment_v2/59999/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=60_000,
+        batch_size=72,
+        num_workers=8,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=30000,
+    ),
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_infer_v2",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=LeRobotUmiDataConfigPadded_V4_Inference(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_merge_20251216",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_merge_20251216",
+            ),
+            base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+            prompt="pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/29999_merge_20251216/params"),
+    ),
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_bimanual_infer_v2",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+        ),
+        data=LeRobotUmiDataConfigPadded_V4_Bimanual_Inference(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_bimanual_v1",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_bimanual_v1",
+            ),
+            base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=())
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_bimanual_v1/params"),
+    ),
+    TrainConfig(
+        name="pi05_umi_infer",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+            max_token_len=256,
+        ),
+        data=LeRobotUmiDataConfig_Inference(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/79999_multi_task_20260226",
+            assets=AssetsConfig(
+                asset_id="v73_merge",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/79999_multi_task_20260226/assets",
+            ),
+            base_config=UmiDataConfig(robot_type="ARM=1 G=0 H=0",),
+            prompt="pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/79999_multi_task_20260226/params"),
+    ),
+    TrainConfig(
+        name="pi05_umi_bimanual_infer",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+        ),
+        data=LeRobotUmiDataConfig_Bimanual_Inference(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/33000_fold_clothes_clean_data_all_20260311",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/33000_fold_clothes_clean_data_all_20260311/assets",
+            ),
+            base_config=UmiDataConfig(robot_type="ARM=2 G=0 H=0",),
+            prompt="fold the clothes",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/33000_fold_clothes_clean_data_all_20260311/params"),
+    ),
+    TrainConfig(
+        name="pi05_umi_bimanual_infer_v2",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+        ),
+        data=LeRobotUmiDataConfig_Bimanual_Inference_v2(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/38000_fold_clothes_clean_data_all_20260318",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/38000_fold_clothes_clean_data_all_20260318/assets",
+            ),
+            base_config=UmiDataConfig(robot_type="ARM=2 G=0 H=0",),
+            prompt="fold the clothes",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/38000_fold_clothes_clean_data_all_20260318/params"),
+    ),
+    TrainConfig(
+        name="pi05_umi_bimanual_infer_with_depth_38000",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+        ),
+        data=LeRobotUmiDataConfig_Bimanual_Inference_With_Depth(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/38000_fold_clothes_clean_data_all_20260318",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/38000_fold_clothes_clean_data_all_20260318/assets",
+            ),
+            base_config=UmiDataConfig(robot_type="ARM=2 G=1 H=0",),
+            prompt="fold the clothes",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/38000_fold_clothes_clean_data_all_20260318/params"),
+    ),
+    TrainConfig(
+        name="pi05_umi_bimanual_infer_with_depth",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+        ),
+        data=LeRobotUmiDataConfig_Bimanual_Inference_With_Depth(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/79999_fold_clothes_depth_20260319",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/79999_fold_clothes_depth_20260319/assets",
+            ),
+            base_config=UmiDataConfig(robot_type="ARM=2 G=1 H=0",),
+            prompt="fold the clothes",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/79999_fold_clothes_depth_20260319/params"),
+    ),
+    TrainConfig(
+        name="pi05_umi_bimanual_infer_with_depth_horizon",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+        ),
+        data=LeRobotUmiDataConfig_Bimanual_Inference_With_Depth(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_horizon_folding_20260327",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_horizon_folding_20260327/assets",
+            ),
+            base_config=UmiDataConfig(robot_type="ARM=2 G=1 H=0",),
+            prompt="fold the clothes",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_horizon_folding_20260327/params"),
+    ),
+    TrainConfig(
+        name="pi05_umi_bimanual_infer_with_depth_messy",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+        ),
+        data=LeRobotUmiDataConfig_Bimanual_Inference_With_Depth(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_messy_folding_260410",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_messy_folding_260410/assets",
+            ),
+            base_config=UmiDataConfig(robot_type="ARM=2 G=1 H=0",),
+            prompt="fold the clothes",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_messy_folding_260410/params"),
+    ),
+    TrainConfig(
+        name="pi05_umi_bimanual_infer_with_depth_gripper_binary",
+        model=pi0_gripper.Pi0GripperConfig(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+            gripper_binary_indices=(9, 19),
+            gripper_binary_threshold=0.02,
+            gripper_binary_loss_weight=0.5,
+            gripper_binary_close_value=0.0,
+            gripper_binary_open_value=0.085,
+        ),
+         data=LeRobotUmiDataConfig_Bimanual_Inference_With_Depth(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_messy_folding_260409",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_messy_folding_260409/assets",
+            ),
+            base_config=UmiDataConfig(robot_type="ARM=2 G=1 H=0",),
+            prompt="fold the clothes",
+        ),
+        # 从标准 pi05 checkpoint 初始化时，新增的 gripper_binary_head 会保留随机初始化；
+        # 后续训练保存出的 checkpoint 会自动包含这个 head。
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_horizon_folding_260322/my_experiment_v2/59999/params"
+        )
+    ),
+    TrainConfig(
+        name="pi05_umi_bimanual_infer_with_depth_ray",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+        ),
+        data=LeRobotUmiDataConfig_Bimanual_Inference_With_Depth_Ray(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_messy_folding_260409",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_messy_folding_260409/assets",
+            ),
+            base_config=UmiDataConfig(robot_type="ARM=2 G=1 H=0",),
+            prompt="fold the clothes",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/59999_messy_folding_260409/params"),
+    ),
+    TrainConfig(
+        name="pi05_umi_bimanual_infe_no_robot_type",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=512,
+        ),
+        data=LeRobotUmiDataConfig_Bimanual_Inference(
+            repo_id="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/79999_v4_bimanual_20260111",
+            assets=AssetsConfig(
+                asset_id=".",
+                assets_dir="/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/79999_v4_bimanual_20260111/assets",
+            ),
+            base_config=UmiDataConfig(robot_type=None,),
+            prompt="fold the clothes",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/media/admin123/E/hzl_workspace_for_pi/openpi-umi/checkpoints/79999_v4_bimanual_20260111/params"),
+    ),
     *roboarena_config.get_roboarena_configs(),
+
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_elec_meta",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=32,
+            # 每帧采样权重：[旧数据, 新数据]；按帧数补偿后，两个数据集期望各占 50%。
+            weights=[1.0, 20.0, 50.0],
+            datasets=[
+                LeRobotUmiDataConfigPadded_V4(
+                    repo_id="/data2/hzl_workspace_for_pi/openpi-umi/data/merged_pick_elec_meta_lerobot",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi/openpi-umi/data/merged_pick_elec_meta_lerobot",
+                    ),
+                    base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+                ),
+                LeRobotUmiDataConfigPadded_V4_ImageHorizon1(
+                    repo_id="/data2/hzl_workspace_for_pi/openpi-umi/data/collect_demo_zmq_10_13_2",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi/openpi-umi/data/collect_demo_zmq_10_13_2",
+                    ),
+                    base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+                ),
+                LeRobotUmiDataConfigPadded_V4_ImageHorizon1(
+                    repo_id="/data2/hzl_workspace_for_pi/openpi-umi/data/collect_demo_zmq_10_14",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi/openpi-umi/data/collect_demo_zmq_10_14",
+                    ),
+                    base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+                ),
+            ]
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4_elec_meta/my_experiment/59999/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=3e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=60_000,
+        batch_size=72,
+        num_workers=8,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=30000,
+    ),
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_elec_meta_uot",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=32,
+            # 每帧采样权重：[旧数据, 新数据]；按帧数补偿后，两个数据集期望各占 50%。
+            weights=[1.0, 20.0, 50.0],
+            datasets=[
+                LeRobotUmiDataConfigPadded_V4(
+                    repo_id="/data2/hzl_workspace_for_pi/openpi-umi/data/merged_pick_elec_meta_lerobot",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi/openpi-umi/data/merged_pick_elec_meta_lerobot",
+                    ),
+                    base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+                ),
+                LeRobotUmiDataConfigPadded_V4_ImageHorizon1(
+                    repo_id="/data2/hzl_workspace_for_pi/openpi-umi/data/collect_demo_zmq_10_13_2",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi/openpi-umi/data/collect_demo_zmq_10_13_2",
+                    ),
+                    base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+                ),
+                LeRobotUmiDataConfigPadded_V4_ImageHorizon1(
+                    repo_id="/data2/hzl_workspace_for_pi/openpi-umi/data/collect_demo_zmq_10_14",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi/openpi-umi/data/collect_demo_zmq_10_14",
+                    ),
+                    base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+                ),
+            ]
+        ),
+        # === [论文 Ours/UOT] 前两个场景作为辅助 source，第三个场景作为 target；BC 总比例为 90%:10%。 ===
+        uot=UOTConfig(
+            enabled=True,
+            pair_info_path="/data2/hzl_workspace_for_pi/openpi-umi-robustness/artifacts/dtw/elec_meta_pair_info.json.gz",
+            target_dataset_index=2,
+            bc_dataset_probabilities=(0.45, 0.45, 0.10),
+            ot_batch_size=128,
+            alignment_weight=0.1,
+            entropy_reg=5e-4,
+            marginal_relaxation=1e-3,
+            temporal_window=10,
+        ),
+        # === [论文 Ours/UOT] 使用服务器上实际存在的 59999 步 π0.5 权重作为联合训练初始化。 ===
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4_elec_meta/my_experiment_20261014/59999/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=3e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=60_000,
+        batch_size=72,
+        num_workers=8,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=30000,
+    ),
+    TrainConfig(
+        name="pi05_umi_robustness",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=360,
+        ),
+        # === [论文 Ours/UOT] 直接展开数据集与采样权重，便于在本训练配置内独立核对和修改。 ===
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[0.1, 0.1, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3, 0.2, 0.3, 0.3, 0.3, 0.3, 0.3, 1.0, 3.0, 5.0],
+            datasets=[
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                # target 数据集：UOTConfig.target_dataset_index 必须保持为 9。
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0802_wbcd_hitl_with_wrist_hefei",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0802_wbcd_hitl_with_wrist_hefei",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_afternoon",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_afternoon",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_evening",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_evening",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+            ],
+        ),
+        uot=UOTConfig(
+            enabled=True,
+            pair_info_path="/data2/hzl_workspace_for_pi/openpi-umi-robustness/artifacts/dtw/pi05_umi_robustness_pair_info.json.gz",
+            target_dataset_index=9,
+            # 与上面的 MultiDataConfigFactory.weights 保持一一对应；loader 会自动归一化。
+            bc_dataset_probabilities=(
+                0.1, 0.1, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3, 0.2, 0.3, 0.3, 0.3, 0.3, 0.3, 1.0, 3.0, 5.0
+            ),
+            # DTW 离线配对使用 candidate-pool=0 全量比较；视觉特征仍按模型接口做掩码均值池化。
+            ot_batch_size=32,
+            alignment_weight=0.1,
+            entropy_reg=5e-4,
+            marginal_relaxation=1e-3,
+            temporal_window=10,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/.cache/openpi/openpi-assets/checkpoints/pi05_base/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=60_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=70_000,
+        batch_size=72,
+        num_workers=16,
+        fsdp_devices=8,
+        log_interval=10,
+        save_interval=1_000,
+        keep_period=20_000,
+    ),
+
+    # Legacy PF recipe retained under its original name and configuration.
+    TrainConfig(
+        name="pi0_mem_compress_evan_shellgame_openpi_umi_success_260703",
+        model=pi0_mem_compress.Pi0MemCompressConfig(
+            # pi05=True,
+            # action_dim=32,
+            # action_horizon=32,
+            # action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            # max_token_len=360,
+            # num_frames=8,
+            # memory_every=4,
+            # history_memory_tokens=256,
+            # history_resampler_depth=1,
+            # history_use_current_condition=True,
+            # history_gate_fixed=1.0,
+            # history_gate_lr_multiplier=20.0,
+            # diversity_weight=0.01,
+            # current_frame_dropout_prob=0.05,
+            # current_frame_mask_prob=0.05,
+            # current_frame_corrupt_loss_weight=0.25,
+
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+            max_token_len=512,
+
+            num_frames=16,
+            memory_every=4,
+            history_memory_tokens=256,
+            history_resampler_depth=1,
+            history_use_current_condition=True,
+
+            history_gate_fixed=1.0,
+            history_gate_lr_multiplier=1.0,
+
+            diversity_weight=0.01,
+
+            # current_frame_index=-1,
+            # current_frame_dropout_prob=0.05,
+            # current_frame_mask_prob=0.0,
+            # current_frame_corrupt_sample_prob=0.3,
+
+
+            current_frame_index=-1,
+            # current_frame_dropout_prob=0.1,
+            # current_frame_mask_prob=0.0,
+            # current_frame_corrupt_sample_prob=0.5,
+            # current_frame_corrupt_loss_weight=0.0,
+
+
+            current_frame_corrupt_sample_prob = 1.0,
+            current_frame_dropout_prob = 0.3,
+            current_frame_mask_prob = 0.0,
+            current_frame_corrupt_loss_weight = 0.0
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=128,
+            weights=[1.0],
+            datasets=[
+                LeRobotUmiDataConfig_shellgame_Pi0Mem(
+                    repo_id="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/fold_clothes_messy_demostration/horizon_cloth_folding_advantage_messy_demostration_20260408_ep85_gripper_bin",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi_mem/openpi-umi/data/fold_clothes_messy_demostration/horizon_cloth_folding_advantage_messy_demostration_20260408_ep85_gripper_bin",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=1 G=0 H=0",
+                    ),
+                    num_frames=16,
+                    frame_stride=10,
+                ),
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoaderWithMemoryCompress(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        # weight_loader=weight_loaders.CheckpointWeightLoader(
+        #     "/data2/hzl_workspace_for_pi_mem/openpi-umi/checkpoints/pi0_mem_compress_umi_wbcd_history_light_v2_260623/260623/59999/params"
+        # ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=32,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=15_000,
+    ),
 ]
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
