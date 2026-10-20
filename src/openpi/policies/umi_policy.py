@@ -204,6 +204,100 @@ class UmiInputsV4(transforms.DataTransformFn):
         # print(f"prompt: {data['prompt']}")
         return data
 
+@dataclasses.dataclass(frozen=True)
+class UmiInputsV4_Norm_stats(transforms.DataTransformFn):
+    """
+    This class is used to convert inputs to the model to the expected format. It is used for both training and inference.
+    """
+
+    def __call__(self, data: dict) -> dict:
+        robot0_eef_pos = data["robot0_eef_pos"]
+        robot0_eef_rot_axis_angle = data["robot0_eef_rot_axis_angle"]
+        robot0_gripper_width = data["robot0_gripper_width"]
+        robot0_eef_rot_axis_angle_wrt_start = data["robot0_eef_rot_axis_angle_wrt_start"]
+        # left_wrist_0_rgb_1 = data["left_wrist_0_rgb_1"]
+        # base_0_rgb_1 = data.get("base_0_rgb_1", None)
+        # actions = data["actions"].reshape(16, 10)
+        actions = data["actions"]
+
+        # assert left_wrist_0_rgb_1.shape == (3, 224, 224)
+
+        # empty_base_flag = base_0_rgb_1 is None
+        # if base_0_rgb_1 is not None:
+        #     assert base_0_rgb_1.shape == (3, 224, 224)
+        # else:
+        #     base_0_rgb_1 = np.zeros_like(left_wrist_0_rgb_1).astype(np.uint8)
+        assert robot0_eef_pos.shape == (2, 3)
+        assert robot0_eef_rot_axis_angle.shape == (2, 6)
+        assert robot0_gripper_width.shape == (2, 1)
+        assert robot0_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        assert actions.shape == (16, 10)
+
+        state = np.concatenate(
+            [robot0_eef_pos, robot0_eef_rot_axis_angle, robot0_eef_rot_axis_angle_wrt_start, robot0_gripper_width],
+            axis=-1)
+        data["state"] = state
+        data["image"] = {
+            "base_0_rgb": np.zeros_like((3, 224, 224)).astype(np.uint8),
+            "left_wrist_0_rgb": np.zeros_like((3, 224, 224)).astype(np.uint8),
+            "right_wrist_0_rgb": np.zeros_like((3, 224, 224)).astype(np.uint8),
+        }
+        data["image_mask"] = {
+            "base_0_rgb": np.False_,
+            "left_wrist_0_rgb": np.True_,
+            "right_wrist_0_rgb": np.False_,
+        }
+        data["actions"] = actions
+        # print(f"prompt: {data['prompt']}")
+        return data
+
+@dataclasses.dataclass(frozen=True)
+class UmiInputsV4_Horizon1(transforms.DataTransformFn):
+    """
+    This class is used to convert inputs to the model to the expected format. It is used for both training and inference.
+    """
+
+    def __call__(self, data: dict) -> dict:
+        robot0_eef_pos = data["robot0_eef_pos"]
+        robot0_eef_rot_axis_angle = data["robot0_eef_rot_axis_angle"]
+        robot0_gripper_width = data["robot0_gripper_width"]
+        robot0_eef_rot_axis_angle_wrt_start = data["robot0_eef_rot_axis_angle_wrt_start"]
+        left_wrist_0_rgb_0 = data["left_wrist_0_rgb_0"]
+        base_0_rgb_1 = data.get("base_0_rgb_1", None)
+        # actions = data["actions"].reshape(16, 10)
+        actions = data["actions"]
+
+        assert left_wrist_0_rgb_0.shape == (3, 224, 224)
+
+        empty_base_flag = base_0_rgb_1 is None
+        if base_0_rgb_1 is not None:
+            assert base_0_rgb_1.shape == (3, 224, 224)
+        else:
+            base_0_rgb_1 = np.zeros_like(left_wrist_0_rgb_0).astype(np.uint8)
+        assert robot0_eef_pos.shape == (2, 3)
+        assert robot0_eef_rot_axis_angle.shape == (2, 6)
+        assert robot0_gripper_width.shape == (2, 1)
+        assert robot0_eef_rot_axis_angle_wrt_start.shape == (2, 6)
+        assert actions.shape == (16, 10)
+
+        state = np.concatenate(
+            [robot0_eef_pos, robot0_eef_rot_axis_angle, robot0_eef_rot_axis_angle_wrt_start, robot0_gripper_width],
+            axis=-1)
+        data["state"] = state
+        data["image"] = {
+            "base_0_rgb": _parse_image(base_0_rgb_1),
+            "left_wrist_0_rgb": _parse_image(left_wrist_0_rgb_0),
+            "right_wrist_0_rgb": _parse_image(np.zeros_like(left_wrist_0_rgb_0).astype(np.uint8)),
+        }
+        data["image_mask"] = {
+            "base_0_rgb": np.False_ if empty_base_flag  else np.True_,
+            "left_wrist_0_rgb": np.True_,
+            "right_wrist_0_rgb": np.False_,
+        }
+        data["actions"] = actions
+        # print(f"prompt: {data['prompt']}")
+        return data
+
 
 @dataclasses.dataclass(frozen=True)
 class UmiInputsV5(transforms.DataTransformFn):

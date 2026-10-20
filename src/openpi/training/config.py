@@ -713,6 +713,130 @@ class LeRobotUmiDataConfigPadded_V4(DataConfigFactory):
                 ),
                 _transforms.PadActionsOnly(model_config.action_dim),
                 _transforms.FlattenState(),
+                _transforms.KeepModelKeys(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfigPadded_V4_Norm_stats(DataConfigFactory):
+    """
+    UMI data config that pads 7-dim actions to 32-dim AFTER normalization.
+    """
+
+    normalize_masks = {
+        "actions": make_bool_mask(3, -7),
+        "state": make_bool_mask(3, -13),
+    }
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "robot0_eef_pos": "observation.robot0_eef_pos",
+                        "robot0_eef_rot_axis_angle": "observation.robot0_eef_rot_axis_angle",
+                        "robot0_gripper_width": "observation.robot0_gripper_width",
+                        "robot0_eef_rot_axis_angle_wrt_start": "observation.robot0_eef_rot_axis_angle_wrt_start",
+                        # "left_wrist_0_rgb_0": "observation.left_wrist_0_rgb_0",
+                        # "left_wrist_0_rgb_1": "observation.left_wrist_0_rgb_1",
+                        "actions": "actions",
+                        "prompt": "task",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[umi_policy.UmiInputsV4_Norm_stats()],
+            outputs=[umi_policy.UmiOutputsV4()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+                _transforms.KeepModelKeys(),
+            ],
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUmiDataConfigPadded_V4_ImageHorizon1(DataConfigFactory):
+    """
+    UMI data config that pads 7-dim actions to 32-dim AFTER normalization.
+    """
+
+    normalize_masks = {
+        "actions": make_bool_mask(3, -7),
+        "state": make_bool_mask(3, -13),
+    }
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        config = super().create_base_config(assets_dirs, model_config)
+        config = dataclasses.replace(config, normalize_masks=self.normalize_masks)
+        return config
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "robot0_eef_pos": "observation.robot0_eef_pos",
+                        "robot0_eef_rot_axis_angle": "observation.robot0_eef_rot_axis_angle",
+                        "robot0_gripper_width": "observation.robot0_gripper_width",
+                        "robot0_eef_rot_axis_angle_wrt_start": "observation.robot0_eef_rot_axis_angle_wrt_start",
+                        "left_wrist_0_rgb_0": "observation.left_wrist_0_rgb_0",
+                        # "left_wrist_0_rgb_1": "observation.left_wrist_0_rgb_1",
+                        "actions": "actions",
+                        "prompt": "task",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[umi_policy.UmiInputsV4_Horizon1()],
+            outputs=[umi_policy.UmiOutputsV4()],
+        )
+
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.InjectDefaultPrompt(None),
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                    discrete_state_input=model_config.discrete_state_input if hasattr(model_config, 'discrete_state_input') else False,
+                ),
+                _transforms.PadActionsOnly(model_config.action_dim),
+                _transforms.FlattenState(),
+                _transforms.KeepModelKeys(),
             ],
         )
 
@@ -2751,6 +2875,28 @@ class LeRobotDROIDDataConfig(DataConfigFactory):
         )
 
 
+# === [论文 Ours/UOT] 联合训练参数：集中管理论文损失、采样比例和 DTW 配对文件。 ===
+@dataclasses.dataclass(frozen=True)
+class UOTConfig:
+    """Sim-and-Real Co-Training 的 Ours 配置；此处把 source/target 泛化为跨场景数据。"""
+
+    enabled: bool = False
+    pair_info_path: str = ""
+    target_dataset_index: int = -1
+    ot_batch_size: int = 128
+    alignment_weight: float = 0.1
+    embedding_cost_scale: float = 1.0
+    label_cost_scale: float = 1.0
+    entropy_reg: float = 5e-4
+    marginal_relaxation: float = 1e-3
+    sinkhorn_iterations: int = 1000
+    # === [论文 Ours/UOT] 对齐官方 heuristic=true：以 I/N 作为 KL 参考测度。 ===
+    diagonal_reference: bool = False
+    dtw_distance_cutoff: float = 5.0
+    dtw_distance_sharpness: float = 10.0
+    temporal_window: int = 10
+
+
 @dataclasses.dataclass(frozen=True)
 class TrainConfig:
     # Name of the config. Must be unique. Will be used to reference this config.
@@ -2783,6 +2929,9 @@ class TrainConfig:
 
     # Determines the data to be trained on.
     data: DataConfigFactory = dataclasses.field(default_factory=FakeDataConfig)
+
+    # === [论文 Ours/UOT] 为空时保持所有原训练入口行为不变，仅 train_uot.py 会读取该配置。 ===
+    uot: UOTConfig | None = None
 
     # Base directory for config assets (e.g., norm stats).
     assets_base_dir: str = "./assets"
@@ -4088,11 +4237,11 @@ _CONFIGS = [
             action_horizon=16,
             action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
         ),
-        data=LeRobotUmiDataConfigPadded_V4(
-            repo_id="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
+        data=LeRobotUmiDataConfigPadded_V4_Norm_stats(
+            repo_id="/data2/hzl_workspace_for_pi/openpi-umi/data/collect_demo_zmq_10_14",
             assets=AssetsConfig(
                 asset_id=".",
-                assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_pick_elec_meta_12_15_all_clean",
+                assets_dir="/data2/hzl_workspace_for_pi/openpi-umi/data/collect_demo_zmq_10_14",
             ),
             base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
         ),
@@ -4291,6 +4440,73 @@ _CONFIGS = [
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
             peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=60_000,
+        batch_size=72,
+        num_workers=8,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=30000,
+    ),
+    TrainConfig(
+        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_elec_meta",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            action_loss_mask=(1.0,) * 10 + (0.0,) * 22,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=32,
+            # 每帧采样权重：[旧数据, 新数据]；按帧数补偿后，两个数据集期望各占 50%。
+            weights=[1.0, 20.0, 50.0],
+            datasets=[
+                LeRobotUmiDataConfigPadded_V4(
+                    repo_id="/data2/hzl_workspace_for_pi/openpi-umi/data/merged_pick_elec_meta_lerobot",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi/openpi-umi/data/merged_pick_elec_meta_lerobot",
+                    ),
+                    base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+                ),
+                LeRobotUmiDataConfigPadded_V4_ImageHorizon1(
+                    repo_id="/data2/hzl_workspace_for_pi/openpi-umi/data/collect_demo_zmq_10_13_2",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi/openpi-umi/data/collect_demo_zmq_10_13_2",
+                    ),
+                    base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+                ),
+                LeRobotUmiDataConfigPadded_V4_ImageHorizon1(
+                    repo_id="/data2/hzl_workspace_for_pi/openpi-umi/data/collect_demo_zmq_10_14",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data2/hzl_workspace_for_pi/openpi-umi/data/collect_demo_zmq_10_14",
+                    ),
+                    base_config=DataConfig(prompt_from_task=True, use_quantile_norm=True, action_sequence_keys=()),
+                ),
+            ]
+        ),
+        # BC 分支复用标准 MultiDataConfigFactory.weights 的逐样本隐式加权。
+        uot=UOTConfig(
+            enabled=True,
+            pair_info_path="/data2/hzl_workspace_for_pi/openpi-umi-robustness/artifacts/dtw/elec_meta_pair_info.json.gz",
+            target_dataset_index=2,
+            ot_batch_size=128,
+            alignment_weight=0.1,
+            entropy_reg=5e-4,
+            marginal_relaxation=1e-3,
+            temporal_window=10,
+        ),
+        # === [论文 Ours/UOT] 使用服务器上实际存在的 59999 步 π0.5 权重作为联合训练初始化。 ===
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4_elec_meta/my_experiment_20261014/59999/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=3e-5,
             decay_steps=50_000,
             decay_lr=1e-5,
         ),
@@ -4705,6 +4921,247 @@ _CONFIGS = [
         fsdp_devices=8,
         log_interval=10,
         keep_period=30_000,
+    ),
+    # === [论文 Ours/UOT] WBCD 跨场景主配置：原权重由 loader 自动归一，0604 daytime 为 target。 ===
+    TrainConfig(
+        name="openpi_umi_robust_v0",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=360,
+        ),
+        # === [论文 Ours/UOT] 直接展开数据集与采样权重，便于在本训练配置内独立核对和修改。 ===
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[0.1, 0.1, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3, 0.2, 0.3, 0.3, 0.3, 0.3, 0.3, 1.0, 3.0, 5.0],
+            datasets=[
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                # target 数据集：UOTConfig.target_dataset_index 必须保持为 9。
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0802_wbcd_hitl_with_wrist_hefei",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0802_wbcd_hitl_with_wrist_hefei",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_afternoon",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_afternoon",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_evening",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_evening",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+            ],
+        ),
+        uot=UOTConfig(
+            enabled=True,
+            pair_info_path="/data2/hzl_workspace_for_pi/openpi-umi-robustness/artifacts/dtw/pi05_umi_robustness_pair_info_v2.json.gz",
+            target_dataset_index=9,
+            # BC 分支复用上面的 MultiDataConfigFactory.weights，数据集长度自然参与采样占比。
+            # DTW 离线配对使用 candidate-pool=0 全量比较；视觉代价保留每个同名相机的完整网格。
+            ot_batch_size=16,
+            alignment_weight=0.1,
+            # === [论文 Ours/UOT] 以下数值逐项复现官方仓库 base_config.json。 ===
+            embedding_cost_scale=0.01,
+            label_cost_scale=0.05,
+            entropy_reg=0.1,
+            marginal_relaxation=0.05,
+            diagonal_reference=True,
+            dtw_distance_cutoff=0.009,
+            dtw_distance_sharpness=1000.0,
+            # 严格使用 DTW 对齐帧，不再在 source 侧做随机时间扰动。
+            temporal_window=0,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/.cache/openpi/openpi-assets/checkpoints/pi05_base/params"),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=60_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=70_000,
+        batch_size=72,
+        num_workers=16,
+        fsdp_devices=8,
+        log_interval=10,
+        save_interval=1_000,
+        keep_period=20_000,
     ),
     TrainConfig(
         name="pi05_umi_wbcd_v3_260522_h32",

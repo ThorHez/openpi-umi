@@ -18,6 +18,11 @@ Mitigations: Use --max-frames to cap samples (e.g. 50000); ensure config has a l
 batch_size (e.g. 512) and num_workers (e.g. 8).
 """
 
+from openpi.shared.runtime_paths import configure_training_cache
+
+# Hugging Face resolves cache paths at import time.
+configure_training_cache()
+
 import numpy as np
 import tqdm
 import tyro

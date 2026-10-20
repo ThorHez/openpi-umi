@@ -1,0 +1,52 @@
+# 与 data/merged_pick_elec_meta_lerobot/meta/info.json 的特征格式一致。
+dataset:
+  fps: 60
+  robot_type: "umi"
+  action_horizon: 16
+  action_dim: 10
+  low_dim_obs_horizon: 2
+  img_obs_horizon: 2
+  # 参考数据的元数据未记录采样步长，沿用现有 UMI 转换配置。
+  obs_down_sample_steps: 3
+
+load_keys:
+  - robot0_eef_pos
+  - robot0_eef_rot_axis_angle
+  - robot0_gripper_width
+  # 缺失时由转换脚本使用当前 episode 首帧的 XYZ + 旋转向量自动生成，整段保持一致。
+  - robot0_demo_start_pose
+  - camera0_rgb
+
+robots:
+  - id: 0
+    name: "robot0"
+    enabled: true
+
+features:
+  observation.robot0_eef_pos:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 3]
+
+  observation.robot0_eef_rot_axis_angle:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 6]
+
+  observation.robot0_eef_rot_axis_angle_wrt_start:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 6]
+
+  observation.robot0_gripper_width:
+    dtype: "float32"
+    shape: ["{low_dim_obs_horizon}", 1]
+
+  actions:
+    dtype: "float32"
+    shape: ["{action_horizon}", "{action_dim}"]
+
+# 同一个腕部相机的两个历史时间步，生成 _0 和 _1 两个图像特征。
+images:
+  observation.left_wrist_0_rgb:
+    dtype: "image"
+    shape: [224, 224, 3]
+    source_key: "camera0_rgb"
+    per_timestep: true

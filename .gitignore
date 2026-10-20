@@ -190,3 +190,10 @@ third_party/
 *.png
 
 *.tar.gz
+
+/inference_results/
+
+/checkpoints/
+/inference_results/
+
+/.venv/

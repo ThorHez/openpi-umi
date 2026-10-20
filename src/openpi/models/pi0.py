@@ -107,6 +107,25 @@ class Pi0(_model.BaseModel):
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
 
+    # === [论文 Ours/UOT] 视觉表征接口：复用策略网络原有 SigLIP，不增加投影头或对比学习模块。 ===
+    def encode_visual_features(
+        self, rng: at.KeyArrayLike, observation: _model.Observation, *, train: bool = True
+    ) -> dict[str, jax.Array]:
+        """返回每个相机完整展平的视觉网格，供 UOT 逐相机计算代价。
+
+        图像预处理与行为克隆分支完全一致。保留网格中所有 token，并保留相机名称，
+        不再先对空间 token 或不同相机求均值。这里不加入额外 projection head。
+        """
+        observation = _model.preprocess_observation(rng, observation, train=train)
+        features = {}
+        for name in observation.images:
+            image_tokens, _ = self.PaliGemma.img(observation.images[name], train=False)
+            camera_mask = observation.image_masks[name].astype(jnp.float32)[:, None]
+            features[name] = image_tokens.astype(jnp.float32).reshape(image_tokens.shape[0], -1) * camera_mask
+        if not features:
+            raise ValueError("UOT visual alignment requires at least one image input.")
+        return features
+
     @at.typecheck
     def embed_prefix(
         self, obs: _model.Observation

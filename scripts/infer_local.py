@@ -15,7 +15,6 @@ import pyarrow.parquet as pq
 import tyro
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 from openpi.policies import policy as _policy
 from openpi.policies import policy_config as _policy_config
@@ -23,8 +22,56 @@ from openpi.training import config as _config
 
 import cv2
 import numpy as np
+from openpi import transforms as _transforms
 
-sns.set_style("whitegrid")
+
+IMAGE_KEYS = (
+    "left_wrist_0_rgb_0",
+    "left_wrist_1_rgb_0",
+    "right_wrist_0_rgb_0",
+    "right_wrist_1_rgb_0",
+)
+
+STATE_KEYS = (
+    "robot0_eef_pos",
+    "robot0_eef_pos_wrt_start",
+    "robot0_eef_rot_axis_angle",
+    "robot0_eef_rot_axis_angle_wrt_start",
+    "robot0_gripper_width",
+    "robot1_eef_pos",
+    "robot1_eef_pos_wrt_start",
+    "robot1_eef_rot_axis_angle",
+    "robot1_eef_rot_axis_angle_wrt_start",
+    "robot1_gripper_width",
+)
+
+ROBUSTNESS_ACTION_LABELS = (
+    "robot0_pos_x", "robot0_pos_y", "robot0_pos_z",
+    "robot0_rot_0", "robot0_rot_1", "robot0_rot_2",
+    "robot0_rot_3", "robot0_rot_4", "robot0_rot_5", "robot0_gripper",
+    "robot1_pos_x", "robot1_pos_y", "robot1_pos_z",
+    "robot1_rot_0", "robot1_rot_1", "robot1_rot_2",
+    "robot1_rot_3", "robot1_rot_4", "robot1_rot_5", "robot1_gripper",
+)
+
+
+def action_labels(num_dims: int) -> list[str]:
+    labels = list(ROBUSTNESS_ACTION_LABELS[:num_dims])
+    labels.extend(f"action_{i}" for i in range(len(labels), num_dims))
+    return labels
+
+
+@dataclasses.dataclass(frozen=True)
+class TrimRobustnessPolicyOutputs:
+    """Remove padded outputs before applying the checkpoint's 20-D norm stats."""
+
+    action_dim: int = 20
+
+    def __call__(self, data: dict) -> dict:
+        data = dict(data)
+        data.pop("state", None)
+        data["actions"] = data["actions"][..., :self.action_dim]
+        return data
 
 
 class EnvMode(enum.Enum):
@@ -46,20 +93,18 @@ class Checkpoint:
 @dataclasses.dataclass
 class Args:
     """本地推理测试参数"""
-    
-    # 数据集路径
-    dataset_path: str = "data/umi_lerobot_dataset_v3"
-    
-    # Checkpoint配置
-    checkpoint_config: str = "pi0_umi"
-    checkpoint_dir: str = "checkpoints/pi0_umi/exp/10000"
-    
-    # 测试参数
-    num_episodes: int = 10  # 测试的episode数量，-1表示测试全部
-    start_episode: int = 0  # 起始episode索引
-    
-    # 环境类型
-    env: EnvMode = EnvMode.UMI
+
+    # LeRobot数据集根目录
+    dataset_path: str
+
+    # Checkpoint目录（例如 checkpoints/pi05_umi_robustness/1017/21000）
+    checkpoint_dir: str
+
+    # 训练配置名称
+    checkpoint_config: str = "pi05_umi_robustness"
+
+    # 要评估的episode编号
+    episode_index: int = 0
     
     # 默认prompt（如果数据中没有prompt）
     default_prompt: str = "pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box"
@@ -73,24 +118,14 @@ class Args:
     # 是否生成可视化
     visualize: bool = True
     
-    # 是否保存观测图像
-    save_images: bool = True
-
-
 class LocalInferenceEvaluator:
     """本地推理评估器"""
     
-    def __init__(self, policy: _policy.Policy, dataset_path: Path, output_dir: Path, save_images: bool = True):
+    def __init__(self, policy: _policy.Policy, dataset_path: Path, output_dir: Path):
         self.policy = policy
         self.dataset_path = dataset_path
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.save_images = save_images
-        
-        # 创建图像保存目录
-        if self.save_images:
-            self.images_dir = self.output_dir / "observation_images"
-            self.images_dir.mkdir(parents=True, exist_ok=True)
         
         self.results = {
             'episode_errors': [],
@@ -102,46 +137,41 @@ class LocalInferenceEvaluator:
         
         logging.info(f"初始化评估器 - 数据集: {dataset_path}, 输出: {output_dir}")
     
-    def load_episode(self, episode_idx: int) -> dict | None:
+    def load_episode(self, episode_idx: int) -> list[dict] | None:
         """加载一个episode的数据"""
-        episode_path = self.dataset_path / "data" / f"chunk-000" / f"episode_{episode_idx:06d}.parquet"
-        
-        if not episode_path.exists():
-            logging.warning(f"Episode {episode_idx} 不存在: {episode_path}")
+        matches = sorted((self.dataset_path / "data").glob(f"chunk-*/episode_{episode_idx:06d}.parquet"))
+        if not matches:
+            logging.warning(f"Episode {episode_idx} 不存在于: {self.dataset_path / 'data'}")
             return None
+        episode_path = matches[0]
         
         try:
-            df = pq.read_table(episode_path).to_pandas()
-            return df
+            return pq.read_table(episode_path).to_pylist()
         except Exception as e:
             logging.error(f"加载 Episode {episode_idx} 失败: {e}")
             return None
     
     def prepare_observation(self, row: dict) -> dict:
-        """准备观测数据用于推理"""
-        # 根据环境类型准备数据
-        img_bytes = row["observation.camera0_rgb"]["bytes"]       # 你的 DataFrame 中的数据
-        arr = np.frombuffer(img_bytes, np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)  # (H, W, C)，BGR 格式
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        obs = {
-            "state": np.array(row["state"]),
-            "camera0_rgb": img,
-        }
+        """准备pi05_umi_robustness所需的四视角双臂观测。"""
+        obs = {key: np.asarray(row[key], dtype=np.float32) for key in STATE_KEYS}
+        for key in IMAGE_KEYS:
+            encoded = row[key]
+            img_bytes = encoded["bytes"] if isinstance(encoded, dict) else encoded
+            img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
+            if img is None:
+                raise ValueError(f"无法解码图像列 {key}")
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            obs[key] = np.moveaxis(img, -1, 0)
+        obs["actions"] = np.asarray(row["actions"], dtype=np.float32)
         return obs
     
     def evaluate_episode(self, episode_idx: int) -> dict | None:
         """评估单个episode"""
-        df = self.load_episode(episode_idx)
-        if df is None:
+        rows = self.load_episode(episode_idx)
+        if rows is None:
             return None
         
-        logging.info(f"评估 Episode {episode_idx} ({len(df)} 帧)")
-        
-        # 为该episode创建图像子目录
-        if self.save_images:
-            episode_img_dir = self.images_dir / f"episode_{episode_idx:06d}"
-            episode_img_dir.mkdir(parents=True, exist_ok=True)
+        logging.info(f"评估 Episode {episode_idx} ({len(rows)} 帧)")
         
         # 存储预测和真实值
         predictions = []
@@ -149,32 +179,33 @@ class LocalInferenceEvaluator:
         states = []
         
         # 遍历episode中的每一帧
-        for idx, row in df.iterrows():
+        for idx, row in enumerate(rows):
             print(f"inference episode {episode_idx} frame {idx}")
             # 准备观测
             obs = self.prepare_observation(row)
             
-            # 保存观测图像
-            if self.save_images:
-                img_rgb = obs["camera0_rgb"]
-                img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-                img_path = episode_img_dir / f"frame_{idx:06d}.png"
-                cv2.imwrite(str(img_path), img_bgr)
-            
             # 模型推理
             action = self.policy.infer(obs)
-            predicted_action = action["actions"]
+            predicted_action = np.asarray(action["actions"])
             
             # 如果模型返回多步预测（action chunking），只取第一步
             if predicted_action.ndim == 2:
-                predicted_action = predicted_action[0]  # 取第一个时间步 (10, 7) -> (7,)
+                predicted_action = predicted_action[1]
             
             # 获取真实动作
-            true_action = np.array(row["actions"])
+            true_action = np.asarray(row["actions"], dtype=np.float32)
+            if true_action.ndim == 2:
+                true_action = true_action[1]
+            if predicted_action.shape[-1] < true_action.shape[-1]:
+                raise ValueError(
+                    f"预测动作维度 {predicted_action.shape[-1]} 小于真实动作维度 {true_action.shape[-1]}"
+                )
+            # pi05模型输出32维；该配置中前20维为双臂有效动作，其余为padding。
+            predicted_action = predicted_action[:true_action.shape[-1]]
             
             predictions.append(predicted_action)
             ground_truth.append(true_action)
-            states.append(np.array(row["state"]))
+            states.append(np.concatenate([obs[key] for key in STATE_KEYS], axis=-1))
         
         if not predictions:
             logging.warning(f"Episode {episode_idx} 没有成功的推理")
@@ -225,9 +256,6 @@ class LocalInferenceEvaluator:
         }
         
         logging.info(f"Episode {episode_idx}: MSE={overall_mse:.6f}, MAE={overall_mae:.6f} | Last100: MSE={last_100_overall_mse:.6f}, MAE={last_100_overall_mae:.6f}")
-        
-        if self.save_images and 'episode_img_dir' in locals():
-            logging.info(f"Episode {episode_idx}: 已保存 {len(predictions)} 帧图像到 {episode_img_dir}")
         
         return results
     
@@ -295,12 +323,11 @@ class LocalInferenceEvaluator:
         
         # 每个维度的统计
         print(f"\n各维度性能 (全局):")
-        action_labels = ['eef_x', 'eef_y', 'eef_z', 'rot_x', 'rot_y', 'rot_z', 'gripper']
-        
         mse_per_dim = np.array([r['mse_per_dim'] for r in all_results])
         mae_per_dim = np.array([r['mae_per_dim'] for r in all_results])
+        labels = action_labels(mse_per_dim.shape[-1])
         
-        for i, label in enumerate(action_labels):
+        for i, label in enumerate(labels):
             print(f"  {label:10s}: MSE={np.mean(mse_per_dim[:, i]):.6f}, MAE={np.mean(mae_per_dim[:, i]):.6f}")
         
         # 后100帧每个维度的统计
@@ -308,7 +335,7 @@ class LocalInferenceEvaluator:
         last100_mse_per_dim = np.array([r['last_100_mse_per_dim'] for r in all_results])
         last100_mae_per_dim = np.array([r['last_100_mae_per_dim'] for r in all_results])
         
-        for i, label in enumerate(action_labels):
+        for i, label in enumerate(labels):
             print(f"  {label:10s}: MSE={np.mean(last100_mse_per_dim[:, i]):.6f}, MAE={np.mean(last100_mae_per_dim[:, i]):.6f}")
         
         # 保存统计结果
@@ -333,11 +360,11 @@ class LocalInferenceEvaluator:
             f.write(f"  后100帧 vs 全局: MSE比率={mse_ratio:.3f}x, MAE比率={mae_ratio:.3f}x\n\n")
             
             f.write("各维度性能 (全局):\n")
-            for i, label in enumerate(action_labels):
+            for i, label in enumerate(labels):
                 f.write(f"  {label:10s}: MSE={np.mean(mse_per_dim[:, i]):.6f}, MAE={np.mean(mae_per_dim[:, i]):.6f}\n")
             
             f.write("\n各维度性能 (后100帧):\n")
-            for i, label in enumerate(action_labels):
+            for i, label in enumerate(labels):
                 f.write(f"  {label:10s}: MSE={np.mean(last100_mse_per_dim[:, i]):.6f}, MAE={np.mean(last100_mae_per_dim[:, i]):.6f}\n")
         
         logging.info(f"统计结果已保存到: {stats_file}")
@@ -377,10 +404,10 @@ class LocalInferenceEvaluator:
         
         # 1.3 各维度MSE对比（全局）
         ax3 = axes[1, 0]
-        action_labels = ['eef_x', 'eef_y', 'eef_z', 'rot_x', 'rot_y', 'rot_z', 'gripper']
         mse_per_dim = np.array([r['mse_per_dim'] for r in all_results])
         mean_mse_per_dim = np.mean(mse_per_dim, axis=0)
-        ax3.bar(action_labels, mean_mse_per_dim, edgecolor='black', alpha=0.7)
+        labels = action_labels(mean_mse_per_dim.shape[-1])
+        ax3.bar(labels, mean_mse_per_dim, edgecolor='black', alpha=0.7)
         ax3.set_xlabel('Action Dimension')
         ax3.set_ylabel('Mean MSE')
         ax3.set_title('MSE by Action Dimension (Overall)')
@@ -409,7 +436,7 @@ class LocalInferenceEvaluator:
         
         # 1.6 全局 vs 后100帧对比
         ax6 = axes[2, 1]
-        x_pos = np.arange(len(action_labels))
+        x_pos = np.arange(len(labels))
         width = 0.35
         last100_mse_per_dim = np.array([r['last_100_mse_per_dim'] for r in all_results])
         mean_last100_mse_per_dim = np.mean(last100_mse_per_dim, axis=0)
@@ -420,7 +447,7 @@ class LocalInferenceEvaluator:
         ax6.set_ylabel('Mean MSE')
         ax6.set_title('MSE Comparison: Overall vs Last 100 Frames')
         ax6.set_xticks(x_pos)
-        ax6.set_xticklabels(action_labels, rotation=45)
+        ax6.set_xticklabels(labels, rotation=45)
         ax6.legend()
         ax6.grid(True, alpha=0.3, axis='y')
         
@@ -439,15 +466,17 @@ class LocalInferenceEvaluator:
         ground_truth = result['ground_truth']
         episode_idx = result['episode_idx']
         
-        action_labels = ['eef_x', 'eef_y', 'eef_z', 'rot_x', 'rot_y', 'rot_z', 'gripper']
+        labels = action_labels(predictions.shape[-1])
         
         # 图1: 每个维度单独的子图
-        fig, axes = plt.subplots(4, 2, figsize=(14, 16))
-        axes = axes.flatten()
+        num_cols = 4
+        num_rows = (len(labels) + num_cols - 1) // num_cols
+        fig, axes = plt.subplots(num_rows, num_cols, figsize=(18, 4 * num_rows))
+        axes = np.asarray(axes).reshape(-1)
         
         time_steps = np.arange(len(predictions))
         
-        for i, label in enumerate(action_labels):
+        for i, label in enumerate(labels):
             ax = axes[i]
             ax.plot(time_steps, ground_truth[:, i], label='Ground Truth', linewidth=1.5, alpha=0.7)
             ax.plot(time_steps, predictions[:, i], label='Prediction', linewidth=1.5, alpha=0.7)
@@ -458,7 +487,8 @@ class LocalInferenceEvaluator:
             ax.grid(True, alpha=0.3)
         
         # 隐藏多余的子图
-        axes[-1].axis('off')
+        for ax in axes[len(labels):]:
+            ax.axis('off')
         
         plt.tight_layout()
         plt.savefig(self.output_dir / f"episode_{episode_idx}_predictions.png", dpi=150, bbox_inches='tight')
@@ -469,9 +499,9 @@ class LocalInferenceEvaluator:
         fig, ax = plt.subplots(1, 1, figsize=(16, 10))
         
         # 定义颜色映射
-        colors = plt.cm.tab10(np.linspace(0, 1, len(action_labels)))
+        colors = plt.cm.tab20(np.linspace(0, 1, len(labels)))
         
-        for i, (label, color) in enumerate(zip(action_labels, colors)):
+        for i, (label, color) in enumerate(zip(labels, colors)):
             # 绘制真实值（实线）
             ax.plot(time_steps, ground_truth[:, i], 
                    label=f'{label} (GT)', 
@@ -574,64 +604,54 @@ def create_policy(checkpoint_config: str, checkpoint_dir: str, default_prompt: s
         checkpoint_dir,
         default_prompt=default_prompt
     )
-    
+    policy._output_transform = _transforms.compose(
+        [TrimRobustnessPolicyOutputs(), policy._output_transform]
+    )
     return policy
 
 
 def main() -> None:
-    dataset_path = "/root/openpi-umi/data/umi_lerobot_dataset_v3_val"
-    checkpoint_config = "pi05_umi_32d_80k_95"
-    checkpoint_dir = "/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95/my_experiment_80k_95/79999"
-    output_dir = "/root/openpi-umi/inference_results_1"
-    num_episodes = 1
-    start_episode = 0
-    default_prompt = "pick up and place the orange cube in the orange box, then pick up and place the black cube in the black box"
-    visualize = True
-    save_detailed = True
-    save_images = True
+    args = tyro.cli(Args)
 
     """主函数"""
     logging.info("="*70)
     logging.info("本地推理测试")
     logging.info("="*70)
-    logging.info(f"数据集路径: {dataset_path}")
-    logging.info(f"Checkpoint: {checkpoint_dir}")
-    logging.info(f"测试Episodes: {num_episodes if num_episodes > 0 else '全部'}")
-    logging.info(f"输出目录: {output_dir}")
-    logging.info(f"保存观测图像: {save_images}")
+    logging.info(f"数据集路径: {args.dataset_path}")
+    logging.info(f"配置: {args.checkpoint_config}")
+    logging.info(f"Checkpoint: {args.checkpoint_dir}")
+    logging.info(f"测试Episode: {args.episode_index}")
+    logging.info(f"输出目录: {args.output_dir}")
     logging.info("="*70)
     
     # 创建策略
-    policy = create_policy(checkpoint_config, checkpoint_dir, default_prompt)
+    policy = create_policy(args.checkpoint_config, args.checkpoint_dir, args.default_prompt)
     
     # 创建评估器
     evaluator = LocalInferenceEvaluator(
         policy=policy,
-        dataset_path=Path(dataset_path),
-        output_dir=Path(output_dir),
-        save_images=save_images
+        dataset_path=Path(args.dataset_path),
+        output_dir=Path(args.output_dir),
     )
     
-    # 运行评估
-    all_results = evaluator.evaluate_episodes(
-        start_idx=start_episode,
-        num_episodes=num_episodes
-    )
+    # 运行指定episode的评估
+    result = evaluator.evaluate_episode(args.episode_index)
+    all_results = [] if result is None else [result]
     
     # 计算统计信息
     evaluator.compute_statistics(all_results)
     
     # 可视化结果
-    if visualize:
+    if args.visualize:
         evaluator.visualize_results(all_results)
     
     # 保存结果
-    if save_detailed:
+    if args.save_detailed:
         evaluator.save_results(all_results)
     
     logging.info("\n" + "="*70)
     logging.info("评估完成！")
-    logging.info(f"结果保存在: {output_dir}")
+    logging.info(f"结果保存在: {args.output_dir}")
     logging.info("="*70)
 
 

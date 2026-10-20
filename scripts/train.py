@@ -1,11 +1,9 @@
 import os
-from pathlib import Path
 
-# Avoid / or overlay filling up: use $HOME/tmp for temp files if TMPDIR not set.
-if "TMPDIR" not in os.environ:
-    _tmp = Path(os.environ.get("HOME", "/root")) / "tmp"
-    _tmp.mkdir(parents=True, exist_ok=True)
-    os.environ["TMPDIR"] = os.environ["TEMP"] = os.environ["TMP"] = str(_tmp)
+from openpi.shared.runtime_paths import configure_training_cache
+
+# Hugging Face resolves cache paths at import time.
+configure_training_cache()
 
 import dataclasses
 import functools
@@ -277,13 +275,14 @@ def train_step(
 def main(config: _config.TrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
+    logging.info("Dataset cache: %s; temporary files: %s", os.environ["HF_DATASETS_CACHE"], os.environ["TMPDIR"])
 
     if config.batch_size % jax.device_count() != 0:
         raise ValueError(
             f"Batch size {config.batch_size} must be divisible by the number of devices {jax.device_count()}."
         )
 
-    jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
+    jax.config.update("jax_compilation_cache_dir", os.environ["JAX_COMPILATION_CACHE_DIR"])
 
     rng = jax.random.key(config.seed)
     train_rng, init_rng = jax.random.split(rng)
