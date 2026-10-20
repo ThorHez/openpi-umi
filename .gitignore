@@ -197,3 +197,7 @@ third_party/
 /inference_results/
 
 /.venv/
+
+/checkpoints/
+/inference_results/
+/.venv/

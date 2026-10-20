@@ -5146,7 +5146,7 @@ _CONFIGS = [
             # 严格使用 DTW 对齐帧，不再在 source 侧做随机时间扰动。
             temporal_window=0,
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/.cache/openpi/openpi-assets/checkpoints/pi05_base/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/30000_wbcd_4views_h32_260608/params"),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
             peak_lr=8e-5,
@@ -5155,13 +5155,13 @@ _CONFIGS = [
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=0.999,
-        num_train_steps=70_000,
+        num_train_steps=30_000,
         batch_size=72,
         num_workers=16,
         fsdp_devices=8,
         log_interval=10,
         save_interval=1_000,
-        keep_period=20_000,
+        keep_period=10_000,
     ),
     TrainConfig(
         name="pi05_umi_wbcd_v3_260522_h32",
