@@ -57,6 +57,7 @@ def validate(root: Path, manifest: dict, verify_local_snapshots: bool = False) -
     errors = []
     checked_paths = []
     recipe_count = 0
+    split_count = 0
     production_count = 0
     if manifest.get("schema_version") != 1:
         errors.append("unsupported source_unification manifest schema_version")
@@ -67,19 +68,47 @@ def validate(root: Path, manifest: dict, verify_local_snapshots: bool = False) -
     production_count = len(expected)
     if baseline.get("recipe_count") != production_count:
         errors.append("production baseline recipe_count does not match recorded fingerprints")
-    config_path = root / baseline.get("config_path", "src/openpi/training/config.py")
+    config_paths = baseline.get("config_paths", [baseline.get("config_path", "src/openpi/training/config.py")])
     policy_path = root / "src/openpi/policies/umi_policy.py"
     try:
-        config_source = config_path.read_text(encoding="utf-8")
-        current = recipe_fingerprints(config_source, str(config_path.relative_to(root)))
+        if (not isinstance(config_paths, list) or not 1 <= len(config_paths) <= 16
+                or any(not isinstance(path, str) or not path.endswith(".py") for path in config_paths)
+                or len(set(config_paths)) != len(config_paths)):
+            raise ValueError("invalid recipe configuration source list")
+        current, sources = {}, []
+        for relative in config_paths:
+            config_path = root / relative
+            config_path.resolve().relative_to(root.resolve())
+            config_source = config_path.read_text(encoding="utf-8")
+            found = recipe_fingerprints(config_source, relative)
+            duplicate = set(current) & set(found)
+            if duplicate:
+                raise ValueError("duplicate recipe name across configuration files: " + ", ".join(sorted(duplicate)))
+            current.update(found)
+            sources.append(config_source)
         recipe_count = len(current)
         for name, digest in sorted(expected.items()):
             if name not in current:
                 errors.append(f"missing production recipe: {name}")
             elif current[name] != digest:
                 errors.append(f"production recipe drift: {name}")
+        split_baseline = manifest.get("recipe_split_baseline")
+        if split_baseline is not None:
+            if not isinstance(split_baseline, dict):
+                raise ValueError("invalid complete recipe-split fingerprint baseline")
+            recorded = split_baseline.get("recipes", {})
+            if (not isinstance(recorded, dict) or split_baseline.get("fingerprint_algorithm") != FINGERPRINT_ALGORITHM
+                    or split_baseline.get("recipe_count") != len(recorded)):
+                raise ValueError("invalid complete recipe-split fingerprint baseline")
+            split_count = len(recorded)
+            for name, digest in sorted(recorded.items()):
+                if name not in current:
+                    errors.append(f"missing split-baseline recipe: {name}")
+                elif current[name] != digest:
+                    errors.append(f"split-baseline recipe drift: {name}")
         policy_source = policy_path.read_text(encoding="utf-8")
-        for name in missing_umi_definitions(config_source, policy_source):
+        missing = {name for source in sources for name in missing_umi_definitions(source, policy_source)}
+        for name in sorted(missing):
             errors.append(f"undefined umi_policy reference: {name}")
     except (OSError, SyntaxError, ValueError) as exc:
         errors.append(str(exc))
@@ -123,6 +152,7 @@ def validate(root: Path, manifest: dict, verify_local_snapshots: bool = False) -
         "ok": not errors,
         "production_recipes_checked": production_count,
         "current_recipes_found": recipe_count,
+        "split_baseline_recipes_checked": split_count,
         "additional_recipes_allowed": recipe_count - production_count,
         "scoped_paths_checked": checked_paths,
         "local_snapshots_checked": verify_local_snapshots,

@@ -33,6 +33,80 @@ Training keeps separate entry points:
 | Optional UOT | `scripts/train_uot.py`, with an explicit `uot` configuration |
 | Optional RTC inference | `scripts/serve_policy.py`, see [remote inference](docs/remote_inference.md) |
 
+Recipe declarations are grouped by training method under
+`src/openpi/training/recipes/`: `sft.py`, `recap.py`, `mem.py`, `uot.py`, and the
+currently empty `rlt.py` extension point. UOT recipes remain separate from SFT;
+the existence of the RLT registry does not enable an RLT trainer. Inference and
+normalization variants stay with their corresponding method, and LoRA recipes
+named `low_mem_finetune` remain SFT rather than memory-model training.
+`training/config.py` retains the shared dataclasses/processors and the compatible
+`get_config(name)` / `cli()` entry points, aggregating the per-method registries.
+Existing recipe names, constructor parameters, shared model references, the
+RoboArena expansion, and task-specific MEM factories are retained. Register a
+new recipe in its method's `_CONFIGS` list; duplicate names across methods are
+rejected. This is Python recipe organization; no YAML configuration layer is
+introduced by this split.
+
+`ComposableDataConfig` is the single opt-in factory for explicit data-processing
+composition. Its version-1 `composition` object declares state fields and their
+history axis, the per-arm action layout and existing encoding/units/frame,
+literal camera fields and model slots, explicit image layouts/time indices,
+normalization masks, and optional value/ACP labels. Unknown fields and missing
+required layout fields are rejected. The builder does not convert units, coordinate frames, rotation
+representations, or joint/EEF commands; input numbers keep their declared meaning.
+Only standard Pi0/Pi0.5, value, and gripper configurations are supported in this
+first composition builder. MEM and hybrid variants retain their original factories.
+
+Action mode, rotation encoding, position/joint units, coordinate frame, and prompt
+field are optional declarations: omitted, null, or blank values normalize to an
+empty string. Explicit declarations still undergo enum and consistency checks;
+omitting a rotation encoding does not remove the EEF rotation block's 3/4/6-width
+requirement. Gripper bounds are optional; omitting them skips bounds checks while
+retaining finite-number and shape checks. With no explicit prompt field, the
+builder reads an available nonempty scalar `task`, then `prompt`, excluding input
+keys or namespaces already used for numeric/visual sources. If neither provides
+text, it supplies an empty prompt with no language instruction. An explicit prompt
+field must exist and contain nonempty scalar text.
+
+The real LeRobot action metadata determines whether the loader reads individual
+`[D]` actions with explicit horizon timestamps or already chunked `[H,D]` actions;
+other shapes are rejected. Repacking and NumPy shape checks precede normalization,
+whose boolean masks use the raw state/action widths. Model padding happens after
+normalization. Pi0.5 keeps the declared state history until final flattening;
+Pi0 flattens and pads state only when it fits, without truncation. Missing canonical
+image slots are zero-filled with invalid masks. RGB supports uint8 or finite
+0..1 floats; depth uses the explicitly declared display range in the raw depth's
+units. Temporal images require an explicit frame index.
+The model's selected image/depth keys must be disjoint canonical slots and must
+include every declared dataset camera. Depth cameras require an explicit model
+`depth_keys` selection so RGB training augmentation is not applied to depth values.
+Task descriptions do not replace the dataset prompt, and physical robot model names do not become tokenizer
+`ARM/G/H` tags; an explicitly configured `base_config.robot_type` is preserved.
+Value training requires `value_target`; ACP requires `is_positive` and uses the
+existing condition-prompt transform before tokenization.
+Each composed dataset supplies its own loss mask covering every declared action
+dimension and excluding padding, so an older recipe mask cannot drop a second
+arm or newly declared joints. Binary-gripper models additionally require explicit
+head indices matching the declared gripper blocks, and those blocks must retain
+raw units rather than be normalized before the binary threshold is applied.
+
+The factory's `processing_contract(model_config)` uses the same runtime boundary
+checks as `create`, without loading normalization assets or constructing a
+tokenizer. Its JSON result records the actual model/stage, raw dimensions, loss mask,
+history length, loader action-sequence keys and the SHA256 of the bounded local
+`meta/info.json` bytes so preflight can freeze and cross-check the evidence.
+
+`tests/test_composed_processing.py` compares single/bimanual UMI Horizon1 state,
+images, raw actions and normalization numerically, and checks the composition
+builder with real NumPy transforms while stubbing model/tokenizer backends. It
+does not claim JAX model execution, GPU training, or physical-robot acceptance.
+
+The source audit checks all method files and both the historical 80-recipe
+production baseline and the complete 122-literal-recipe split baseline. Run
+`python -m unittest discover -s tests -p 'test_recipe_registry_split.py'` for
+source-equivalence and CPU registry-import checks without optional training
+backends; these checks do not establish model or GPU execution.
+
 Models accept explicit `image_keys` and `depth_keys`, for example
 `Pi0Config(image_keys=("left_wrist_0_rgb", "right_wrist_0_rgb"), depth_keys=())`.
 The default `None` preserves the observation's actual views, including ShellGame

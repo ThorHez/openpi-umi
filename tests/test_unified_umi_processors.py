@@ -20,6 +20,7 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = ROOT / "src/openpi/policies/umi_policy.py"
 CONFIG = ROOT / "src/openpi/training/config.py"
+RECIPE_SOURCES = (CONFIG, *sorted((CONFIG.parent / "recipes").glob("*.py")))
 TRANSFORMS = ROOT / "src/openpi/transforms.py"
 ADAPTERS = (
     "UmiArxInputsV5",
@@ -78,9 +79,8 @@ class FactoryContractTests(unittest.TestCase):
         self.assertEqual(missing, set())
 
     def test_ray_recipe_uses_head_rgb_factory(self):
-        tree = ast.parse(CONFIG.read_text())
         recipe = next(
-            node for node in ast.walk(tree)
+            node for source in RECIPE_SOURCES for node in ast.walk(ast.parse(source.read_text()))
             if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
             and node.func.id == "TrainConfig"
