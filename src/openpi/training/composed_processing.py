@@ -271,6 +271,42 @@ class ComposedRepack:
 
 
 @dataclasses.dataclass(frozen=True)
+class _LeRobotImageLayout:
+    index: int
+    key: str
+    decoded_shape: tuple[int, ...]
+    source_layout: str
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotComposedRepack:
+    """Restore declared source layout after LeRobot's image/video CHW decoder.
+
+    Only the factory installs this boundary with verified codec metadata. Direct
+    ComposedRepack callers keep their original array contract. Conversion never
+    guesses an axis or selects a history frame.
+    """
+    composition: dict
+    image_layouts: tuple[_LeRobotImageLayout, ...]
+
+    def __call__(self, data):
+        import numpy as np
+        result = ComposedRepack(self.composition)(data)
+        for camera in self.image_layouts:
+            target = "_composition_camera_" + str(camera.index)
+            try:
+                image = np.asarray(result[target])
+            except (TypeError, ValueError) as error:
+                raise ValueError("COMPOSITION_DATA_INVALID: 无法读取 LeRobot 解码图像：" + camera.key) from error
+            if image.shape != camera.decoded_shape:
+                _fail("LeRobot image/video RGB 解码结果必须是与源元信息一致的 CHW/TCHW 三通道图像：" + camera.key,
+                      "COMPOSITION_DATA_INVALID")
+            if camera.source_layout == "hwc":
+                result[target] = np.transpose(image, (1, 2, 0) if image.ndim == 3 else (0, 2, 3, 1))
+        return result
+
+
+@dataclasses.dataclass(frozen=True)
 class ComposedInputs:
     composition: dict
     action_horizon: int
@@ -373,16 +409,16 @@ class ComposedInputs:
         return result
 
 
-def _action_metadata_contract(repo_id, action_key, horizon, width):
-    """Select chunk reading only from actual bounded LeRobot feature metadata."""
+def _read_lerobot_metadata(repo_id):
+    """Read one bounded, non-symlink LeRobot metadata file without modifying it."""
     if not isinstance(repo_id, str) or not Path(repo_id).is_absolute():
         _fail("组合处理需要登记的本机数据集绝对路径", "COMPOSITION_DATA_INVALID")
     source = Path(repo_id) / "meta/info.json"
     try:
         descriptor = os.open(source, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
         with os.fdopen(descriptor, "rb") as stream:
-            info = os.fstat(stream.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_size > 1024 * 1024:
+            file_info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(file_info.st_mode) or file_info.st_size > 1024 * 1024:
                 _fail("LeRobot 元信息必须是 1MiB 内的普通文件", "COMPOSITION_DATA_INVALID")
             content = stream.read(1024 * 1024 + 1)
     except OSError as error:
@@ -391,6 +427,17 @@ def _action_metadata_contract(repo_id, action_key, horizon, width):
         _fail("LeRobot 元信息超过读取上限", "COMPOSITION_DATA_INVALID")
     try:
         info = json.loads(content)
+        if not isinstance(info, dict) or not isinstance(info.get("features"), dict):
+            raise ValueError("missing features")
+    except (ValueError, TypeError, UnicodeError, RecursionError) as error:
+        raise ValueError("COMPOSITION_DATA_INVALID: 无法读取 LeRobot 特征元信息") from error
+    return info, hashlib.sha256(content).hexdigest()
+
+
+def _action_metadata_contract(repo_id, action_key, horizon, width):
+    """Select chunk reading only from actual bounded LeRobot feature metadata."""
+    info, metadata_sha256 = _read_lerobot_metadata(repo_id)
+    try:
         shape = info["features"][action_key]["shape"]
     except (ValueError, KeyError, TypeError, UnicodeError, RecursionError) as error:
         raise ValueError("COMPOSITION_DATA_INVALID: 无法核验声明的动作字段元信息") from error
@@ -402,7 +449,34 @@ def _action_metadata_contract(repo_id, action_key, horizon, width):
         sequence_keys = []
     else:
         _fail("动作元信息必须是单步 [D] 或预分块 [H,D]，并与模型/布局一致", "COMPOSITION_DATA_INVALID")
-    return {"action_sequence_keys": sequence_keys, "action_metadata_sha256": hashlib.sha256(content).hexdigest()}
+    return {"action_sequence_keys": sequence_keys, "action_metadata_sha256": metadata_sha256}
+
+
+def _lerobot_image_layouts(spec, info):
+    layouts = []
+    for index, camera in enumerate(spec["cameras"]):
+        feature = info["features"].get(camera["key"])
+        # Numeric/custom arrays and depth images retain their original contract.
+        # No decoder behavior is inferred from the shape or the camera name.
+        if (camera["kind"] != "rgb" or not isinstance(feature, dict)
+                or not isinstance(feature.get("dtype"), str) or feature["dtype"] not in {"image", "video"}):
+            continue
+        shape = feature.get("shape")
+        if (not isinstance(shape, list) or len(shape) not in {3, 4}
+                or any(type(size) is not int or size <= 0 for size in shape)):
+            _fail("LeRobot RGB 源元信息需要明确的三维图像或四维历史图像：" + camera["key"], "COMPOSITION_DATA_INVALID")
+        history = len(shape) == 4
+        if history != (camera["time_index"] is not None):
+            _fail("LeRobot 历史图像需要显式时间索引，单帧图像不能声明时间索引：" + camera["key"], "COMPOSITION_DATA_INVALID")
+        if history and not -shape[0] <= camera["time_index"] < shape[0]:
+            _fail("图像时间索引越界：" + camera["key"], "COMPOSITION_DATA_INVALID")
+        frame = shape[-3:]
+        if frame[0 if camera["layout"] == "chw" else -1] != 3:
+            _fail("RGB 源元信息须明确三通道并与声明 CHW/HWC 布局一致：" + camera["key"], "COMPOSITION_DATA_INVALID")
+        height, width = frame[1:] if camera["layout"] == "chw" else frame[:2]
+        decoded = (shape[0], 3, height, width) if history else (3, height, width)
+        layouts.append(_LeRobotImageLayout(index, camera["key"], decoded, camera["layout"]))
+    return tuple(layouts)
 
 
 def _action_sequence_keys(repo_id, action_key, horizon, width):
@@ -499,6 +573,10 @@ def compose_data_config(factory, assets_dirs, model_config):
     base = factory.create_base_config(assets_dirs, model_config)
     if base.repo_id != factory.repo_id:
         _fail("基础数据配置改变了已核验的数据集路径", "COMPOSITION_DATA_INVALID")
+    metadata, metadata_sha256 = _read_lerobot_metadata(factory.repo_id)
+    if metadata_sha256 != contract["action_metadata_sha256"]:
+        _fail("创建组合处理时 LeRobot 元信息已改变，请重新预检", "COMPOSITION_DATA_INVALID")
+    repack = LeRobotComposedRepack(spec, _lerobot_image_layouts(spec, metadata))
     sequence_keys = tuple(contract["action_sequence_keys"])
     model_inputs = [transforms.InjectDefaultPrompt(None), transforms.ResizeImages(224, 224)]
     if stage == "offline_rl":
@@ -510,7 +588,7 @@ def compose_data_config(factory, assets_dirs, model_config):
     else:
         model_inputs.extend([transforms.FlattenState(), transforms.PadStatesAndActions(action_dim)])
     model_inputs.append(transforms.KeepModelKeys(extra_keys=frozenset(spec["aux_keys"])))
-    return dataclasses.replace(base, repack_transforms=transforms.Group(inputs=[ComposedRepack(spec)]),
+    return dataclasses.replace(base, repack_transforms=transforms.Group(inputs=[repack]),
         data_transforms=transforms.Group(inputs=[ComposedInputs(spec, horizon, action_dim)], outputs=[]),
         model_transforms=transforms.Group(inputs=model_inputs), normalize_masks=normalization_masks(spec),
         use_quantile_norm=spec["normalization"] == "quantile", action_sequence_keys=sequence_keys,
