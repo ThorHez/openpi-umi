@@ -338,86 +338,12 @@ def main(config: _config.TrainConfig):
     )
 
     infos = []
-    loss_history = []  # Track recent loss values for anomaly detection
-    anomaly_dir = config.checkpoint_dir / "anomalies"
-    anomaly_dir.mkdir(exist_ok=True)
-    
+
     for step in pbar:
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch)
         infos.append(info)
-        
-        # Anomaly detection
-        current_loss = float(info["loss"])
-        loss_history.append(current_loss)
-        if len(loss_history) > 100:  # Keep last 100 steps
-            loss_history.pop(0)
-        
-        # Detect anomalies: NaN, Inf, or sudden spike
-        is_anomaly = False
-        anomaly_reason = ""
-        loss_history_size = config.log_interval * 2
 
-        if jnp.isnan(current_loss) or jnp.isinf(current_loss):
-            is_anomaly = True
-            anomaly_reason = "NaN or Inf loss"
-        elif len(loss_history) > loss_history_size:
-            recent_mean = np.mean(loss_history[-loss_history_size:])
-            recent_std = np.std(loss_history[-loss_history_size:])
-            # If loss is more than 5 std deviations above recent mean
-            if current_loss > recent_mean + 3 * recent_std and recent_std > 1e-6:
-                is_anomaly = True
-                anomaly_reason = f"Spike: {current_loss:.4f} vs recent {recent_mean:.4f}±{recent_std:.4f}"
-        
-        if is_anomaly:
-            import pickle
-            anomaly_file = anomaly_dir / f"step_{step:06d}_{current_loss:.4f}.pkl"
-            pbar.write(f"⚠️  ANOMALY DETECTED at step {step}: {anomaly_reason}")
-            pbar.write(f"   Saving data to {anomaly_file}")
-            
-            # Get data to CPU and save
-            # batch_cpu = jax.device_get(batch)
-            # anomaly_data = {
-            #     "step": step,
-            #     "loss": current_loss,
-            #     "loss_history": loss_history[-20:],  # Save last 20 losses
-            #     "reason": anomaly_reason,
-            #     "observation": batch_cpu[0],
-            #     "actions": batch_cpu[1],
-            #     "info": jax.device_get(info),
-            # }
-            
-            # with open(anomaly_file, "wb") as f:
-            #     pickle.dump(anomaly_data, f)
-            # pbar.write(f"   ✓ Anomaly data saved!")
-        
-        # Periodic statistics logging (every 1000 steps)
-        stats_interval = 1000
-        if step > 0 and step % stats_interval == 0 and len(loss_history) > 10:
-            import pickle
-            stats_dir = config.checkpoint_dir / "periodic_stats"
-            stats_dir.mkdir(exist_ok=True)
-            
-            batch_cpu = jax.device_get(batch)
-            stats_file = stats_dir / f"step_{step:06d}_{current_loss:.4f}.pkl"
-            
-            pbar.write(f"\n📊 Saving periodic statistics at step {step} to {stats_file}")
-            
-            # Save data in the same format as anomaly detection
-            # stats_data = {
-            #     "step": step,
-            #     "loss": current_loss,
-            #     "loss_history": loss_history.copy(),
-            #     "reason": f"Periodic stats at step {step}",
-            #     "observation": batch_cpu[0],
-            #     "actions": batch_cpu[1],
-            #     "info": jax.device_get(info),
-            # }
-            
-            # with open(stats_file, "wb") as f:
-            #     pickle.dump(stats_data, f)
-            # pbar.write(f"   ✓ Statistics data saved!")
-        
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
