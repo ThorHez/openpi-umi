@@ -562,11 +562,15 @@ def composition_runtime_contract(factory, model_config):
             "action_loss_mask": [1.0] * width + [0.0] * (action_dim - width), **metadata, **views}
 
 
-def compose_data_config(factory, assets_dirs, model_config):
-    """Compile a composition into the existing DataConfig/transform interface."""
+def compose_data_config(factory, assets_dirs, model_config, *, include_model_transforms=True):
+    """Compile the same data pipeline for training or decoded-sample checks.
+
+    Sample checks omit model transforms so they never import or instantiate a
+    tokenizer. Repacking, numerical/image validation, and normalization settings
+    still come from the regular training configuration.
+    """
     contract = composition_runtime_contract(factory, model_config)
     from openpi import transforms
-    from openpi.models import tokenizer
     spec = normalize_composition(factory.composition)
     action_dim, horizon = contract["action_dim"], contract["action_horizon"]
     stage, pi05, dropout = contract["training_stage"], contract["pi05"], contract["acp_dropout"]
@@ -578,16 +582,20 @@ def compose_data_config(factory, assets_dirs, model_config):
         _fail("创建组合处理时 LeRobot 元信息已改变，请重新预检", "COMPOSITION_DATA_INVALID")
     repack = LeRobotComposedRepack(spec, _lerobot_image_layouts(spec, metadata))
     sequence_keys = tuple(contract["action_sequence_keys"])
-    model_inputs = [transforms.InjectDefaultPrompt(None), transforms.ResizeImages(224, 224)]
-    if stage == "offline_rl":
-        model_inputs.insert(1, transforms.ACPConditionPrompt(indicator_key="is_positive", dropout=float(dropout), default_positive=False))
-    model_inputs.append(transforms.TokenizePrompt(tokenizer.PaligemmaTokenizer(model_config.max_token_len),
-                        discrete_state_input=bool(getattr(model_config, "discrete_state_input", False))))
-    if pi05:
-        model_inputs.extend([transforms.PadActionsOnly(action_dim), transforms.FlattenState()])
-    else:
-        model_inputs.extend([transforms.FlattenState(), transforms.PadStatesAndActions(action_dim)])
-    model_inputs.append(transforms.KeepModelKeys(extra_keys=frozenset(spec["aux_keys"])))
+    model_inputs = []
+    if include_model_transforms:
+        from openpi.models import tokenizer
+
+        model_inputs = [transforms.InjectDefaultPrompt(None), transforms.ResizeImages(224, 224)]
+        if stage == "offline_rl":
+            model_inputs.insert(1, transforms.ACPConditionPrompt(indicator_key="is_positive", dropout=float(dropout), default_positive=False))
+        model_inputs.append(transforms.TokenizePrompt(tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                            discrete_state_input=bool(getattr(model_config, "discrete_state_input", False))))
+        if pi05:
+            model_inputs.extend([transforms.PadActionsOnly(action_dim), transforms.FlattenState()])
+        else:
+            model_inputs.extend([transforms.FlattenState(), transforms.PadStatesAndActions(action_dim)])
+        model_inputs.append(transforms.KeepModelKeys(extra_keys=frozenset(spec["aux_keys"])))
     return dataclasses.replace(base, repack_transforms=transforms.Group(inputs=[repack]),
         data_transforms=transforms.Group(inputs=[ComposedInputs(spec, horizon, action_dim)], outputs=[]),
         model_transforms=transforms.Group(inputs=model_inputs), normalize_masks=normalization_masks(spec),

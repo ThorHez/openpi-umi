@@ -248,6 +248,19 @@ class ComposableDataConfig(DataConfigFactory):
 
         return composition_runtime_contract(self, model_config)
 
+    def processing_sample_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        """Build the real local data transforms without tokenization or downloads."""
+        from openpi.training.composed_processing import compose_data_config
+
+        # create_base_config retains the actual normalization statistics. Its
+        # loader short-circuits local paths; reject remote assets before calling
+        # it so a finite sample check cannot initiate a download.
+        assets_root = str(self.assets.assets_dir or assets_dirs)
+        asset_id = self.assets.asset_id or self.repo_id
+        if not pathlib.Path(assets_root).is_absolute() or "://" in str(asset_id):
+            raise ValueError("COMPOSITION_DATA_INVALID: 样本预检需要本机绝对归一化参数路径")
+        return compose_data_config(self, assets_dirs, model_config, include_model_transforms=False)
+
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         from openpi.training.composed_processing import compose_data_config

@@ -421,6 +421,8 @@ class BuilderTests(unittest.TestCase):
         @dataclasses.dataclass(frozen=True)
         class DataConfig:
             repo_id: str
+            norm_stats: object = None
+            asset_id: str | None = None
             repack_transforms: object = None
             data_transforms: object = None
             model_transforms: object = None
@@ -430,7 +432,8 @@ class BuilderTests(unittest.TestCase):
             action_loss_mask: tuple | None = None
             prompt_from_task: bool = False
             robot_type: str | None = None
-        self.base = DataConfig(str(self.repo), robot_type="ARM=1,G=0,H=0")
+        self.base = DataConfig(str(self.repo), norm_stats={"state": object(), "actions": object()},
+                               asset_id="registered-norm", robot_type="ARM=1,G=0,H=0")
         calls = self.tokenizer_calls
         class PaligemmaTokenizer:
             def __init__(self, max_len):self.max_len = max_len
@@ -439,7 +442,9 @@ class BuilderTests(unittest.TestCase):
                 return np.asarray([1, 2], dtype=np.int32), np.asarray([True, True])
         package = types.ModuleType("openpi");package.__path__ = [];package.transforms = transforms
         models = types.ModuleType("openpi.models");models.__path__ = [];package.models = models
-        modules = {"openpi": package, "openpi.transforms": transforms, "openpi.models": models}
+        training = types.ModuleType("openpi.training");training.__path__ = [];package.training = training
+        modules = {"openpi": package, "openpi.transforms": transforms, "openpi.models": models,
+                   "openpi.training": training, "openpi.training.composed_processing": COMPOSED}
         for name, value in (("pi0_config", Pi0Config), ("pi0_gripper", Pi0GripperConfig), ("pi0_value", Pi0ValueConfig), ("tokenizer", PaligemmaTokenizer)):
             module = types.ModuleType("openpi.models." + name)
             setattr(module, "PaligemmaTokenizer" if name == "tokenizer" else value.__name__, value)
@@ -449,14 +454,24 @@ class BuilderTests(unittest.TestCase):
         shared = {"dataclasses": dataclasses, "_transforms": transforms}
         actual_definitions(ROOT / "src/openpi/training/config.py", {"_set_robot_type"}, shared)
         self.set_robot_type = shared["_set_robot_type"]
+        config_tree = ast.parse((ROOT / "src/openpi/training/config.py").read_text())
+        factory = next(node for node in config_tree.body if isinstance(node, ast.ClassDef) and node.name == "ComposableDataConfig")
+        hook = next(node for node in factory.body if isinstance(node, ast.FunctionDef) and node.name == "processing_sample_config")
+        module = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), hook], type_ignores=[])
+        namespace = {"pathlib": types.SimpleNamespace(Path=Path)}
+        exec(compile(ast.fix_missing_locations(module), str(ROOT / "src/openpi/training/config.py"), "exec"), namespace)
+        self.sample_hook = namespace["processing_sample_config"]
 
-    def build(self, spec=None, *, model=None, stage="sft", dropout=0.0, action_shape=None):
+    def build(self, spec=None, *, model=None, stage="sft", dropout=0.0, action_shape=None, features=None, sample_only=False):
         spec = deepcopy(spec if spec is not None else composition())
         model = model if model is not None else self.models.Pi0Config()
         shape = action_shape if action_shape is not None else [model.action_horizon, sum(x["width"] for x in spec["action_layout"])]
-        (self.repo / "meta/info.json").write_text(json.dumps({"features": {spec["action_key"]: {"shape": shape}}}))
+        (self.repo / "meta/info.json").write_text(json.dumps({"features": {
+            **(features or {}), spec["action_key"]: {"shape": shape}}}))
         factory = types.SimpleNamespace(repo_id=str(self.repo), composition=spec, training_stage=stage, acp_dropout=dropout,
+                                        assets=types.SimpleNamespace(assets_dir=str(self.repo / "norm"), asset_id="."),
                                         create_base_config=lambda *args: self.base)
+        if sample_only:return self.sample_hook(factory, self.repo, model)
         return COMPOSED.compose_data_config(factory, self.repo, model)
 
     def sample(self, spec):return NumericTests.sample(self, spec)
@@ -470,6 +485,89 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(self.build(spec, action_shape=[10]).action_sequence_keys, ("actions",))
         with self.assertRaises(ValueError):self.build(spec, action_shape=[15, 10])
         with self.assertRaises(ValueError):self.build(spec, action_shape=[16, 9])
+
+    def test_sample_hook_uses_training_data_pipeline_and_norm_without_importing_tokenizer(self):
+        spec = composition();key = spec["cameras"][0]["key"]
+        spec["cameras"][0]["layout"] = "hwc"
+        features = {key: {"dtype": "video", "shape": [224, 224, 3]}}
+        normal = self.build(spec, features=features)
+        models_package = sys.modules["openpi.models"]
+        tokenizer_module = models_package.tokenizer
+        del models_package.tokenizer
+        try:
+            with patch.dict(sys.modules, {"openpi.models.tokenizer": None}):
+                checked = self.build(spec, features=features, sample_only=True)
+        finally:
+            models_package.tokenizer = tokenizer_module
+        self.assertEqual(list(checked.model_transforms.inputs), [])
+        self.assertEqual(checked.model_transforms.outputs, ())
+        self.assertIs(checked.norm_stats, normal.norm_stats)
+        for field in ("repo_id", "asset_id", "normalize_masks", "use_quantile_norm", "action_sequence_keys", "action_loss_mask", "prompt_from_task"):
+            self.assertEqual(getattr(checked, field), getattr(normal, field))
+        sample = self.sample(spec)
+        def apply(config, data):
+            for transform in (*config.repack_transforms.inputs, *config.data_transforms.inputs):data = transform(data)
+            return data
+        expected, actual = apply(normal, sample), apply(checked, sample)
+        np.testing.assert_array_equal(actual["state"], expected["state"])
+        np.testing.assert_array_equal(actual["actions"], expected["actions"])
+        for slot in actual["image"]:np.testing.assert_array_equal(actual["image"][slot], expected["image"][slot])
+        self.assertEqual(actual["image"][spec["cameras"][0]["slot"]].shape, (224, 224, 3))
+        self.assertEqual(sample[key].shape, (3, 224, 224))
+        self.assertEqual(self.tokenizer_calls, [])
+
+    def test_sample_hook_rejects_remote_norm_paths_before_loading_them(self):
+        factory = types.SimpleNamespace(repo_id=str(self.repo),
+            assets=types.SimpleNamespace(assets_dir="gs://bucket/norm", asset_id="."),
+            create_base_config=lambda *args: self.fail("sample checks must not download normalization assets"))
+        with self.assertRaisesRegex(ValueError, "本机绝对归一化参数路径"):
+            self.sample_hook(factory, self.repo, self.models.Pi0Config())
+        factory.assets.assets_dir = str(self.repo)
+        factory.assets.asset_id = "https://example.invalid/norm"
+        with self.assertRaisesRegex(ValueError, "本机绝对归一化参数路径"):
+            self.sample_hook(factory, self.repo, self.models.Pi0Config())
+
+    def test_decoded_image_and_video_layouts_use_the_same_checked_repack(self):
+        for dtype in ("image", "video"):
+            for layout in ("chw", "hwc"):
+                for history in (False, True):
+                    spec = composition();camera = spec["cameras"][0];key = camera["key"]
+                    camera.update(layout=layout, time_index=-1 if history else None)
+                    frame_shape = [3, 4, 5] if layout == "chw" else [4, 5, 3]
+                    source_shape = [2, *frame_shape] if history else frame_shape
+                    config = self.build(spec, features={key: {"dtype": dtype, "shape": source_shape}}, sample_only=True)
+                    sample = self.sample(spec)
+                    decoded_shape = (2, 3, 4, 5) if history else (3, 4, 5)
+                    sample[key] = np.full(decoded_shape, 0.5, dtype=np.float32)
+                    with self.subTest(dtype=dtype, layout=layout, history=history):
+                        output = config.data_transforms.inputs[0](config.repack_transforms.inputs[0](sample))
+                        image = output["image"][camera["slot"]]
+                        self.assertEqual(image.shape, (4, 5, 3));self.assertEqual(image.dtype, np.uint8)
+                        np.testing.assert_array_equal(image, 127)
+                        for bad_shape in ((1, 4, 5), (3, 5, 4), (2, 3, 4, 5) if not history else (3, 4, 5)):
+                            bad = {**sample, key: np.zeros(bad_shape, dtype=np.float32)}
+                            with self.assertRaisesRegex(ValueError, "CHW/TCHW"):
+                                config.repack_transforms.inputs[0](bad)
+
+    def test_sample_config_keeps_raw_numeric_and_depth_arrays_on_their_original_contract(self):
+        for kind, dtype, layout, shape in (("rgb", "float32", "hwc", [4, 5, 3]),
+                                          ("depth", "image", "hwc", [4, 5, 1])):
+            spec = composition();camera = spec["cameras"][0];key = camera["key"]
+            camera.update(kind=kind, layout=layout)
+            model = self.models.Pi0Config(depth_keys=(camera["slot"],)) if kind == "depth" else None
+            config = self.build(spec, model=model, features={key: {"dtype": dtype, "shape": shape}}, sample_only=True)
+            sample = self.sample(spec);sample[key] = np.full(shape, 0.5, dtype=np.float32)
+            repacked = config.repack_transforms.inputs[0](sample)
+            self.assertIs(repacked["_composition_camera_0"], sample[key])
+            self.assertEqual(config.data_transforms.inputs[0](repacked)["image"][camera["slot"]].shape, (4, 5, 3))
+
+    def test_sample_config_rejects_invalid_codec_channels_and_implicit_history_before_decoding(self):
+        for shape, time_index in (([4, 5, 1], None), ([4, 5], None),
+                                  ([2, 4, 5, 3], None), ([4, 5, 3], 0), ([2, 4, 5, 3], 2)):
+            spec = composition();camera = spec["cameras"][0]
+            camera.update(layout="hwc", time_index=time_index)
+            with self.subTest(shape=shape, time_index=time_index), self.assertRaisesRegex(ValueError, "COMPOSITION_DATA_INVALID"):
+                self.build(spec, features={camera["key"]: {"dtype": "video", "shape": shape}}, sample_only=True)
 
     def test_builder_accepts_optional_declarations_without_changing_training_contract(self):
         for factory in (composition, joint_composition):
