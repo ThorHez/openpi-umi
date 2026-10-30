@@ -83,5 +83,8 @@ def test_uot_depth_uses_the_same_contract_as_preprocessing():
     )
     np.testing.assert_allclose(Pi0.encode_visual_features(fake, None, observation, train=False), 1)
     observation.image_masks["camera"] = jnp.array([True, False])
-    with pytest.raises(ValueError, match="no valid image view"):
-        Pi0.encode_visual_features(fake, None, observation, train=False)
+    # Per-sample RGB validity belongs to preflight; feature extraction keeps the
+    # supplied masks and a safe zero for a sample with no valid RGB camera.
+    np.testing.assert_allclose(
+        Pi0.encode_visual_features(fake, None, observation, train=False), [[1.0] * 3, [0.0] * 3]
+    )

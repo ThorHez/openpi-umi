@@ -117,7 +117,6 @@ class Pi0(_model.BaseModel):
             tuple(observation.images), getattr(self, "image_keys", None), self.depth_keys
         )
         pooled_sum = None
-        rgb_masks = []
         batch_size = next(iter(observation.images.values())).shape[0]
         valid_camera_count = jnp.zeros((batch_size, 1), dtype=jnp.float32)
         for name, image in observation.images.items():
@@ -128,13 +127,11 @@ class Pi0(_model.BaseModel):
             image_tokens, _ = self.PaliGemma.img(image, train=False)
             pooled = jnp.mean(image_tokens.astype(jnp.float32), axis=1)
             camera_mask = observation.image_masks[name].astype(jnp.float32)[:, None]
-            rgb_masks.append(observation.image_masks[name])
             masked = pooled * camera_mask
             pooled_sum = masked if pooled_sum is None else pooled_sum + masked
             valid_camera_count = valid_camera_count + camera_mask
         if pooled_sum is None:
             raise ValueError("UOT visual alignment requires at least one RGB view")
-        _model._require_valid_views(jnp.any(jnp.stack(rgb_masks, axis=-1), axis=-1))
         return pooled_sum / jnp.maximum(valid_camera_count, 1.0)
 
     @at.typecheck

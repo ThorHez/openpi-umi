@@ -103,24 +103,77 @@ def test_depth_is_retained_without_rgb_augmentation():
 
 
 @pytest.mark.parametrize("compiled", [False, True])
-def test_all_masked_samples_fail_including_inside_jit(compiled):
+def test_preflight_owned_sample_validity_is_not_rechecked_inside_preprocessing(compiled):
     obs = observation(("wrist_rgb",))
     obs = dataclasses.replace(obs, image_masks={"wrist_rgb": jnp.asarray([True, False])})
     preprocess = functools.partial(model.preprocess_observation, None, image_resolution=(8, 8))
     if compiled:
         preprocess = jax.jit(preprocess)
-    with pytest.raises(Exception, match="no valid image view"):
-        jax.block_until_ready(preprocess(obs))
-    # Deliberate memory-only ablations remain available through an explicit opt-in.
-    processed = model.preprocess_observation(None, obs, allow_all_masked_images=True, image_resolution=(8, 8))
+    processed = jax.block_until_ready(preprocess(obs))
     np.testing.assert_array_equal(processed.image_masks["wrist_rgb"], [True, False])
 
 
-def test_all_invalid_video_frames_are_not_counted_as_an_available_camera():
+def test_all_invalid_video_frames_remain_masked_without_a_runtime_host_check():
     obs = observation(("wrist_rgb",), frames=3)
     obs = dataclasses.replace(obs, frame_valid_masks={"wrist_rgb": jnp.zeros((2, 3), dtype=bool)})
-    with pytest.raises(ValueError, match="no valid image view"):
-        model.preprocess_observation(None, obs)
+    processed = model.preprocess_observation(None, obs, image_resolution=(8, 8))
+    np.testing.assert_array_equal(processed.image_masks["wrist_rgb"], [False, False])
+    np.testing.assert_array_equal(processed.frame_valid_masks["wrist_rgb"], np.zeros((2, 3), dtype=bool))
+
+
+@pytest.mark.parametrize("frames", [None, 3])
+@pytest.mark.parametrize("train", [False, True])
+def test_preprocessing_graph_has_no_effects_or_host_callbacks(frames, train):
+    image_shape = (2, 8, 8, 3) if frames is None else (2, frames, 8, 8, 3)
+    frame_shape = (2, 1) if frames is None else (2, frames)
+
+    def preprocess(images, masks, frame_masks):
+        obs = model.Observation(
+            images={"wrist_rgb": images},
+            image_masks={"wrist_rgb": masks},
+            frame_valid_masks=None if frames is None else {"wrist_rgb": frame_masks},
+            state=jnp.zeros((2, 4)),
+        )
+        result = model.preprocess_observation(
+            jax.random.key(0), obs, train=train, image_resolution=(8, 8)
+        )
+        return result.images["wrist_rgb"], result.image_masks["wrist_rgb"]
+
+    graph = jax.make_jaxpr(preprocess)(
+        jnp.ones(image_shape), jnp.ones((2,), dtype=bool), jnp.ones(frame_shape, dtype=bool)
+    )
+    assert not graph.effects
+
+
+def test_preprocessing_reuses_jit_fast_dispatch_after_warmup(monkeypatch):
+    # The previous DebugEffect disabled JAX's C++ fast dispatch even when the
+    # error branch never ran. Cache size alone does not detect that regression.
+    from jax._src import pjit
+
+    def preprocess(images, masks):
+        obs = model.Observation(
+            images={"wrist_rgb": images}, image_masks={"wrist_rgb": masks}, state=jnp.zeros((2, 4))
+        )
+        result = model.preprocess_observation(None, obs, image_resolution=(8, 8))
+        return result.images["wrist_rgb"], result.image_masks["wrist_rgb"]
+
+    compiled = jax.jit(preprocess)
+    images, masks = jnp.ones((2, 8, 8, 3)), jnp.ones((2,), dtype=bool)
+    original = pjit._python_pjit_helper
+    slow_calls = []
+
+    def record_slow_dispatch(function, *args, **kwargs):
+        if function is preprocess:
+            slow_calls.append(function)
+        return original(function, *args, **kwargs)
+
+    monkeypatch.setattr(pjit, "_python_pjit_helper", record_slow_dispatch)
+    jax.block_until_ready(compiled(images, masks))
+    assert slow_calls, "The first call must exercise the instrumented compilation path"
+    slow_calls.clear()
+    for _ in range(5):
+        jax.block_until_ready(compiled(images, masks))
+    assert not slow_calls
 
 
 @pytest.mark.parametrize("factory,frames", [

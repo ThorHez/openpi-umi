@@ -213,23 +213,6 @@ def resolve_view_keys(
     return images, depth
 
 
-def _require_valid_views(valid: at.Array) -> None:
-    """Reject all-masked samples eagerly and under JIT, without copying valid batches to the host."""
-    def fail(invalid):
-        raise ValueError("Observation has no valid image view for one or more samples; "
-                         "check image_keys, image masks and frame masks, or explicitly set "
-                         "allow_all_masked_images=True for a deliberate image-free ablation")
-
-    invalid = jnp.logical_not(jnp.all(valid))
-    if isinstance(invalid, jax.core.Tracer):
-        def report(value):
-            jax.debug.callback(fail, value)
-            return jnp.int32(0)
-        jax.lax.cond(invalid, report, lambda _: jnp.int32(0), invalid)
-    elif bool(invalid):
-        fail(invalid)
-
-
 def preprocess_observation(
     rng: at.KeyArrayLike | None,
     observation: Observation,
@@ -245,8 +228,9 @@ def preprocess_observation(
     Legacy recipes retain all actual views, including 2/3/4-camera UMI and
     ShellGame base/wrist layouts. Explicit keys select a fixed layout for mixed
     datasets; absent views inherit the observed video length and are masked.
-    Depth views are resized without RGB augmentation. An all-masked sample is
-    rejected unless the caller explicitly enables an image-free ablation.
+    Depth views are resized without RGB augmentation. Sample-level image
+    validity is checked before training during data/configuration preflight;
+    preprocessing preserves masks without inserting host callbacks into JIT.
     """
     batch_shape = observation.state.shape[:-1]
     image_keys, depth_keys = resolve_view_keys(tuple(observation.images), image_keys, depth_keys)
@@ -299,8 +283,6 @@ def preprocess_observation(
             mask = mask & jnp.any(frame_mask, axis=-1)
         out_images[key] = image
         out_masks[key] = mask
-    if not allow_all_masked_images:
-        _require_valid_views(jnp.any(jnp.stack(tuple(out_masks.values()), axis=0), axis=0))
     # replace retains semantic memory, value targets and future optional fields.
     return dataclasses.replace(observation, images=out_images, image_masks=out_masks,
                                frame_valid_masks=out_frame_masks)
