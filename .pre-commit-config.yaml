@@ -1,6 +1,14 @@
 exclude: third_party/
 
 repos:
+  - repo: local
+    hooks:
+      - id: check-repo-size
+        name: Check staged files are at most 5 MiB
+        entry: python3 scripts/check_repo_size.py --staged
+        language: system
+        pass_filenames: false
+        always_run: true
   - repo: https://github.com/astral-sh/uv-pre-commit
     # uv version.
     rev: 0.5.14

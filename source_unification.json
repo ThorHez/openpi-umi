@@ -305,16 +305,27 @@
     "qwen": "Keep Qwen teacher tooling in a separate environment: scripts/mem/qwen3vl_shellgame_requirements.txt pins Transformers 4.57.1 while the OpenPI base pins 4.53.2. A unified Git branch does not imply one Python environment."
   },
   "artifact_policy": {
-    "executed": "Keep the experiment assets already tracked by mem_exp and their existing history. No experiment asset filtering or deletion was performed during source unification.",
+    "executed": "During the 2026-10-17 source unification, experiment assets already tracked by mem_exp and their history were preserved. The later checkout cleanup is recorded separately below.",
     "platform_git_boundary": "The platform repository records the openpi-umi Git submodule link. The submodule source and experiment assets are not copied into the platform Git tree.",
     "new_server_snapshots": "New platform-local server snapshots contain selected source files and patch backups only; no datasets, model weights or DTW outputs are copied into those snapshots.",
-    "future_cleanup_candidates": [
-      ".DS_Store",
-      "evaluation/shellgame/ run outputs",
-      "evalution/shellgame/ run outputs",
-      "ablation_results/ run outputs"
-    ],
-    "future_cleanup_status": "Moving experiment outputs to external artifact storage is separate future work; the candidates above are recommendations, not completed deletions."
+    "checkout_cleanup": {
+      "date": "2026-11-01",
+      "base_commit": "3b8872bd93d140dde6e7f95fdd996edabb6b75c9",
+      "history_rewritten": false,
+      "removed_files": 662,
+      "removed_bytes": 313248283,
+      "scope": [
+        "620 evaluation/**/*.mp4 and evalution/**/*.mp4 experiment videos",
+        "25 generated examples/umi/analyze exports and temporary Zarr files",
+        "12 third_party/aloha/aloha2 mechanical design files",
+        "1 unreferenced paper PDF under docs/",
+        "2 root debug plots, tracked .DS_Store and an editor swap file"
+      ],
+      "retained": "Training and inference source, recipes, dependency code, test fixtures, documentation media, LIBERO assets and examples, JSON/JSONL evaluation metrics and labels, and ablation summaries.",
+      "details": "docs/repository-size.md"
+    },
+    "future_cleanup_candidates": [],
+    "future_cleanup_status": "Evaluation metrics, labels and ablation summaries are intentionally retained because existing reports and summary scripts use them. No Git history cleanup is planned."
   },
   "validation": {
     "scoped_paths": [

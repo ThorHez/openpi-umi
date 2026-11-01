@@ -23,6 +23,13 @@ without installing the training dependencies:
 python scripts/check_unified_sources.py
 ```
 
+The checkout excludes historical evaluation videos, generated UMI analysis
+exports, ALOHA mechanical design files, and an unreferenced paper PDF. Training
+sources, dependencies, recipes, and experiment metrics are retained. See
+[repository size and artifact policy](docs/repository-size.md) for the cleanup
+scope, recovery instructions, and the 5 MiB file-size check. Git history is
+preserved; a full clone still includes the old artifacts.
+
 Training keeps separate entry points:
 
 | Capability | Entry point |
@@ -122,8 +129,9 @@ RGB features. MEM+UOT and MEM+RTC are not enabled by combining their sources.
 SFT/MEM/PF/UOT entry-point caches default to this checkout's `.cache/`; explicit
 cache environment variables remain supported. Legacy ReCap value entries retain
 their `HOME/.cache/jax` compilation cache, which the platform probes separately.
-Qwen tools retain their documented independent
-Python environment. Historical tracked experiment outputs are retained.
+Qwen tools retain their documented independent Python environment. Historical
+experiment metrics and summaries are retained; large media and generated exports
+are recoverable from Git history as described in the artifact policy above.
 CPU regression tests verify source, camera, batching, and inference interfaces;
 they do not establish GPU training progress, checkpoint quality, or robot behavior.
 The platform still needs its dedicated MEM stage adapter before scheduling the

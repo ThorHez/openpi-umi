@@ -196,3 +196,19 @@ ablation/
 ablation_results/
 
 *.mp4
+
+# Finder metadata and editor recovery files.
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Generated UMI analysis exports and temporary datasets; keep analysis scripts.
+/examples/umi/analyze/*.html
+/examples/umi/analyze/*.csv
+/examples/umi/analyze/plotly.min.js
+/examples/umi/analyze/v3_report*/
+/examples/umi/analyze/tmp_zarr/
+
+# Mechanical design files belong in the upstream hardware repository.
+/third_party/aloha/aloha2/
