@@ -3,11 +3,11 @@ Multi-dataset training script for Pi0 Hybrid.
 
 Same as train_hybrid.py but creates a multi-dataset data loader when config.data
 is MultiDataConfigFactory (multiple LeRobot datasets with optional per-dataset weights).
-Checkpoint saving stores norm_stats for each dataset under its asset_id.
+Checkpoint saving deduplicates shared statistics and refuses conflicting assets.
 
-Norm stats: When use_merged_norm_stats=True (default on MultiDataConfigFactory), each
-dataset's norm_stats are merged (weighted by config.weights) and applied to all
-datasets so state/actions are normalized consistently.
+Norm stats: use_merged_norm_stats=True loads a previously computed, verified
+shared_norm_stats_path. Compute this artifact from all weighted raw samples;
+existing per-dataset quantiles are never averaged at training time.
 
 Usage:
     python scripts/train_multi_dataset.py --config pi05_umi_multi_dataset --exp_name multi_task_v1

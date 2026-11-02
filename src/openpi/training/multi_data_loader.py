@@ -10,6 +10,8 @@ samples from different datasets and each sample has the correct per-sample mask.
 from __future__ import annotations
 
 import logging
+import math
+import numbers
 import time
 from typing import Literal
 
@@ -26,7 +28,25 @@ class WeightedConcatDataset(torch.utils.data.Dataset):
 
     def __init__(self, datasets: list[torch.utils.data.Dataset], weights: list[float] | None = None):
         self._datasets = list(datasets)
-        self._weights = weights  # per-dataset weight
+        self._weights = None
+        self._sampler_weights = None
+        if weights is not None:
+            if len(weights) != len(self._datasets):
+                raise ValueError("weights length must match the number of datasets")
+            validated = []
+            for weight in weights:
+                if isinstance(weight, bool) or not isinstance(weight, numbers.Real):
+                    raise ValueError("Each dataset weight must be a positive finite number")
+                value = float(weight)
+                if not math.isfinite(value) or value <= 0:
+                    raise ValueError("Each dataset weight must be a positive finite number")
+                validated.append(value)
+            scale = max(validated, default=1.0)
+            scaled = [weight / scale for weight in validated]
+            if any(weight == 0 for weight in scaled):
+                raise ValueError("Dataset weight dynamic range exceeds finite float64 precision")
+            self._weights = validated  # Original per-row weights, not source mixture probabilities.
+            self._sampler_weights = scaled
         self._cumulative = [0]
         for d in self._datasets:
             self._cumulative.append(self._cumulative[-1] + len(d))
@@ -44,12 +64,12 @@ class WeightedConcatDataset(torch.utils.data.Dataset):
         raise IndexError(idx)
 
     def get_dataset_weights_for_sampler(self) -> list[float]:
-        """Return a weight for each global index (for WeightedRandomSampler)."""
-        if not self._weights or len(self._weights) != len(self._datasets):
+        """Return scaled per-row weights with source mass proportional to N_i*w_i."""
+        if self._sampler_weights is None:
             return [1.0] * len(self)
         out = []
         for i, d in enumerate(self._datasets):
-            w = self._weights[i]
+            w = self._sampler_weights[i]
             out.extend([w] * len(d))
         return out
 
@@ -129,7 +149,9 @@ def create_multi_data_loader(
         datasets.append(ds)
         weights.append(w)
 
-    concat = WeightedConcatDataset(datasets, weights=weights if (len(set(weights)) > 1) else None)
+    # Validate every supplied weight, including equal invalid values which
+    # must not silently become an unweighted sampler.
+    concat = WeightedConcatDataset(datasets, weights=weights)
 
     for i, (dc, ds) in enumerate(zip(data_configs, datasets)):
         logging.info(f"  Dataset {i}: repo_id={dc.repo_id}, len={len(ds)}, weight={weights[i]}")

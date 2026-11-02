@@ -307,6 +307,21 @@ class Normalize(DataTransformFn):
         assert stats.q01 is not None
         assert stats.q99 is not None
 
+        if getattr(stats, "quantile_method", None) == "q01_q99":
+            # New weighted raw-sample assets explicitly opt into this formula.
+            # Preserve the historical min/max behavior of unmarked checkpoints.
+            if stats.q01.shape[-1] < x.shape[-1] or stats.q99.shape[-1] < x.shape[-1]:
+                raise ValueError("Shared quantile statistics are shorter than the raw input; normalize before padding")
+            low, high = stats.q01[..., : x.shape[-1]], stats.q99[..., : x.shape[-1]]
+            if np.any(high < low):
+                raise ValueError("Shared q99 must not be smaller than q01")
+            result = (x - low) / (high - low + 1e-6) * (output_max - output_min) + output_min
+            if norm_mask is not None:
+                if len(norm_mask) != x.shape[-1]:
+                    raise ValueError("Normalization mask must match the raw input width")
+                result = np.where(np.asarray(norm_mask, dtype=bool), result, x)
+            return result
+
         # Use min/max if available, else fall back to q01/q99
         if stats.min is not None and stats.max is not None:
             input_min = stats.min[..., : x.shape[-1]]
@@ -407,6 +422,22 @@ class Unnormalize(DataTransformFn):
     ):
         assert stats.q01 is not None
         assert stats.q99 is not None
+
+        if getattr(stats, "quantile_method", None) == "q01_q99":
+            # Model-only padding has no physical statistics. Leave that suffix
+            # untouched while inverting exactly the trained raw action prefix.
+            width = min(y.shape[-1], stats.q01.shape[-1])
+            low, high = stats.q01[..., :width], stats.q99[..., :width]
+            if low.shape != high.shape or np.any(high < low):
+                raise ValueError("Shared quantile statistics have inconsistent bounds")
+            if norm_mask is not None and len(norm_mask) < width:
+                raise ValueError("Normalization mask must cover the raw action width")
+            result = np.array(y, dtype=np.result_type(np.asarray(y).dtype, low.dtype, np.float32), copy=True)
+            raw = (result[..., :width] - output_min) / (output_max - output_min) * (high - low + 1e-6) + low
+            if norm_mask is not None:
+                raw = np.where(np.asarray(norm_mask[:width], dtype=bool), raw, result[..., :width])
+            result[..., :width] = raw
+            return result
 
         if stats.min is not None and stats.max is not None:
             input_min = stats.min[..., : y.shape[-1]]

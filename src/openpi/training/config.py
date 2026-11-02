@@ -4,7 +4,9 @@ import abc
 from collections.abc import Callable, Sequence
 import dataclasses
 import difflib
+import json
 import logging
+import math
 import pathlib
 from typing import Any, ClassVar, Literal, Protocol, TypeAlias
 
@@ -81,6 +83,8 @@ class DataConfig:
     asset_id: str | None = None
     # Contains precomputed normalization stats. If None, normalization will not be performed.
     norm_stats: dict[str, _transforms.NormStats] | None = None
+    # Provenance of a shared raw-sample statistic, retained in checkpoints.
+    norm_stats_metadata: dict[str, Any] | None = None
 
     # Optional per-key masks for normalization. See transforms.make_bool_mask.
     normalize_masks: dict[str, tuple[bool, ...]] | None = None
@@ -3450,21 +3454,60 @@ class MultiDataConfigFactory(DataConfigFactory):
         dataset's model_transforms so that all datasets produce identically-shaped state tensors
         for batching. Set to 0 or None to skip.
 
-    use_merged_norm_stats: if True, after creating each dataset's DataConfig, merge all
-        norm_stats (with optional weights) and assign the merged norm_stats to every config,
-        so all datasets use the same normalization. Recommended for multi-dataset training.
+    Shared statistics are computed from the weighted raw samples before training,
+    never by averaging existing means or quantiles. ``shared_norm_stats_path``
+    points to that artifact; every source receives its same state/action stats.
+    ``use_merged_norm_stats=False`` retains explicit legacy per-source stats.
     """
 
     repo_id: str = "multi"
     datasets: list[DataConfigFactory] = dataclasses.field(default_factory=list)
     weights: list[float] | None = None  # None = uniform; same length as datasets
-    # Optional source-level weights used only when merging normalization
-    # statistics.  This is separate from ``weights`` because the latter is a
-    # per-row sampler weight: differently sized datasets need inverse-size
-    # correction to realize a desired source mixture.
+    # Retained for config compatibility. Shared statistics must use the actual
+    # per-row training weights, rather than a separate source-mass override.
     norm_weights: list[float] | None = None
     state_pad_dim: int | None = None
     use_merged_norm_stats: bool = True
+    shared_norm_stats_path: str | None = None
+
+    def _validated_weights(self) -> list[float]:
+        if not self.datasets:
+            raise ValueError("MultiDataConfigFactory.datasets must be non-empty")
+        weights = [1.0] * len(self.datasets) if self.weights is None else self.weights
+        if (len(weights) != len(self.datasets)
+                or any(isinstance(weight, bool) or not isinstance(weight, (int, float))
+                       or not math.isfinite(weight) or weight <= 0 for weight in weights)):
+            raise ValueError("Multi-dataset weights must be positive finite per-row weights, one per dataset")
+        if self.use_merged_norm_stats and self.norm_weights is not None and list(self.norm_weights) != list(weights):
+            raise ValueError("Shared normalization must use the training row weights; separate norm_weights are unsupported")
+        return [float(weight) for weight in weights]
+
+    def _shared_path(self, assets_dirs: pathlib.Path) -> pathlib.Path | None:
+        if self.shared_norm_stats_path is not None:
+            path = pathlib.Path(self.shared_norm_stats_path).expanduser()
+            return path if path.name == "norm_stats.json" else path / "norm_stats.json"
+        paths = {
+            str((pathlib.Path(factory.assets.assets_dir or assets_dirs)
+                 / (factory.assets.asset_id or factory.repo_id) / "norm_stats.json").resolve())
+            for factory in self.datasets
+        }
+        return pathlib.Path(paths.pop()) if len(paths) == 1 else None
+
+    @staticmethod
+    def _checkpoint_id(asset_id: str | None, index: int) -> str:
+        if isinstance(asset_id, str) and asset_id:
+            path = pathlib.PurePosixPath(asset_id)
+            if (not path.is_absolute() and ".." not in path.parts and "\\" not in asset_id
+                    and not any(ord(char) < 32 for char in asset_id)):
+                return path.as_posix()
+        return f"dataset_{index}"
+
+    def validate_norm_stats(self, stats: dict[str, _transforms.NormStats]) -> None:
+        """Also enforce the shared formula when a policy loads checkpoint assets."""
+        if self.shared_norm_stats_path is not None:
+            for key in ("state", "actions"):
+                if key not in stats or getattr(stats[key], "quantile_method", None) != "q01_q99":
+                    raise ValueError("SHARED_NORM_INVALID: shared state/actions must declare q01_q99 normalization")
 
     def _apply_state_pad(self, dc: DataConfig) -> DataConfig:
         """If state_pad_dim is configured, append PadStateOnly to model_transforms."""
@@ -3475,28 +3518,74 @@ class MultiDataConfigFactory(DataConfigFactory):
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
-        """Return the first dataset's config (for backward compat with single-dataset code paths)."""
+        """Build the first policy layout, using checkpoint-compatible shared assets.
+
+        Inference may run without the original training datasets or norm source
+        path; policy_config loads the saved shared artifact from the checkpoint.
+        Training uses create_all(), which verifies all source provenance.
+        """
         if not self.datasets:
             raise ValueError("MultiDataConfigFactory.datasets must be non-empty")
-        return self._apply_state_pad(self.datasets[0].create(assets_dirs, model_config))
+        first = self._apply_state_pad(self.datasets[0].create(assets_dirs, model_config))
+        first = dataclasses.replace(first, asset_id=self._checkpoint_id(first.asset_id, 0))
+        if not self.use_merged_norm_stats:
+            return first
+        path = self._shared_path(assets_dirs)
+        if path is None:
+            # Keep old checkpoint policy layouts readable; new shared training
+            # always requires an explicit or common source artifact below.
+            return first
+        if not path.is_file():
+            return (dataclasses.replace(first, asset_id="shared", norm_stats=None)
+                    if self.shared_norm_stats_path is not None else first)
+        document = json.loads(path.read_text())
+        metadata = document.get("shared_normalization")
+        if metadata is None and self.shared_norm_stats_path is None:
+            return first
+        stats = _normalize.deserialize_json(json.dumps(document))
+        self.validate_norm_stats(stats)
+        return dataclasses.replace(first, asset_id="shared", norm_stats=stats, norm_stats_metadata=metadata)
 
     def create_all(
         self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig
     ) -> list[DataConfig]:
         """Return DataConfig for every dataset (for multi-dataset loader)."""
+        weights = self._validated_weights()
         all_configs = [self._apply_state_pad(f.create(assets_dirs, model_config)) for f in self.datasets]
         if self.use_merged_norm_stats:
-            stats_dict_list = [dc.norm_stats for dc in all_configs if dc.norm_stats is not None]
-            if stats_dict_list:
-                merge_weights = self.norm_weights if self.norm_weights is not None else self.weights
-                if merge_weights is None or len(merge_weights) != len(all_configs):
-                    merge_weights = [1.0] * len(all_configs)
-                weights_for_merge = [merge_weights[i] for i, dc in enumerate(all_configs) if dc.norm_stats is not None]
-                merged = _normalize.merge_norm_stats_dict(stats_dict_list, weights=weights_for_merge)
-                if merged:
-                    all_configs = [dataclasses.replace(dc, norm_stats=merged) for dc in all_configs]
-                    logging.info("Multi-dataset: merged norm_stats applied to all datasets.")
-        return all_configs
+            from openpi.training.shared_norm import load_shared_norm_document
+
+            path = self._shared_path(assets_dirs)
+            if path is None:
+                raise ValueError(
+                    "SHARED_NORM_REQUIRED: compute weighted raw-sample statistics with scripts/compute_norm_stats.py "
+                    "--output-dir <shared-directory>, then set shared_norm_stats_path; existing quantiles cannot be merged"
+                )
+            document = load_shared_norm_document(path, self.datasets, weights)
+            metadata = document["shared_normalization"]
+            shared = _normalize.deserialize_json(json.dumps(document))
+            # A single object and checkpoint identity for every training source.
+            all_configs = [dataclasses.replace(dc, norm_stats=shared, asset_id="shared", norm_stats_metadata=metadata)
+                           for dc in all_configs]
+            logging.info("Multi-dataset: loaded one verified weighted raw-sample statistic from %s", path)
+            return all_configs
+
+        # Legacy per-source normalization remains explicit. The platform often
+        # binds every asset as '.', so give differing contents distinct output
+        # identities rather than overwriting the previous source's statistics.
+        used: dict[str, str | None] = {}
+        distinct = []
+        for index, dc in enumerate(all_configs):
+            asset_id = self._checkpoint_id(dc.asset_id, index)
+            payload = (json.dumps(json.loads(_normalize.serialize_json(dc.norm_stats)), sort_keys=True)
+                       if dc.norm_stats is not None else None)
+            if asset_id in used and used[asset_id] != payload:
+                asset_id = f"dataset_{index}"
+                while asset_id in used:
+                    asset_id += "_"
+            used[asset_id] = payload
+            distinct.append(dataclasses.replace(dc, asset_id=asset_id))
+        return distinct
 
 
 @dataclasses.dataclass(frozen=True)

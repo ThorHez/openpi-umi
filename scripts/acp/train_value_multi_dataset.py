@@ -3,7 +3,7 @@
 Same training loop as ``train_value.py``, but when ``config.data`` is a
 ``MultiDataConfigFactory`` the data loader is built via
 ``openpi.training.multi_data_loader.create_multi_data_loader`` (weighted
-concatenation + optional merged norm stats), matching ``train_multi_dataset.py``.
+concatenation + verified shared raw-sample stats), matching ``train_multi_dataset.py``.
 
 For single-dataset configs this script behaves like ``train_value.py``.
 
@@ -321,7 +321,7 @@ if __name__ == "__main__":
         print(f"  Multi-dataset loader: {len(config.data.datasets)} dataset(s)")
         if config.data.state_pad_dim:
             print(f"  State pad dim: {config.data.state_pad_dim}")
-        print(f"  Merged norm stats: {config.data.use_merged_norm_stats}")
+        print(f"  Shared raw-sample norm stats: {config.data.use_merged_norm_stats}")
     else:
         print("  Single-dataset loader (same as train_value.py)")
     print("=" * 60 + "\n")

@@ -3,8 +3,9 @@ Multi-dataset training script for Pi0.
 
 Same as train.py but creates a multi-dataset data loader when config.data
 is MultiDataConfigFactory (multiple LeRobot datasets with optional per-dataset weights
-and unified state_pad_dim). Checkpoint saving stores norm_stats for each dataset
-under its asset_id.
+and unified state_pad_dim). Shared raw-sample statistics are loaded from one
+verified artifact and saved once under assets/shared for policy loading.
+Explicit legacy per-source statistics retain separate checkpoint identities.
 
 Usage:
     python scripts/train_multi_dataset.py --config pi05_umi_multi_dataset --exp_name multi_task_v1

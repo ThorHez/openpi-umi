@@ -1,5 +1,6 @@
 import json
 import pathlib
+from typing import Literal
 
 import numpy as np
 import numpydantic
@@ -14,6 +15,7 @@ class NormStats:
     min: numpydantic.NDArray | None = None
     q01: numpydantic.NDArray | None = None  # 1st quantile
     q99: numpydantic.NDArray | None = None  # 99th quantile
+    quantile_method: Literal["q01_q99"] | None = None
 
 
 class RunningStats:
@@ -133,11 +135,21 @@ def deserialize_json(data: str) -> dict[str, NormStats]:
     return _NormStatsDict(**json.loads(data)).norm_stats
 
 
-def save(directory: pathlib.Path | str, norm_stats: dict[str, NormStats]) -> None:
+def save(
+    directory: pathlib.Path | str,
+    norm_stats: dict[str, NormStats],
+    *,
+    shared_normalization: dict | None = None,
+) -> None:
     """Save the normalization stats to a directory."""
     path = pathlib.Path(directory) / "norm_stats.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(serialize_json(norm_stats))
+    document = serialize_json(norm_stats)
+    if shared_normalization is not None:
+        document = json.dumps(
+            {**json.loads(document), "shared_normalization": shared_normalization}, indent=2, allow_nan=False
+        )
+    path.write_text(document)
 
 
 def load(directory: pathlib.Path | str) -> dict[str, NormStats]:
@@ -152,15 +164,18 @@ def merge_norm_stats(
     stats_list: list[NormStats],
     weights: list[float] | None = None,
 ) -> NormStats:
-    """Merge multiple NormStats into one (e.g. for multi-dataset training).
+    """Merge moments from precomputed statistics that contain no quantiles.
 
     Uses weighted average for mean, and combined variance for std:
     Var(X) = E[X^2] - E[X]^2, E[X^2] = Var(X) + E[X]^2.
-    min/max are element-wise min/max across all; q01/q99 are weighted averages.
-    If weights is None, uses equal weights.
+    min/max are element-wise min/max across all. If weights is None, uses equal
+    weights. Pooled quantiles cannot be recovered from per-source quantiles;
+    compute those from original samples with scripts/compute_norm_stats.py.
     """
     if not stats_list:
         raise ValueError("stats_list must be non-empty")
+    if any(stats.q01 is not None or stats.q99 is not None for stats in stats_list):
+        raise ValueError("Pooled quantiles require original samples; use scripts/compute_norm_stats.py")
     n = len(stats_list)
     if weights is None:
         weights = [1.0] * n
@@ -177,10 +192,6 @@ def merge_norm_stats(
     merged_ex2 = weights[0] * (std**2 + mean**2)
     merged_min = np.asarray(stats_list[0].min).copy() if stats_list[0].min is not None else None
     merged_max = np.asarray(stats_list[0].max).copy() if stats_list[0].max is not None else None
-    q01_sum = weights[0] * np.asarray(stats_list[0].q01) if stats_list[0].q01 is not None else None
-    q99_sum = weights[0] * np.asarray(stats_list[0].q99) if stats_list[0].q99 is not None else None
-    q01_w = weights[0] if stats_list[0].q01 is not None else 0.0
-    q99_w = weights[0] if stats_list[0].q99 is not None else 0.0
 
     for i in range(1, n):
         s = stats_list[i]
@@ -192,28 +203,16 @@ def merge_norm_stats(
             merged_min = np.minimum(merged_min, np.asarray(s.min)) if merged_min is not None else np.asarray(s.min).copy()
         if s.max is not None:
             merged_max = np.maximum(merged_max, np.asarray(s.max)) if merged_max is not None else np.asarray(s.max).copy()
-        if s.q01 is not None:
-            arr = np.asarray(s.q01)
-            q01_sum = q01_sum + weights[i] * arr if q01_sum is not None else weights[i] * arr
-            q01_w += weights[i]
-        if s.q99 is not None:
-            arr = np.asarray(s.q99)
-            q99_sum = q99_sum + weights[i] * arr if q99_sum is not None else weights[i] * arr
-            q99_w += weights[i]
 
     merged_mean = merged_mean / w_sum
     merged_var = np.maximum(0.0, merged_ex2 / w_sum - merged_mean**2)
     merged_std = np.sqrt(merged_var)
-    merged_q01 = (q01_sum / q01_w) if q01_sum is not None and q01_w > 0 else None
-    merged_q99 = (q99_sum / q99_w) if q99_sum is not None and q99_w > 0 else None
 
     return NormStats(
         mean=merged_mean,
         std=merged_std,
         min=merged_min,
         max=merged_max,
-        q01=merged_q01,
-        q99=merged_q99,
     )
 
 
@@ -221,11 +220,11 @@ def merge_norm_stats_dict(
     stats_dict_list: list[dict[str, NormStats]],
     weights: list[float] | None = None,
 ) -> dict[str, NormStats]:
-    """Merge per-key norm_stats from multiple datasets into one dict.
+    """Merge per-key moments from multiple datasets into one dict.
 
     For each key (e.g. 'state', 'actions'), merges the NormStats from all dicts
-    that have that key. Returns a single dict[str, NormStats] suitable for
-    use as norm_stats for all datasets in multi-dataset training.
+    that have that key. Quantile-bearing inputs are rejected: shared quantile
+    statistics must be computed from the original samples instead.
     """
     if not stats_dict_list:
         raise ValueError("stats_dict_list must be non-empty")

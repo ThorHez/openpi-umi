@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures as futures
 import dataclasses
+import json
 import logging
+import pathlib
 from typing import Protocol
 
 from etils import epath
@@ -62,6 +64,39 @@ def initialize_checkpoint_dir(
     return mngr, resuming
 
 
+def _save_norm_assets(directory: epath.Path, configs) -> None:
+    """Validate every target before writing; shared assets are saved just once."""
+    pending = {}
+    for config in configs:
+        stats = config.norm_stats
+        if stats is None:
+            continue
+        asset_id = config.asset_id
+        if not isinstance(asset_id, str) or not asset_id:
+            raise ValueError("A normalization asset needs an explicit checkpoint asset_id")
+        target = pathlib.PurePosixPath(asset_id)
+        if (target.is_absolute() or ".." in target.parts or "\\" in asset_id
+                or any(ord(char) < 32 for char in asset_id)):
+            raise ValueError("Normalization asset_id must stay inside the checkpoint assets directory")
+        asset_id = target.as_posix()
+        metadata = getattr(config, "norm_stats_metadata", None)
+        document = json.loads(_normalize.serialize_json(stats))
+        if metadata is not None:
+            document["shared_normalization"] = metadata
+        identity = json.dumps(document, sort_keys=True, allow_nan=False)
+        if asset_id in pending and pending[asset_id][0] != identity:
+            raise ValueError(
+                f"Conflicting normalization statistics target the same checkpoint asset '{asset_id}'; "
+                "bind one shared raw-sample statistic or use distinct per-source asset IDs"
+            )
+        pending[asset_id] = (identity, stats, metadata)
+    files = [pathlib.PurePosixPath(asset_id) / "norm_stats.json" for asset_id in pending]
+    if any(left in right.parents for left in files for right in files if left != right):
+        raise ValueError("Normalization asset paths conflict with another statistics file")
+    for asset_id, (_, stats, metadata) in pending.items():
+        _normalize.save(directory / asset_id, stats, shared_normalization=metadata)
+
+
 def save_state(
     checkpoint_manager: ocp.CheckpointManager,
     state: training_utils.TrainState,
@@ -69,18 +104,8 @@ def save_state(
     step: int,
 ):
     def save_assets(directory: epath.Path):
-        # Multi-dataset loader exposes data_configs(); save norm_stats for each dataset.
-        if hasattr(data_loader, "data_configs"):
-            configs = data_loader.data_configs()
-            for data_config in configs:
-                norm_stats = data_config.norm_stats
-                if norm_stats is not None and data_config.asset_id is not None:
-                    _normalize.save(directory / data_config.asset_id, norm_stats)
-        else:
-            data_config = data_loader.data_config()
-            norm_stats = data_config.norm_stats
-            if norm_stats is not None and data_config.asset_id is not None:
-                _normalize.save(directory / data_config.asset_id, norm_stats)
+        configs = data_loader.data_configs() if hasattr(data_loader, "data_configs") else [data_loader.data_config()]
+        _save_norm_assets(directory, configs)
 
     # Split params that can be used for inference into a separate item.
     with at.disable_typechecking():
