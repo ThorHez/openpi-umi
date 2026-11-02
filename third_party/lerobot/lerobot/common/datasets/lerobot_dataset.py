@@ -505,8 +505,16 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.episode_data_index = get_episode_data_index(self.meta.episodes, self.episodes)
 
         # Check timestamps
-        timestamps = torch.stack(self.hf_dataset["timestamp"]).numpy()
-        episode_indices = torch.stack(self.hf_dataset["episode_index"]).numpy()
+        # The dataset's sample transform creates one Tensor per scalar. Read
+        # unformatted columns and convert each column once instead, preserving
+        # torch's default float dtype while leaving the sample format intact.
+        unformatted = self.hf_dataset.with_format(None)
+        timestamp_values = list(unformatted["timestamp"])
+        episode_values = list(unformatted["episode_index"])
+        if not timestamp_values or not episode_values:
+            raise ValueError("timestamp and episode_index columns must not be empty")
+        timestamps = torch.tensor(timestamp_values).numpy()
+        episode_indices = torch.tensor(episode_values).numpy()
         ep_data_index_np = {k: t.numpy() for k, t in self.episode_data_index.items()}
         check_timestamps_sync(timestamps, episode_indices, ep_data_index_np, self.fps, self.tolerance_s)
 
