@@ -83,18 +83,24 @@ def _save_norm_assets(directory: epath.Path, configs) -> None:
         document = json.loads(_normalize.serialize_json(stats))
         if metadata is not None:
             document["shared_normalization"] = metadata
+        method = getattr(config, "normalization_method", None)
+        if method is not None:
+            if method not in ("minmax", "quantile", "zscore"):
+                raise ValueError("Normalization method must be minmax, quantile or zscore")
+            document["normalization_method"] = method
         identity = json.dumps(document, sort_keys=True, allow_nan=False)
         if asset_id in pending and pending[asset_id][0] != identity:
             raise ValueError(
                 f"Conflicting normalization statistics target the same checkpoint asset '{asset_id}'; "
                 "bind one shared raw-sample statistic or use distinct per-source asset IDs"
             )
-        pending[asset_id] = (identity, stats, metadata)
+        pending[asset_id] = (identity, stats, metadata, method)
     files = [pathlib.PurePosixPath(asset_id) / "norm_stats.json" for asset_id in pending]
     if any(left in right.parents for left in files for right in files if left != right):
         raise ValueError("Normalization asset paths conflict with another statistics file")
-    for asset_id, (_, stats, metadata) in pending.items():
-        _normalize.save(directory / asset_id, stats, shared_normalization=metadata)
+    for asset_id, (_, stats, metadata, method) in pending.items():
+        explicit = {"normalization_method": method} if method is not None else {}
+        _normalize.save(directory / asset_id, stats, shared_normalization=metadata, **explicit)
 
 
 def save_state(

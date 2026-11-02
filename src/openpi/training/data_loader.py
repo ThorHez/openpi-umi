@@ -1,4 +1,5 @@
 from collections.abc import Iterator, Sequence
+import dataclasses
 import functools
 import logging
 import multiprocessing
@@ -185,6 +186,16 @@ def create_rlds_dataset(
     )
 
 
+def _apply_global_normalization(data_config, train_config):
+    """Apply the requested training formula after the dataset factory resolves."""
+    method = getattr(train_config, "normalization_method", None)
+    if method is None:
+        return data_config
+    if not isinstance(method, str) or method not in {"minmax", "quantile", "zscore"}:
+        raise ValueError("normalization_method must be minmax, quantile, zscore, or None")
+    return dataclasses.replace(data_config, normalization_method=method)
+
+
 def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip_norm_stats: bool = False) -> Dataset:
     """Transform the dataset by applying the data transforms."""
     norm_stats = {}
@@ -201,7 +212,11 @@ def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip
     transform_inputs: list = [
         *data_config.repack_transforms.inputs,
         *data_config.data_transforms.inputs,
-        _transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm, key_masks=getattr(data_config, "normalize_masks", None)),
+        _transforms.Normalize(
+            norm_stats, use_quantiles=data_config.use_quantile_norm,
+            key_masks=getattr(data_config, "normalize_masks", None),
+            method=getattr(data_config, "normalization_method", None),
+        ),
         *data_config.model_transforms.inputs,
     ]
     if data_config.action_loss_mask is not None:
@@ -231,7 +246,11 @@ def transform_iterable_dataset(
     transform_inputs: list = [
         *data_config.repack_transforms.inputs,
         *data_config.data_transforms.inputs,
-        _transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm, key_masks=getattr(data_config, "normalize_masks", None)),
+        _transforms.Normalize(
+            norm_stats, use_quantiles=data_config.use_quantile_norm,
+            key_masks=getattr(data_config, "normalize_masks", None),
+            method=getattr(data_config, "normalization_method", None),
+        ),
         *data_config.model_transforms.inputs,
     ]
     if data_config.action_loss_mask is not None:
@@ -259,6 +278,7 @@ def create_data_loader(
         framework: The framework to use ("jax" or "pytorch").
     """
     data_config = config.data.create(config.assets_dirs, config.model)
+    data_config = _apply_global_normalization(data_config, config)
     logging.info(f"data_config: {data_config}")
 
     if data_config.rlds_data_dir is not None:

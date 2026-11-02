@@ -18,7 +18,11 @@ from pathlib import Path
 import stat
 
 
-_IGNORED_RESOURCES = {"repo_id", "assets", "asset_id", "norm_stats", "norm_stats_metadata"}
+_IGNORED_RESOURCES = {
+    "repo_id", "assets", "asset_id", "norm_stats", "norm_stats_metadata",
+    # These formulas run after the numeric vectors measured by the artifact.
+    "normalization_method", "use_quantile_norm",
+}
 _MAX_FILES = 100_000
 _MAX_JSON = 8 * 1024 * 1024
 _MAX_SOURCE = 16 * 1024 * 1024
@@ -127,13 +131,17 @@ def _processor(factory, *, compatibility=False):
         raise _error("each source must use a dataclass data factory")
     value = _canonical(factory)
     value["implementation"] = _implementation(factory)
-    if compatibility and type(factory).__name__ == "ComposableDataConfig":
+    if type(factory).__name__ == "ComposableDataConfig":
         composition = value["fields"].get("composition")
         if not isinstance(composition, dict):
             raise _error("ComposableDataConfig requires an explicit numeric composition")
-        # Camera routing and language do not affect state/action statistics.
+        # Formula choice is downstream of raw numeric statistics. Camera
+        # routing and language may differ across compatible source layouts.
+        omitted = {"normalization"}
+        if compatibility:
+            omitted.update({"cameras", "prompt_key"})
         value["fields"]["composition"] = {
-            key: item for key, item in composition.items() if key not in {"cameras", "prompt_key"}
+            key: item for key, item in composition.items() if key not in omitted
         }
     return value
 

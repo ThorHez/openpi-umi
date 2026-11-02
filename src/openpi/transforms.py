@@ -240,7 +240,7 @@ class ACPForcePositivePrompt(DataTransformFn):
 @dataclasses.dataclass(frozen=True)
 class Normalize(DataTransformFn):
     norm_stats: at.PyTree[NormStats] | None
-    # If true, will use quantile normalization for all keys (default behavior).
+    # Legacy switch used only when no explicit method is configured.
     use_quantiles: bool = False
     # If true, will raise an error if any of the keys in the norm stats are not present in the data.
     strict: bool = False
@@ -251,16 +251,20 @@ class Normalize(DataTransformFn):
     key_masks: dict[str, tuple[bool, ...]] | None = None
     # Internal field, will be populated in __post_init__
     key_methods: dict[str, Callable] | None = None
+    # Explicit choice overrides both legacy use_quantiles and artifact markers.
+    method: str | None = None
 
     def __post_init__(self):
-        if self.norm_stats is not None and self.use_quantiles:
+        if self.method is not None:
+            _assert_normalization_stats(self.norm_stats, self.method)
+        elif self.norm_stats is not None and self.use_quantiles:
             _assert_quantile_stats(self.norm_stats)
 
         # Build key_methods from key_masks configuration
         methods = {}
         if self.key_masks:
             for key, mask in self.key_masks.items():
-                if self.use_quantiles:
+                if self.method in ("minmax", "quantile") or self.method is None and self.use_quantiles:
                     methods[key] = partial(self._normalize_quantile, norm_mask=mask)
                 else:
                     methods[key] = partial(self._normalize, norm_mask=mask)
@@ -272,7 +276,8 @@ class Normalize(DataTransformFn):
         if self.norm_stats is None:
             return data
 
-        default_fn = self._normalize_quantile if self.use_quantiles else self._normalize
+        use_range = self.method in ("minmax", "quantile") or self.method is None and self.use_quantiles
+        default_fn = self._normalize_quantile if use_range else self._normalize
         return apply_tree(
             data,
             self.norm_stats,
@@ -282,6 +287,10 @@ class Normalize(DataTransformFn):
         )
 
     def _normalize(self, x, stats: NormStats, norm_mask: tuple[bool, ...] | None = None):
+        if getattr(self, "method", None) == "zscore" and (
+            stats.mean.shape[-1] < x.shape[-1] or stats.std.shape[-1] < x.shape[-1]
+        ):
+            raise ValueError("Normalization statistics are shorter than the raw input; normalize before padding")
         mean, std = stats.mean[..., : x.shape[-1]], stats.std[..., : x.shape[-1]]
         result = (x - mean) / (std + 1e-6)
 
@@ -304,23 +313,28 @@ class Normalize(DataTransformFn):
         range_eps: float = 1e-7,
         norm_mask: tuple[bool, ...] | None = None,
     ):
-        assert stats.q01 is not None
-        assert stats.q99 is not None
-
-        if getattr(stats, "quantile_method", None) == "q01_q99":
-            # New weighted raw-sample assets explicitly opt into this formula.
-            # Preserve the historical min/max behavior of unmarked checkpoints.
-            if stats.q01.shape[-1] < x.shape[-1] or stats.q99.shape[-1] < x.shape[-1]:
-                raise ValueError("Shared quantile statistics are shorter than the raw input; normalize before padding")
-            low, high = stats.q01[..., : x.shape[-1]], stats.q99[..., : x.shape[-1]]
+        method = getattr(self, "method", None)
+        if method in ("minmax", "quantile") or (
+            method is None and getattr(stats, "quantile_method", None) == "q01_q99"
+        ):
+            # Explicit selection never falls back to another pair of bounds.
+            low, high = ((stats.min, stats.max) if method == "minmax" else (stats.q01, stats.q99))
+            if low is None or high is None:
+                raise ValueError("Selected normalization bounds are missing")
+            if low.shape[-1] < x.shape[-1] or high.shape[-1] < x.shape[-1]:
+                raise ValueError("Normalization statistics are shorter than the raw input; normalize before padding")
+            low, high = low[..., : x.shape[-1]], high[..., : x.shape[-1]]
             if np.any(high < low):
-                raise ValueError("Shared q99 must not be smaller than q01")
+                raise ValueError("Normalization upper bounds must not be smaller than lower bounds")
             result = (x - low) / (high - low + 1e-6) * (output_max - output_min) + output_min
             if norm_mask is not None:
                 if len(norm_mask) != x.shape[-1]:
                     raise ValueError("Normalization mask must match the raw input width")
                 result = np.where(np.asarray(norm_mask, dtype=bool), result, x)
             return result
+
+        assert stats.q01 is not None
+        assert stats.q99 is not None
 
         # Use min/max if available, else fall back to q01/q99
         if stats.min is not None and stats.max is not None:
@@ -361,22 +375,25 @@ class Normalize(DataTransformFn):
 @dataclasses.dataclass(frozen=True)
 class Unnormalize(DataTransformFn):
     norm_stats: at.PyTree[NormStats] | None
-    # If true, will use quantile unnormalization for all keys (default behavior).
+    # Legacy switch used only when no explicit method is configured.
     use_quantiles: bool = False
     # Dict mapping key names to their norm_mask tuples. Must match key_masks in Normalize.
     # Use make_bool_mask() to create masks easily.
     key_masks: dict[str, tuple[bool, ...]] | None = None
     # Internal field, will be populated in __post_init__
     key_methods: dict[str, Callable] | None = None
+    method: str | None = None
 
     def __post_init__(self):
-        if self.norm_stats is not None and self.use_quantiles:
+        if self.method is not None:
+            _assert_normalization_stats(self.norm_stats, self.method)
+        elif self.norm_stats is not None and self.use_quantiles:
             _assert_quantile_stats(self.norm_stats)
 
         methods = {}
         if self.key_masks:
             for key, mask in self.key_masks.items():
-                if self.use_quantiles:
+                if self.method in ("minmax", "quantile") or self.method is None and self.use_quantiles:
                     methods[key] = partial(self._unnormalize_quantile, norm_mask=mask)
                 else:
                     methods[key] = partial(self._unnormalize, norm_mask=mask)
@@ -387,7 +404,8 @@ class Unnormalize(DataTransformFn):
         if self.norm_stats is None:
             return data
 
-        default_fn = self._unnormalize_quantile if self.use_quantiles else self._unnormalize
+        use_range = self.method in ("minmax", "quantile") or self.method is None and self.use_quantiles
+        default_fn = self._unnormalize_quantile if use_range else self._unnormalize
         return apply_tree(
             data,
             self.norm_stats,
@@ -397,6 +415,17 @@ class Unnormalize(DataTransformFn):
         )
 
     def _unnormalize(self, x, stats: NormStats, norm_mask: tuple[bool, ...] | None = None):
+        if getattr(self, "method", None) == "zscore":
+            width = min(x.shape[-1], stats.mean.shape[-1])
+            mean, std = stats.mean[..., :width], stats.std[..., :width]
+            if norm_mask is not None and len(norm_mask) < width:
+                raise ValueError("Normalization mask must cover the raw action width")
+            result = np.array(x, dtype=np.result_type(np.asarray(x).dtype, mean.dtype, np.float32), copy=True)
+            raw = result[..., :width] * (std + 1e-6) + mean
+            if norm_mask is not None:
+                raw = np.where(np.asarray(norm_mask[:width], dtype=bool), raw, result[..., :width])
+            result[..., :width] = raw
+            return result
         mean = pad_to_dim(stats.mean, x.shape[-1], axis=-1, value=0.0)
         std = pad_to_dim(stats.std, x.shape[-1], axis=-1, value=1.0)
         result = x * (std + 1e-6) + mean
@@ -420,16 +449,19 @@ class Unnormalize(DataTransformFn):
         range_eps: float = 1e-7,
         norm_mask: tuple[bool, ...] | None = None,
     ):
-        assert stats.q01 is not None
-        assert stats.q99 is not None
-
-        if getattr(stats, "quantile_method", None) == "q01_q99":
+        method = getattr(self, "method", None)
+        if method in ("minmax", "quantile") or (
+            method is None and getattr(stats, "quantile_method", None) == "q01_q99"
+        ):
             # Model-only padding has no physical statistics. Leave that suffix
             # untouched while inverting exactly the trained raw action prefix.
-            width = min(y.shape[-1], stats.q01.shape[-1])
-            low, high = stats.q01[..., :width], stats.q99[..., :width]
+            low, high = ((stats.min, stats.max) if method == "minmax" else (stats.q01, stats.q99))
+            if low is None or high is None:
+                raise ValueError("Selected normalization bounds are missing")
+            width = min(y.shape[-1], low.shape[-1])
+            low, high = low[..., :width], high[..., :width]
             if low.shape != high.shape or np.any(high < low):
-                raise ValueError("Shared quantile statistics have inconsistent bounds")
+                raise ValueError("Normalization statistics have inconsistent bounds")
             if norm_mask is not None and len(norm_mask) < width:
                 raise ValueError("Normalization mask must cover the raw action width")
             result = np.array(y, dtype=np.result_type(np.asarray(y).dtype, low.dtype, np.float32), copy=True)
@@ -438,6 +470,9 @@ class Unnormalize(DataTransformFn):
                 raw = np.where(np.asarray(norm_mask[:width], dtype=bool), raw, result[..., :width])
             result[..., :width] = raw
             return result
+
+        assert stats.q01 is not None
+        assert stats.q99 is not None
 
         if stats.min is not None and stats.max is not None:
             input_min = stats.min[..., : y.shape[-1]]
@@ -1250,6 +1285,26 @@ def pad_to_dim(x: np.ndarray, target_dim: int, axis: int = -1, value: float = 0.
         pad_width[axis] = (0, target_dim - current_dim)
         return np.pad(x, pad_width, constant_values=value)
     return x
+
+
+def _assert_normalization_stats(norm_stats, method: str) -> None:
+    """Require the selected statistic instead of silently using another scale."""
+    if method not in ("minmax", "quantile", "zscore"):
+        raise ValueError("Normalization method must be minmax, quantile or zscore")
+    if norm_stats is None:
+        return
+    fields = {"minmax": ("min", "max"), "quantile": ("q01", "q99"), "zscore": ("mean", "std")}[method]
+    for key, stats in flatten_dict(norm_stats).items():
+        arrays = [getattr(stats, field, None) for field in fields]
+        if any(value is None for value in arrays):
+            raise ValueError(f"{method} normalization requires {fields[0]}/{fields[1]} for {key}")
+        low, high = (np.asarray(value) for value in arrays)
+        if (low.ndim != 1 or high.shape != low.shape or not low.size
+                or low.dtype.kind not in "iuf" or high.dtype.kind not in "iuf"
+                or not np.isfinite(low).all() or not np.isfinite(high).all()):
+            raise ValueError(f"{method} normalization requires matching finite vectors for {key}")
+        if method == "zscore" and np.any(high < 0) or method != "zscore" and np.any(high < low):
+            raise ValueError(f"Invalid {method} normalization statistics for {key}")
 
 
 def _assert_quantile_stats(norm_stats: at.PyTree[NormStats]) -> None:

@@ -117,6 +117,37 @@ batching remains unchanged.
 
 ## Reloading normalization statistics
 
+### Select the training formula explicitly
+
+Set `TrainConfig.normalization_method` to `"minmax"`, `"quantile"`, or
+`"zscore"` to apply one formula to all resolved dataset configurations:
+
+```python
+TrainConfig(
+    # ... the same dataset, model and shared statistic bindings ...
+    normalization_method="minmax",  # or "quantile" / "zscore"
+)
+```
+
+For Min-Max, `lo=min` and `hi=max`; for quantile normalization, `lo=q01`
+and `hi=q99`. Both use `2 * (x - lo) / (hi - lo + 1e-6) - 1` without clipping.
+Z-score uses `(x - mean) / (std + 1e-6)`. Explicit choices require their own
+statistics and never fall back to other bounds or the file's quantile marker.
+Normalization masks still preserve excluded dimensions, and inverse transforms
+use the same formula, bounds and epsilon while retaining model-only padding.
+
+The selected method is saved in each checkpoint normalization artifact. Serving
+restores it when the supplied recipe does not specify a method, and rejects a
+conflicting explicit choice before loading model weights. Portable policy
+configuration retains the same choice. `None` keeps the legacy bool and artifact
+rules, so historical recipes are not silently reinterpreted.
+
+Switching only this consumer formula does not change raw-sample statistics, and
+can reuse a shared artifact containing both bound pairs after a fresh preflight.
+Changing data, preprocessing or source implementation still invalidates its
+provenance. In particular, upgrading older code may require recomputing an old
+artifact whose implementation hashes no longer match; hashes are not bypassed.
+
 When you fine-tune one of our models on a new dataset, you need to decide whether to (A) reuse existing normalization statistics or (B) compute new statistics over your new training data. Which option is better for you depends on the similarity of your robot and task to the robot and task distribution in the pre-training dataset. Below, we list all the available pre-training normalization statistics for each model.
 
 **If your target robot matches one of these pre-training statistics, consider reloading the same normalization statistics.** By reloading the normalization statistics, the actions in your dataset will be more "familiar" to the model, which can lead to better performance. You can reload the normalization statistics by adding an `AssetsConfig` to your training config that points to the corresponding checkpoint directory and normalization statistics ID, like below for the `Trossen` (aka ALOHA) robot statistics of the `pi0_base` checkpoint:

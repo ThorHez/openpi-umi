@@ -140,15 +140,21 @@ def save(
     norm_stats: dict[str, NormStats],
     *,
     shared_normalization: dict | None = None,
+    normalization_method: Literal["minmax", "quantile", "zscore"] | None = None,
 ) -> None:
     """Save the normalization stats to a directory."""
     path = pathlib.Path(directory) / "norm_stats.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     document = serialize_json(norm_stats)
-    if shared_normalization is not None:
-        document = json.dumps(
-            {**json.loads(document), "shared_normalization": shared_normalization}, indent=2, allow_nan=False
-        )
+    if normalization_method is not None and normalization_method not in ("minmax", "quantile", "zscore"):
+        raise ValueError("Normalization method must be minmax, quantile or zscore")
+    if shared_normalization is not None or normalization_method is not None:
+        values = json.loads(document)
+        if shared_normalization is not None:
+            values["shared_normalization"] = shared_normalization
+        if normalization_method is not None:
+            values["normalization_method"] = normalization_method
+        document = json.dumps(values, indent=2, allow_nan=False)
     path.write_text(document)
 
 
@@ -158,6 +164,22 @@ def load(directory: pathlib.Path | str) -> dict[str, NormStats]:
     if not path.exists():
         raise FileNotFoundError(f"Norm stats file not found at: {path}")
     return deserialize_json(path.read_text())
+
+
+def load_method(directory: pathlib.Path | str) -> Literal["minmax", "quantile", "zscore"] | None:
+    """Read the explicitly trained formula, leaving old checkpoint rules intact."""
+    return load_with_method(directory)[1]
+
+
+def load_with_method(directory: pathlib.Path | str) -> tuple[dict[str, NormStats], str | None]:
+    """Read statistics and their trained formula from the same file contents."""
+    path = pathlib.Path(directory) / "norm_stats.json"
+    contents = path.read_text()
+    document = json.loads(contents)
+    method = document.get("normalization_method")
+    if method is not None and method not in ("minmax", "quantile", "zscore"):
+        raise ValueError("Checkpoint normalization method must be minmax, quantile or zscore")
+    return deserialize_json(contents), method
 
 
 def merge_norm_stats(

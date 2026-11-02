@@ -17,6 +17,28 @@ from openpi.training import config as _config
 import openpi.transforms as transforms
 
 
+def _with_checkpoint_normalization_method(
+    train_config, data_config, checkpoint_dir, *, recorded_method=None, read_checkpoint=True
+):
+    """Restore the trained formula and reject explicit configuration conflicts."""
+    requested = getattr(train_config, "normalization_method", None)
+    if requested is None:
+        requested = getattr(data_config, "normalization_method", None)
+    if requested is not None and (not isinstance(requested, str) or requested not in {"minmax", "quantile", "zscore"}):
+        raise ValueError("normalization_method must be minmax, quantile, zscore, or None")
+    recorded = recorded_method
+    if read_checkpoint and data_config.asset_id is not None:
+        directory = pathlib.Path(checkpoint_dir) / "assets" / data_config.asset_id
+        # Explicitly supplied statistics may be used without a checkpoint asset.
+        # If an asset exists, its method remains part of the training contract.
+        if (directory / "norm_stats.json").is_file():
+            recorded = _normalize.load_method(directory)
+    if requested is not None and recorded is not None and requested != recorded:
+        raise ValueError("NORMALIZATION_METHOD_CONFLICT: requested method differs from the trained checkpoint")
+    method = recorded if requested is None else requested
+    return dataclasses.replace(data_config, normalization_method=method) if method is not None else data_config
+
+
 def create_trained_policy(
     train_config: _config.TrainConfig,
     checkpoint_dir: pathlib.Path | str,
@@ -69,12 +91,6 @@ def create_trained_policy(
     if is_pytorch and isinstance(train_config.model, pi0_config.Pi0RTCConfig):
         raise ValueError("Client-managed kai0 RTC requires a JAX checkpoint with params/, not model.safetensors")
 
-    logging.info("Loading model...")
-    if is_pytorch:
-        model = train_config.model.load_pytorch(train_config, weight_path)
-        model.paligemma_with_expert.to_bfloat16_for_selected_params("bfloat16")
-    else:
-        model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
     # Keep inference tokenization identical to the training data loader.  The
     # loader injects ``robot_type`` into tokenization transforms at runtime;
@@ -87,9 +103,21 @@ def create_trained_policy(
         # that the policy is using the same normalization stats as the original training process.
         if data_config.asset_id is None:
             raise ValueError("Asset id is required to load norm stats.")
-        norm_stats = _normalize.load(checkpoint_dir / "assets" / data_config.asset_id)
+        norm_stats, recorded_method = _normalize.load_with_method(checkpoint_dir / "assets" / data_config.asset_id)
+        data_config = _with_checkpoint_normalization_method(
+            train_config, data_config, checkpoint_dir, recorded_method=recorded_method, read_checkpoint=False
+        )
+    else:
+        data_config = _with_checkpoint_normalization_method(train_config, data_config, checkpoint_dir)
     if validator := getattr(train_config.data, "validate_norm_stats", None):
         validator(norm_stats)
+
+    logging.info("Loading model...")
+    if is_pytorch:
+        model = train_config.model.load_pytorch(train_config, weight_path)
+        model.paligemma_with_expert.to_bfloat16_for_selected_params("bfloat16")
+    else:
+        model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
 
     # Determine the device to use for PyTorch models
     if is_pytorch and pytorch_device is None:
@@ -104,6 +132,7 @@ def create_trained_policy(
         norm_stats,
         use_quantiles=data_config.use_quantile_norm,
         key_masks=getattr(data_config, "normalize_masks", None),
+        method=getattr(data_config, "normalization_method", None),
     )
     # Guide in the *current* observation frame, using the same action path as
     # training (including delta/robot conversions), before model-only padding.
@@ -152,6 +181,7 @@ def create_trained_policy(
                 norm_stats,
                 use_quantiles=data_config.use_quantile_norm,
                 key_masks=getattr(data_config, "normalize_masks", None),
+                method=getattr(data_config, "normalization_method", None),
             ),
             *data_config.data_transforms.outputs,
             *repack_transforms.outputs,

@@ -88,12 +88,13 @@ def runtime(monkeypatch):
 
     normalization._NormStatsDict = StatsEnvelope
     actual_definitions(ROOT / "src/openpi/shared/normalize.py",
-                       {"serialize_json", "deserialize_json", "save", "load"}, normalization.__dict__)
+                       {"serialize_json", "deserialize_json", "save", "load", "load_method", "load_with_method"},
+                       normalization.__dict__)
     namespace.update(_normalize=normalization, NormStats=normalization.NormStats,
                      traverse_util=SimpleNamespace(flatten_dict=flatten, unflatten_dict=unflatten))
     actual_definitions(ROOT / "src/openpi/transforms.py", {
         "Group", "Normalize", "Unnormalize", "PadStateOnly", "flatten_dict", "unflatten_dict",
-        "apply_tree", "pad_to_dim", "_assert_quantile_stats",
+        "apply_tree", "pad_to_dim", "_assert_quantile_stats", "_assert_normalization_stats",
     }, namespace)
     namespace["_transforms"] = SimpleNamespace(Group=namespace["Group"], PadStateOnly=namespace["PadStateOnly"])
     actual_definitions(ROOT / "src/openpi/training/config.py", {

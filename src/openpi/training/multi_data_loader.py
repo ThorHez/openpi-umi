@@ -142,6 +142,7 @@ def create_multi_data_loader(
     weights = []
 
     for dc, w in data_configs_and_weights:
+        dc = _data_loader._apply_global_normalization(dc, config)
         data_configs.append(dc)
         logging.info(f"Multi-dataset entry: repo_id={dc.repo_id}, asset_id={dc.asset_id}")
         ds = _data_loader.create_torch_dataset(dc, action_horizon, model_config)

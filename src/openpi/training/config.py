@@ -85,6 +85,8 @@ class DataConfig:
     norm_stats: dict[str, _transforms.NormStats] | None = None
     # Provenance of a shared raw-sample statistic, retained in checkpoints.
     norm_stats_metadata: dict[str, Any] | None = None
+    # Explicit formula override; None preserves historical bool/artifact rules.
+    normalization_method: Literal["minmax", "quantile", "zscore"] | None = None
 
     # Optional per-key masks for normalization. See transforms.make_bool_mask.
     normalize_masks: dict[str, tuple[bool, ...]] | None = None
@@ -4440,6 +4442,8 @@ class TrainConfig:
 
     # Determines the data to be trained on.
     data: DataConfigFactory = dataclasses.field(default_factory=FakeDataConfig)
+    # Applied to every final DataConfig by loaders and policy consumers.
+    normalization_method: Literal["minmax", "quantile", "zscore"] | None = None
 
     # Used only by scripts/train_uot.py; ordinary training keeps its existing behavior.
     uot: UOTConfig | None = None

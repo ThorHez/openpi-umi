@@ -19,7 +19,7 @@ from openpi import transforms as _transforms
 from openpi.policies import policy as _policy
 from openpi.policies import policy_config
 from openpi.serving import websocket_policy_server
-from openpi.training import checkpoints as _checkpoints
+from openpi.shared import normalize as _normalize
 from openpi.training import config as _training_config
 from openpi.training.mem.recipes import shellgame_real_wrist_m6 as _m6
 from openpi.training.mem.recipes import shellgame_real_wrist_m6_direction_stage1_h32 as _m6_h32
@@ -172,7 +172,10 @@ def _shared_model_policy_view(shared_policy: _policy.Policy, config, checkpoint:
         data_config = _training_config._set_robot_type(data_config, data_config.robot_type)  # noqa: SLF001
     if data_config.asset_id is None:
         raise ValueError("Shared policy view requires an asset_id")
-    norm_stats = _checkpoints.load_norm_stats(checkpoint / "assets", data_config.asset_id)
+    norm_stats, recorded_method = _normalize.load_with_method(checkpoint / "assets" / data_config.asset_id)
+    data_config = policy_config._with_checkpoint_normalization_method(
+        config, data_config, checkpoint, recorded_method=recorded_method, read_checkpoint=False
+    )
     return _policy.Policy(
         shared_policy._model,  # noqa: SLF001 - intentionally one shared model instance
         transforms=[
@@ -181,6 +184,7 @@ def _shared_model_policy_view(shared_policy: _policy.Policy, config, checkpoint:
                 norm_stats,
                 use_quantiles=data_config.use_quantile_norm,
                 key_masks=getattr(data_config, "normalize_masks", None),
+                method=getattr(data_config, "normalization_method", None),
             ),
             *data_config.model_transforms.inputs,
         ],
@@ -190,6 +194,7 @@ def _shared_model_policy_view(shared_policy: _policy.Policy, config, checkpoint:
                 norm_stats,
                 use_quantiles=data_config.use_quantile_norm,
                 key_masks=getattr(data_config, "normalize_masks", None),
+                method=getattr(data_config, "normalization_method", None),
             ),
             *data_config.data_transforms.outputs,
         ],
