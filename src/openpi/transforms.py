@@ -276,7 +276,7 @@ class Normalize(DataTransformFn):
         return apply_tree(
             data,
             self.norm_stats,
-            self.key_methods,
+            self.key_methods or {},
             strict=self.strict,
             default_fn=default_fn,
         )
@@ -376,7 +376,7 @@ class Unnormalize(DataTransformFn):
         return apply_tree(
             data,
             self.norm_stats,
-            self.key_methods,
+            self.key_methods or {},
             strict=False,
             default_fn=default_fn,
         )

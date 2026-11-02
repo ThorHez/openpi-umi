@@ -13,7 +13,7 @@ import dataclasses
 import logging
 import threading
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 from openpi_client import base_policy as _base_policy
@@ -30,6 +30,9 @@ class RTCConfig:
     """Inference-time configuration from Algorithm 1 of the RTC paper."""
 
     enabled: bool = False
+    # server: one action per tick with a server worker. client: kai0 whole
+    # chunks, with the robot client supplying previous actions and latency.
+    mode: Literal["server", "client"] = "server"
     # None adapts to the model horizon: H // 2 (25 for the paper's H=50,
     # 8 for the common UMI H=16 configuration).
     min_execution_horizon: int | None = None
@@ -71,6 +74,8 @@ class RealTimeChunkingPolicy(_base_policy.BasePolicy):
     def __init__(self, policy: _policy.Policy, config: RTCConfig):
         if not config.enabled:
             raise ValueError("RealTimeChunkingPolicy requires RTCConfig.enabled=True")
+        if config.mode != "server":
+            raise ValueError("RealTimeChunkingPolicy requires server RTC mode")
         if not policy.supports_rtc:
             raise ValueError("RTC is only supported by flow-based pi0/pi0.5 policies")
         if config.delay_buffer_size <= 0:

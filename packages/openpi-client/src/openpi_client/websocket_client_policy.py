@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 import time
 from typing import Dict, Optional, Tuple
@@ -16,7 +17,17 @@ class WebsocketClientPolicy(_base_policy.BasePolicy):
     See WebsocketPolicyServer for a corresponding server implementation.
     """
 
-    def __init__(self, host: str = "0.0.0.0", port: Optional[int] = None, api_key: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        host: str = "0.0.0.0",
+        port: Optional[int] = None,
+        api_key: Optional[str] = None,
+        inference_timeout: Optional[float] = None,
+        ping_interval: Optional[float] = 20,
+    ) -> None:
+        for name, value in (("inference_timeout", inference_timeout), ("ping_interval", ping_interval)):
+            if value is not None and (not math.isfinite(value) or value <= 0):
+                raise ValueError(f"{name} must be positive and finite, or None")
         if host.startswith("ws"):
             self._uri = host
         else:
@@ -25,6 +36,8 @@ class WebsocketClientPolicy(_base_policy.BasePolicy):
             self._uri += f":{port}"
         self._packer = msgpack_numpy.Packer()
         self._api_key = api_key
+        self._inference_timeout = inference_timeout
+        self._ping_interval = ping_interval
         self._ws, self._server_metadata = self._wait_for_server()
 
     def get_server_metadata(self) -> Dict:
@@ -39,7 +52,7 @@ class WebsocketClientPolicy(_base_policy.BasePolicy):
                 # default keepalive timeout compiling their first inference.  Keep
                 # the default for normal clients, but let isolated evaluations opt
                 # out without changing policy or control semantics.
-                ping_interval = None if os.environ.get("OPENPI_WEBSOCKET_DISABLE_PING") == "1" else 20
+                ping_interval = None if os.environ.get("OPENPI_WEBSOCKET_DISABLE_PING") == "1" else self._ping_interval
                 conn = websockets.sync.client.connect(
                     self._uri,
                     compression=None,
@@ -47,7 +60,7 @@ class WebsocketClientPolicy(_base_policy.BasePolicy):
                     additional_headers=headers,
                     ping_interval=ping_interval,
                 )
-                metadata = msgpack_numpy.unpackb(conn.recv())
+                metadata = msgpack_numpy.unpackb(conn.recv(timeout=self._inference_timeout))
                 return conn, metadata
             except ConnectionRefusedError:
                 logging.info("Still waiting for server...")
@@ -57,11 +70,15 @@ class WebsocketClientPolicy(_base_policy.BasePolicy):
     def infer(self, obs: Dict) -> Dict:  # noqa: UP006
         data = self._packer.pack(obs)
         self._ws.send(data)
-        response = self._ws.recv()
+        response = self._ws.recv(timeout=self._inference_timeout)
         if isinstance(response, str):
             # we're expecting bytes; if the server sends a string, it's an error.
             raise RuntimeError(f"Error in inference server:\n{response}")
         return msgpack_numpy.unpackb(response)
+
+    def close(self) -> None:
+        """Close the transport, including an outstanding blocking inference."""
+        self._ws.close()
 
     @override
     def reset(self) -> None:

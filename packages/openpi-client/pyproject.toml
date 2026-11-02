@@ -11,6 +11,9 @@ dependencies = [
     "websockets>=11.0",
 ]
 
+[project.optional-dependencies]
+umi = ["scipy>=1.10"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

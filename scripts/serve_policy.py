@@ -2,6 +2,7 @@ import dataclasses
 import enum
 import logging
 import socket
+from typing import Literal
 
 import tyro
 
@@ -52,8 +53,11 @@ class Args:
     # Record the policy's behavior for debugging.
     record: bool = False
 
-    # Real-time chunking (RTC) inference. When enabled, the client must request
-    # one action every control tick (use ActionChunkBroker(action_horizon=1)).
+    # Optional serving adapter for prepared single-arm elec_meta observations.
+    profile: Literal["default", "elec-meta"] = "default"
+
+    # RTC server mode returns one action per controller tick. Client mode
+    # enables kai0's whole-chunk protocol with client-managed execution.
     rtc: _rtc_policy.RTCConfig = dataclasses.field(default_factory=_rtc_policy.RTCConfig)
 
     # Specifies how to load the policy. If not provided, the default policy for the environment will be used.
@@ -82,7 +86,11 @@ DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
 
 
 def create_default_policy(
-    env: EnvMode, *, default_prompt: str | None = None, sample_kwargs: dict | None = None
+    env: EnvMode,
+    *,
+    default_prompt: str | None = None,
+    sample_kwargs: dict | None = None,
+    client_rtc: bool = False,
 ) -> _policy.Policy:
     """Create a default policy for the given environment."""
     if checkpoint := DEFAULT_CHECKPOINT.get(env):
@@ -91,29 +99,48 @@ def create_default_policy(
             checkpoint.dir,
             default_prompt=default_prompt,
             sample_kwargs=sample_kwargs,
+            client_rtc=client_rtc,
         )
     raise ValueError(f"Unsupported environment mode: {env}")
 
 
 def create_policy(args: Args) -> _policy.Policy:
     """Create a policy from the given arguments."""
+    if args.rtc.enabled and args.rtc.num_steps <= 0:
+        raise ValueError("RTC num_steps must be positive")
+    if args.profile == "elec-meta" and (
+        not args.rtc.enabled or args.rtc.mode != "client" or not isinstance(args.policy, Checkpoint)
+    ):
+        raise ValueError("elec-meta profile requires --rtc.enabled --rtc.mode client and policy:checkpoint")
     sample_kwargs = {"num_steps": args.rtc.num_steps} if args.rtc.enabled else None
+    client_rtc = args.rtc.enabled and args.rtc.mode == "client"
     match args.policy:
         case Checkpoint():
+            train_config = _config.get_config(args.policy.config)
+            if args.profile == "elec-meta":
+                from openpi.policies.elec_meta_config import adapt_elec_meta_config
+
+                train_config = adapt_elec_meta_config(train_config)
             return _policy_config.create_trained_policy(
-                _config.get_config(args.policy.config),
+                train_config,
                 args.policy.dir,
                 default_prompt=args.default_prompt,
                 sample_kwargs=sample_kwargs,
+                client_rtc=client_rtc,
             )
         case Default():
-            return create_default_policy(args.env, default_prompt=args.default_prompt, sample_kwargs=sample_kwargs)
+            return create_default_policy(
+                args.env,
+                default_prompt=args.default_prompt,
+                sample_kwargs=sample_kwargs,
+                client_rtc=client_rtc,
+            )
 
 
 def main(args: Args) -> None:
     policy = create_policy(args)
 
-    if args.rtc.enabled:
+    if args.rtc.enabled and args.rtc.mode == "server":
         policy = _rtc_policy.RealTimeChunkingPolicy(policy, args.rtc)
 
     policy_metadata = policy.metadata
@@ -131,6 +158,7 @@ def main(args: Args) -> None:
         host="0.0.0.0",
         port=args.port,
         metadata=policy_metadata,
+        **({"ping_interval": None} if args.profile == "elec-meta" else {}),
     )
     server.serve_forever()
 

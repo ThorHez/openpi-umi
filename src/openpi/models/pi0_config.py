@@ -13,6 +13,7 @@ import openpi.shared.nnx_utils as nnx_utils
 
 if TYPE_CHECKING:
     from openpi.models.pi0 import Pi0
+    from openpi.models.pi0_rtc import Pi0RTC
 
 
 @dataclasses.dataclass(frozen=True)
@@ -160,3 +161,24 @@ class Pi0Config(_model.BaseModelConfig):
         if not filters:
             return nnx.Nothing
         return nnx.All(*filters)
+
+
+@dataclasses.dataclass(frozen=True)
+class Pi0RTCConfig(Pi0Config):
+    """Client-managed kai0 RTC using an ordinary Pi0/Pi05 JAX checkpoint.
+
+    Keep the base model type so normalization and dataset adapters use the
+    same conventions as the checkpoint's original training configuration.
+    """
+
+    @override
+    def create(self, rng: at.KeyArrayLike) -> "Pi0RTC":
+        from openpi.models.pi0_rtc import Pi0RTC
+
+        return Pi0RTC(self, rngs=nnx.Rngs(rng))
+
+    @override
+    def load_pytorch(self, train_config, weight_path: str):
+        raise NotImplementedError(
+            "Client-managed kai0 RTC requires a JAX checkpoint (params/), not a PyTorch model.safetensors checkpoint"
+        )

@@ -38,7 +38,8 @@ Training keeps separate entry points:
 | ReCap value / ACP | `scripts/train_value.py`, `scripts/train_value_multi_dataset.py`, `scripts/train_advantage.py` |
 | Semantic memory stage 1 / stage 2 | `scripts/mem/train_semantic_memory.py`, `scripts/mem/train_mem.py` |
 | Optional UOT | `scripts/train_uot.py`, with an explicit `uot` configuration |
-| Optional RTC inference | `scripts/serve_policy.py`, see [remote inference](docs/remote_inference.md) |
+| Optional RTC inference | `scripts/serve_policy.py`: server tick mode or [kai0 client chunk mode](docs/kai0_rtc.md); see [remote inference](docs/remote_inference.md) |
+| Single-arm elec_meta RTC | [Serving profile, ARX client, and hardware-free replay](docs/elec_meta_rtc.md) |
 
 Recipe declarations are grouped by training method under
 `src/openpi/training/recipes/`: `sft.py`, `recap.py`, `mem.py`, `uot.py`, and the
@@ -125,6 +126,15 @@ The existing `pi05_umi_32d_80k_95_real_umi_batch_72_v4_elec_meta` remains an SFT
 recipe. Its UOT variant has the separate suffix `_uot`; `pi05_umi_robustness`
 is the other preserved UOT recipe. UOT currently requires Pi0's single-frame
 RGB features. MEM+UOT and MEM+RTC are not enabled by combining their sources.
+
+RTC serving supports the existing server-controlled, one-action-per-tick mode
+(`--rtc.enabled`) and kai0's client-controlled, full-chunk mode
+(`--rtc.enabled --rtc.mode client`). The kai0 adapter reuses existing Pi0/Pi0.5
+JAX checkpoints and training recipes; it adds prefix schedules, latency-aware
+guidance, and explicit normalized action buffers for client-side alignment.
+The client must overlap inference with execution and track elapsed controller
+ticks. Source provenance, coordinate rules, and request fields are documented
+in [kai0 RTC integration](docs/kai0_rtc.md).
 
 SFT/MEM/PF/UOT entry-point caches default to this checkout's `.cache/`; explicit
 cache environment variables remain supported. Legacy ReCap value entries retain

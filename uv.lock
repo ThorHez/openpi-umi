@@ -3307,6 +3307,11 @@ dependencies = [
     { name = "websockets" },
 ]
 
+[package.optional-dependencies]
+umi = [
+    { name = "scipy" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
@@ -3318,9 +3323,11 @@ requires-dist = [
     { name = "msgpack", specifier = ">=1.0.5" },
     { name = "numpy", specifier = ">=1.22.4,<2.0.0" },
     { name = "pillow", specifier = ">=9.0.0" },
+    { name = "scipy", marker = "extra == 'umi'", specifier = ">=1.10" },
     { name = "tree", specifier = ">=0.2.4" },
     { name = "websockets", specifier = ">=11.0" },
 ]
+provides-extras = ["umi"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.3.4" }]
