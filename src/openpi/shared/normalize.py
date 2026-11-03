@@ -24,7 +24,7 @@ class RunningStats:
     def __init__(self):
         self._count = 0
         self._mean = None
-        self._mean_of_squares = None
+        self._m2 = None
         self._min = None
         self._max = None
         self._histograms = None
@@ -38,11 +38,18 @@ class RunningStats:
         Args:
             vectors (np.ndarray): An array where all dimensions except the last are batch dimensions.
         """
-        batch = batch.reshape(-1, batch.shape[-1])
+        # Transformed robot vectors are commonly float32. Accumulating their
+        # squared values in that dtype loses small variances around an offset.
+        # Keep float64 centered moments instead of subtracting E[x] ** 2 from
+        # E[x ** 2], which also suffers cancellation in float64.
+        batch = np.asarray(batch, dtype=np.float64).reshape(-1, batch.shape[-1])
         num_elements, vector_length = batch.shape
+        batch_mean = np.mean(batch, axis=0)
+        centered = batch - batch_mean
+        batch_m2 = np.sum(centered * centered, axis=0)
         if self._count == 0:
-            self._mean = np.mean(batch, axis=0)
-            self._mean_of_squares = np.mean(batch**2, axis=0)
+            self._mean = batch_mean
+            self._m2 = batch_m2
             self._min = np.min(batch, axis=0)
             self._max = np.max(batch, axis=0)
             self._histograms = [np.zeros(self._num_quantile_bins) for _ in range(vector_length)]
@@ -63,15 +70,14 @@ class RunningStats:
             if max_changed or min_changed:
                 self._adjust_histograms()
 
+            # Merge each batch's centered sum of squares (Chan's formula).
+            # Population variance is M2 / count, without a Bessel correction.
+            total = self._count + num_elements
+            delta = batch_mean - self._mean
+            self._mean += delta * (num_elements / total)
+            self._m2 += batch_m2 + delta * delta * (self._count / total) * num_elements
+
         self._count += num_elements
-
-        batch_mean = np.mean(batch, axis=0)
-        batch_mean_of_squares = np.mean(batch**2, axis=0)
-
-        # Update running mean and mean of squares.
-        self._mean += (batch_mean - self._mean) * (num_elements / self._count)
-        self._mean_of_squares += (batch_mean_of_squares - self._mean_of_squares) * (num_elements / self._count)
-
         self._update_histograms(batch)
 
     def get_statistics(self) -> NormStats:
@@ -84,7 +90,7 @@ class RunningStats:
         if self._count < 2:
             raise ValueError("Cannot compute statistics for less than 2 vectors.")
 
-        variance = self._mean_of_squares - self._mean**2
+        variance = self._m2 / self._count
         stddev = np.sqrt(np.maximum(0, variance))
         q01, q99 = self._compute_quantiles([0.01, 0.99])
         return NormStats(mean=self._mean, std=stddev, q01=q01, q99=q99, max=self._max, min=self._min)

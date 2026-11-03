@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 import openpi.shared.normalize as normalize
 
@@ -41,3 +42,31 @@ def test_multiple_batch_dimensions():
 
     assert np.allclose(results.mean, expected_mean)
     assert np.allclose(results.std, expected_std)
+
+
+@pytest.mark.parametrize("batch_size", [1, 7, 32, 128])
+def test_float32_nearly_constant_vectors_keep_stable_population_variance(batch_size):
+    offsets = np.arange(67) % 7 - 3
+    values = np.stack(
+        [4096 + offsets / 1024, -8192 + offsets / 2048, np.full(67, 2048)], axis=-1
+    ).astype(np.float32)
+    original = values.copy()
+    expected = values.astype(np.float64)
+    stats = normalize.RunningStats()
+    for start in range(0, len(values), batch_size):
+        # The extra dimension mirrors action chunks or state history.
+        stats.update(values[start : start + batch_size, None, :])
+    results = stats.get_statistics()
+
+    np.testing.assert_allclose(results.mean, expected.mean(axis=0), rtol=0, atol=1e-10)
+    np.testing.assert_allclose(results.std, expected.std(axis=0), rtol=0, atol=1e-10)
+    assert results.std[0] > 0 and results.std[1] > 0 and results.std[2] == 0
+    np.testing.assert_array_equal(results.min, expected.min(axis=0))
+    np.testing.assert_array_equal(results.max, expected.max(axis=0))
+    assert np.isfinite(results.q01).all() and np.isfinite(results.q99).all()
+    assert np.all(results.q01 <= results.q99)
+    np.testing.assert_array_equal(values, original)
+
+    restored = normalize.deserialize_json(normalize.serialize_json({"state": results}))["state"]
+    np.testing.assert_array_equal(restored.std, results.std)
+    assert restored.quantile_method is None

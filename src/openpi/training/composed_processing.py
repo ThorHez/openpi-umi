@@ -93,15 +93,16 @@ def _unspecified(value):
     return value is None or isinstance(value, str) and not value.strip(_ECMASCRIPT_TRIM)
 
 
-def normalize_composition(value):
+def normalize_composition(value, *, norm_stats=False):
     """Validate v1 inputs and return every canonical key, including optional declarations."""
     value = _object(value, _FIELDS, "组合数据处理", optional=_OPTIONAL_FIELDS)
     if type(value["schema_version"]) is not int or value["schema_version"] != SCHEMA_VERSION:
         _fail("不支持的组合数据处理版本")
     result = {"schema_version": SCHEMA_VERSION, "robot_model": _text(value["robot_model"], "机器人型号", 100)}
+    representations = {"eef", "joint", "composite"} if norm_stats else {"eef", "joint"}
     for key, choices in {
-        "arm_mode": {"single", "bimanual"}, "state_representation": {"eef", "joint"},
-        "action_representation": {"eef", "joint"},
+        "arm_mode": {"single", "bimanual"}, "state_representation": representations,
+        "action_representation": representations,
         "normalization": {"quantile", "zscore"}, "model_transform": {"standard"},
     }.items():
         result[key] = _enum(value[key], choices, key)
@@ -146,14 +147,20 @@ def normalize_composition(value):
     result["action_layout"] = []
     for block in action_layout:
         block = _object(block, {"arm", "kind", "width", "normalize"}, "动作块")
-        result["action_layout"].append({
-            "arm": _enum(block["arm"], {"left", "right"}, "动作机械臂"),
-            "kind": _enum(block["kind"], {"position", "rotation", "joint", "gripper"}, "动作语义"),
+        normalized = {
+            "arm": _enum(block["arm"], {"left", "right", "shared"}, "动作机械臂"),
+            "kind": _enum(block["kind"], {"position", "rotation", "joint", "gripper", "shared"}, "动作语义"),
             "width": _integer(block["width"], 1, 128, "动作块宽度"),
             "normalize": _boolean(block["normalize"], "动作归一化标志"),
-        })
+        }
+        if (normalized["arm"] == "shared") != (normalized["kind"] == "shared"):
+            _fail("共享动作类型必须使用共享归属，普通动作类型必须明确归属机械臂")
+        result["action_layout"].append(normalized)
     if len({(field["arm"], field["kind"]) for field in result["action_layout"]}) != len(result["action_layout"]):
         _fail("同一机械臂的动作语义块不能重复")
+    if result["action_representation"] == "composite" and (len(result["action_layout"]) != 1 or
+            result["action_layout"][0]["kind"] != "shared"):
+        _fail("组合动作向量统计只能使用一个完整共享动作块，不能推断内部机械臂或分量布局")
     for key in ("state_fields", "action_layout"):
         if sum(field["width"] for field in result[key]) > 512:
             _fail("每时刻状态和动作总宽度分别不能超过 512")
@@ -162,6 +169,8 @@ def normalize_composition(value):
         _fail("单臂状态不能包含右臂字段")
     for key, representation in (("action_layout", result["action_representation"]),):
         fields = result[key]
+        if all(field["kind"] == "shared" for field in fields):
+            continue
         found = {field["arm"] for field in fields if field["arm"] != "shared"}
         if found != arms:
             _fail("单/双臂声明与状态或动作所属机械臂不一致")
@@ -178,14 +187,15 @@ def normalize_composition(value):
             elif "joint" not in kinds or kinds & {"position", "rotation"}:
                 _fail("Joint 布局必须包含明确宽度的关节块，不能混入位置或旋转块")
     rotation_width = {"axis_angle": 3, "quaternion": 4, "rotation_6d": 6, "none": 0, "": 0}[result["rotation_representation"]]
-    if result["action_representation"] == "joint" and rotation_width:
+    regular = [field for field in result["action_layout"] if field["kind"] != "shared"]
+    if regular and result["action_representation"] == "joint" and rotation_width:
         _fail("关节动作的旋转编码必须是 none")
-    if result["action_representation"] == "eef" and result["rotation_representation"]:
+    if regular and result["action_representation"] == "eef" and result["rotation_representation"]:
         if not rotation_width or any(field["kind"] == "rotation" and field["width"] != rotation_width
                                      for field in result["action_layout"]):
             _fail("EEF 动作旋转块宽度与声明编码不一致")
-    cameras = value["cameras"]
-    if not isinstance(cameras, list) or not 1 <= len(cameras) <= 3:
+    cameras = [] if norm_stats else value["cameras"]
+    if not isinstance(cameras, list) or not (0 if norm_stats else 1) <= len(cameras) <= 3:
         _fail("组合处理支持 1 到 3 路明确的视觉输入")
     result["cameras"] = []
     for camera in cameras:
@@ -507,7 +517,7 @@ def _view_contract(spec, model_config):
     return {"image_keys": list(images), "depth_keys": list(depth)}
 
 
-def composition_runtime_contract(factory, model_config):
+def composition_runtime_contract(factory, model_config, *, norm_stats=False):
     """Validate runtime boundaries without loading norm files or a tokenizer.
 
     The same checks are used by preflight and ``create``. Metadata is the actual
@@ -515,7 +525,7 @@ def composition_runtime_contract(factory, model_config):
     The returned dictionary contains only JSON values.
     """
     from openpi.models import pi0_config, pi0_gripper, pi0_value
-    spec = normalize_composition(factory.composition)
+    spec = normalize_composition(factory.composition, norm_stats=norm_stats)
     if type(model_config) not in {pi0_config.Pi0Config, pi0_gripper.Pi0GripperConfig, pi0_value.Pi0ValueConfig}:
         _fail("组合处理首版只支持标准 Pi0/Pi05、Value 和 Gripper 模型；MEM/Hybrid 使用原配方", "COMPOSITION_MODEL_UNSUPPORTED")
     action_dim, horizon = model_config.action_dim, model_config.action_horizon
@@ -554,7 +564,7 @@ def composition_runtime_contract(factory, model_config):
     if type(dropout) not in (int, float) or not 0 <= dropout <= 1:
         _fail("ACP dropout 必须是 0..1 的有限数值")
     metadata = _action_metadata_contract(factory.repo_id, spec["action_key"], horizon, width)
-    views = _view_contract(spec, model_config)
+    views = {"image_keys": [], "depth_keys": []} if norm_stats else _view_contract(spec, model_config)
     return {"training_stage": stage, "model_type": type(model_config).__name__, "pi05": pi05,
             "action_dim": action_dim, "action_horizon": horizon, "raw_state_dim": state_dim,
             "raw_action_dim": width, "state_history": spec["state_history"],

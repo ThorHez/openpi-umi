@@ -259,6 +259,38 @@ class NumericTests(unittest.TestCase):
         spec["state_representation"] = "eef"  # A shared preconcatenated vector remains explicitly declared.
         self.assertEqual(self.apply(spec, sample)["state"].shape, (3, 6))
 
+    def test_shared_raw_actions_keep_all_values_order_width_and_normalization_flags(self):
+        for representation in ("eef", "joint"):
+            for normalized in (True, False):
+                spec = composition(bimanual=True)
+                spec.update(action_representation=representation)
+                spec["action_layout"] = [{"arm": "shared", "kind": "shared", "width": 14, "normalize": normalized}]
+                sample = self.sample(spec)
+                # Values exceed the declared gripper range; opaque shared
+                # vectors must never be treated as implicit gripper blocks.
+                sample["actions"] = np.arange(16 * 14, dtype=np.float64).reshape(16, 14)
+                actual = self.apply(spec, sample)
+                self.assertIs(actual["actions"], sample["actions"])
+                np.testing.assert_array_equal(actual["actions"], sample["actions"])
+                self.assertEqual(actual["actions"].shape, (16, 14))
+                self.assertEqual(COMPOSED.normalization_masks(spec)["actions"], (normalized,) * 14)
+                with self.assertRaisesRegex(ValueError, "action_dim"):
+                    self.apply(spec, sample, action_dim=13)
+                with self.assertRaisesRegex(ValueError, "action_horizon"):
+                    self.apply(spec, sample, horizon=15)
+
+    def test_mixed_shared_values_do_not_shift_explicit_gripper_validation(self):
+        spec = composition()
+        spec["action_layout"].insert(1, {"arm": "shared", "kind": "shared", "width": 4, "normalize": False})
+        sample = self.sample(spec)
+        sample["actions"][:, 3:7] = 200.0
+        result = self.apply(spec, sample)
+        np.testing.assert_array_equal(result["actions"], sample["actions"])
+        self.assertEqual(COMPOSED.normalization_masks(spec)["actions"][3:7], (False,) * 4)
+        sample["actions"][:, -1] = 200.0
+        with self.assertRaisesRegex(ValueError, "夹爪"):
+            self.apply(spec, sample)
+
     def test_visual_layout_history_float_rgb_and_explicit_depth_scaling(self):
         spec = composition();sample = self.sample(spec);key = spec["cameras"][0]["key"]
         spec["cameras"][0].update(layout="hwc", time_index=-1)

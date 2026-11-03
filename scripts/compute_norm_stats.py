@@ -1,8 +1,11 @@
 """Compute statistics before normalization and model padding.
 
 Shared statistics scan every transformed row twice with per-row source weights.
-Existing per-dataset quantiles are never averaged. Dataset processors may still
-decode images before the numeric fields are selected.
+Existing per-dataset quantiles are never averaged. Platform tasks require
+``numeric_only=True``: a trusted composable contract projects numeric Parquet
+columns before loading samples, with no image/video reads or decoding. Legacy
+CLI paths retain their existing shared-statistics behavior; unsupported numeric
+processors fail explicitly rather than falling back to a visual loader.
 """
 
 from __future__ import annotations
@@ -50,6 +53,18 @@ def _numeric_collate(samples):
 def create_torch_dataloader(data_config, action_horizon, batch_size, model_config, num_workers, max_frames=None):
     """A finite, sequential loader including small datasets and tail rows."""
     import torch
+
+    from openpi.training.numeric_stats import NumericParquetDataset, NumericStatisticsConfig
+
+    if isinstance(data_config, NumericStatisticsConfig):
+        dataset = NumericParquetDataset(data_config)
+        dataset = _NumericDataset(dataset, max_frames)
+        if not len(dataset):
+            raise ValueError("Numeric statistics dataset is empty")
+        loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=num_workers,
+            shuffle=False, drop_last=False, collate_fn=_numeric_collate,
+            **({"multiprocessing_context": "spawn"} if num_workers else {}))
+        return loader, math.ceil(len(dataset) / batch_size)
 
     import openpi.training.data_loader as data_loader
 
@@ -184,6 +199,7 @@ def main(
     output_dir: str | None = None,
     overwrite: bool = False,
     config_file: str | None = None,
+    numeric_only: bool = False,
 ):
     if (config_name is None) == (config_file is None):
         raise ValueError("Specify exactly one of --config-name or --config-file")
@@ -201,6 +217,8 @@ def main(
     config = _load_file_config(config_file, output_dir) if config_file is not None else config_module.get_config(config_name)
     factory = config.data
     multi = isinstance(factory, config_module.MultiDataConfigFactory)
+    if numeric_only and multi:
+        raise ValueError("Independent numeric statistics require one dataset factory per invocation")
     if multi:
         from openpi.training.shared_norm import source_descriptors, validate_shared_metadata
 
@@ -259,12 +277,21 @@ def main(
     else:
         import tqdm
 
-        data_config = factory.create(config.assets_dirs, config.model)
+        # Composable data processors can build the exact numeric pipeline
+        # without model transforms/tokenizer downloads. Statistics never apply
+        # those model transforms, so avoid constructing them as well.
+        if numeric_only:
+            from openpi.training.numeric_stats import build_numeric_statistics_config
+            data_config = build_numeric_statistics_config(factory, config.model,
+                effective_fps=getattr(factory, "_norm_effective_fps", None))
+        else:
+            sample_builder = getattr(factory, "processing_sample_config", None)
+            data_config = (sample_builder if callable(sample_builder) else factory.create)(config.assets_dirs, config.model)
         output = _local_path(output_dir) if output_dir is not None else _assets_directory(factory, config).resolve()
         _check_output(output, [factory], config, multi=False)
         if (output / "norm_stats.json").exists() and not overwrite:
             raise FileExistsError("Statistics already exist; choose another output directory or use --overwrite")
-        if data_config.rlds_data_dir is not None:
+        if getattr(data_config, "rlds_data_dir", None) is not None:
             loader, batches = create_rlds_dataloader(
                 data_config, config.model.action_horizon, config.batch_size, max_frames
             )

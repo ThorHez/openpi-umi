@@ -249,10 +249,10 @@ class ComposableDataConfig(DataConfigFactory):
     acp_dropout: float = 0.1
     training_stage: str = "sft"
 
-    def processing_contract(self, model_config: _model.BaseModelConfig) -> dict:
+    def processing_contract(self, model_config: _model.BaseModelConfig, *, norm_stats=False) -> dict:
         from openpi.training.composed_processing import composition_runtime_contract
 
-        return composition_runtime_contract(self, model_config)
+        return composition_runtime_contract(self, model_config, norm_stats=norm_stats)
 
     def processing_sample_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         """Build the real local data transforms without tokenization or downloads."""
