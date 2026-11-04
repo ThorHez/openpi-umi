@@ -43,13 +43,23 @@ class NumericStatisticsConfig:
         return [] if self.packed_actions else ["episode_index", "frame_index", "timestamp"]
 
 
-def build_numeric_statistics_config(factory, model_config, *, effective_fps=None):
+def build_numeric_statistics_config(factory, model_config, *, effective_fps=None, validate_model=True):
     # A generic create()/repack factory cannot prove which fields its transforms
     # need. Reject it before executing user transforms or any dataset loader.
     if type(factory).__name__ != "ComposableDataConfig":
         _fail("该处理器没有可证明的纯数值统计接口，请使用字段组合处理器；不会回退读取图像")
     composition = normalize_composition(factory.composition, norm_stats=True)
-    composition_runtime_contract(factory, model_config, norm_stats=True)
+    if validate_model:
+        composition_runtime_contract(factory, model_config, norm_stats=True)
+    else:
+        # Metadata-only automatic-statistics planning must not import model
+        # implementations (and transitively initialize JAX). Full model-type
+        # validation remains the ordinary training preflight's responsibility.
+        horizon, action_dim = model_config.action_horizon, model_config.action_dim
+        if type(horizon) is not int or horizon <= 0 or type(action_dim) is not int or action_dim <= 0:
+            _fail("模型动作维度/预测长度必须为正整数")
+        if sum(row["width"] for row in composition["action_layout"]) > action_dim:
+            _fail("模型动作维度小于真实动作宽度")
     info, _ = _read_lerobot_metadata(factory.repo_id)
     for key in [field["key"] for field in composition["state_fields"]] + [composition["action_key"]]:
         feature = info["features"].get(key)
@@ -113,7 +123,10 @@ class NumericParquetDataset:
                         dtype = dtype.value_type
                     if not (pa.types.is_integer(dtype) or pa.types.is_floating(dtype)):
                         _fail("Parquet 投影字段必须为实数，不能读取图像/视频结构或二进制：" + column)
-                    self._dtypes[column] = dtype.to_pandas_dtype()
+                    # Reading numeric columns does not require Pandas. Arrow's
+                    # to_pandas_dtype() imports it even for primitive numbers.
+                    kind = "float" if pa.types.is_floating(dtype) else "uint" if pa.types.is_unsigned_integer(dtype) else "int"
+                    self._dtypes[column] = kind + str(dtype.bit_width)
                 for group in range(parquet.num_row_groups):
                     rows = parquet.metadata.row_group(group).num_rows
                     if rows:

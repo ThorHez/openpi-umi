@@ -572,7 +572,7 @@ def composition_runtime_contract(factory, model_config, *, norm_stats=False):
             "action_loss_mask": [1.0] * width + [0.0] * (action_dim - width), **metadata, **views}
 
 
-def compose_data_config(factory, assets_dirs, model_config, *, include_model_transforms=True):
+def compose_data_config(factory, assets_dirs, model_config, *, include_model_transforms=True, load_norm_stats=True):
     """Compile the same data pipeline for training or decoded-sample checks.
 
     Sample checks omit model transforms so they never import or instantiate a
@@ -584,7 +584,8 @@ def compose_data_config(factory, assets_dirs, model_config, *, include_model_tra
     spec = normalize_composition(factory.composition)
     action_dim, horizon = contract["action_dim"], contract["action_horizon"]
     stage, pi05, dropout = contract["training_stage"], contract["pi05"], contract["acp_dropout"]
-    base = factory.create_base_config(assets_dirs, model_config)
+    base = (factory.create_base_config(assets_dirs, model_config) if load_norm_stats else
+            factory.create_base_config(assets_dirs, model_config, load_norm_stats=False))
     if base.repo_id != factory.repo_id:
         _fail("基础数据配置改变了已核验的数据集路径", "COMPOSITION_DATA_INVALID")
     metadata, metadata_sha256 = _read_lerobot_metadata(factory.repo_id)

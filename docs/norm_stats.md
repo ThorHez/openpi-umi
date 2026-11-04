@@ -4,6 +4,46 @@ Following common practice, our models normalize the proprioceptive state inputs 
 
 ## One shared distribution for several datasets
 
+### Automatic preparation by the training script
+
+`scripts/train_multi_dataset.py` prepares a shared statistic before creating the
+training mesh, model or data loader. For more than one source, leave
+`use_merged_norm_stats=True` and omit `shared_norm_stats_path`; alternatively set
+`auto_shared_norm=True` explicitly. Every source must provide a compatible
+`ComposableDataConfig` numeric layout. Explicit legacy per-source normalization
+is retained only when both `auto_shared_norm=False` and
+`use_merged_norm_stats=False`. Single-source training is unchanged.
+
+The preparation reads only state/action columns and the temporal indices needed
+to assemble per-frame actions. It never decodes image/video columns. Packed
+`[H,D]` actions retain their horizon; per-frame `[D]` actions are assembled to the
+model horizon with the same episode-tail clamp as the training loader. All rows,
+including incomplete batches, contribute with their actual training repeat
+weights. Existing source `norm_stats.json` files are neither averaged nor edited.
+
+The script atomically writes one task-local statistic under
+`<checkpoint_dir.parent>/<experiment>-normalization/<fingerprint>/norm_stats.json`.
+The fingerprint covers all source/processor manifests, repeat weights, action
+horizon, registered FPS and numeric implementation sources. A complete matching
+artifact is verified and reused; changed inputs select a new location, and a
+conflicting file is rejected instead of overwritten. A resumed model cannot
+change its previously recorded statistic or normalization formula.
+
+All sources then receive the same statistic and checkpoint identity `shared`.
+Each model checkpoint contains `assets/shared/norm_stats.json`, including its
+training normalization formula, while the sibling
+`<experiment>-normalization.json` receipt records the effective source, checksum
+and provenance. The platform's generated training configuration can therefore
+bind the model to exactly the statistics used by its training run. Metadata-only
+preflight planning does not execute the complete statistics scan or start a
+model. Full scanning starts after the training configuration is confirmed.
+
+If `shared_norm_stats_path` explicitly identifies a precomputed shared artifact,
+the script validates and uses it without scanning the datasets again. The
+following standalone CLI remains available for creating such assets in advance.
+
+### Precompute an explicit shared asset
+
 To compute shared statistics from three datasets with per-sample repeat weights
 `1:2:2`, configure a `MultiDataConfigFactory` with `weights=[1.0, 2.0, 2.0]` and
 an independent `shared_norm_stats_path`. The path may name `norm_stats.json` or

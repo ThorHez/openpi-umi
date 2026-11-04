@@ -3,8 +3,9 @@ Multi-dataset training script for Pi0.
 
 Same as train.py but creates a multi-dataset data loader when config.data
 is MultiDataConfigFactory (multiple LeRobot datasets with optional per-dataset weights
-and unified state_pad_dim). Shared raw-sample statistics are loaded from one
-verified artifact and saved once under assets/shared for policy loading.
+and unified state_pad_dim). With auto_shared_norm enabled, shared statistics
+are computed from all weighted raw numeric samples before model startup.
+They are saved once under assets/shared for policy loading.
 Explicit legacy per-source statistics retain separate checkpoint identities.
 
 Usage:
@@ -93,6 +94,12 @@ def main(config: _config.TrainConfig, *, data_loader=None):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
     logging.info("Dataset cache: %s; temporary files: %s", os.environ["HF_DATASETS_CACHE"], os.environ["TMPDIR"])
+
+    from openpi.training.training_normalization import planned_training_normalization, prepare_training_normalization
+
+    if data_loader is not None and planned_training_normalization(config)["mode"] == "auto_shared":
+        raise ValueError("SHARED_NORM_INVALID: automatic statistics must be prepared before supplying a data loader")
+    config = prepare_training_normalization(config)
 
     if config.batch_size % jax.device_count() != 0:
         raise ValueError(

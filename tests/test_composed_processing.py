@@ -559,6 +559,24 @@ class BuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "本机绝对归一化参数路径"):
             self.sample_hook(factory, self.repo, self.models.Pi0Config())
 
+    def test_sample_hook_can_skip_reference_norm_without_skipping_data_transforms(self):
+        spec = composition()
+        model = self.models.Pi0Config()
+        (self.repo / "meta/info.json").write_text(json.dumps({"features": {
+            spec["action_key"]: {"shape": [model.action_horizon, sum(row["width"] for row in spec["action_layout"])]}}}))
+        calls = []
+        def base(*args, **kwargs):
+            self.assertEqual(kwargs, {"load_norm_stats": False})
+            calls.append(kwargs)
+            return dataclasses.replace(self.base, norm_stats=None)
+        factory = types.SimpleNamespace(repo_id=str(self.repo), composition=spec, training_stage="sft", acp_dropout=0.,
+            assets=types.SimpleNamespace(assets_dir=str(self.repo / "historical-norm"), asset_id="."), create_base_config=base)
+        checked = self.sample_hook(factory, self.repo, model, load_norm_stats=False)
+        self.assertEqual(calls, [{"load_norm_stats": False}])
+        self.assertIsNone(checked.norm_stats)
+        self.assertTrue(checked.repack_transforms.inputs)
+        self.assertTrue(checked.data_transforms.inputs)
+
     def test_decoded_image_and_video_layouts_use_the_same_checked_repack(self):
         for dtype in ("image", "video"):
             for layout in ("chw", "hwc"):

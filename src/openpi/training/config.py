@@ -212,16 +212,24 @@ class DataConfigFactory(abc.ABC):
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         """Create a data config."""
 
-    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig,
+                           *, load_norm_stats: bool = True) -> DataConfig:
         repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
         asset_id = self.assets.asset_id or repo_id
         return dataclasses.replace(
             self.base_config or DataConfig(),
             repo_id=repo_id,
             asset_id=asset_id,
-            norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
+            norm_stats=(self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id)
+                        if load_norm_stats and not getattr(self, "_skip_norm_stats", False) else None),
             use_quantile_norm=model_config.model_type != ModelType.PI0,
         )
+
+    def without_norm_stats(self):
+        """A temporary transform-only factory; never mutate frozen inputs."""
+        factory = dataclasses.replace(self)
+        object.__setattr__(factory, "_skip_norm_stats", True)
+        return factory
 
     def _load_norm_stats(self, assets_dir: epath.Path, asset_id: str | None) -> dict[str, _transforms.NormStats] | None:
         if asset_id is None:
@@ -254,7 +262,8 @@ class ComposableDataConfig(DataConfigFactory):
 
         return composition_runtime_contract(self, model_config, norm_stats=norm_stats)
 
-    def processing_sample_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+    def processing_sample_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig,
+                                 *, load_norm_stats: bool = True) -> DataConfig:
         """Build the real local data transforms without tokenization or downloads."""
         from openpi.training.composed_processing import compose_data_config
 
@@ -265,7 +274,8 @@ class ComposableDataConfig(DataConfigFactory):
         asset_id = self.assets.asset_id or self.repo_id
         if not pathlib.Path(assets_root).is_absolute() or "://" in str(asset_id):
             raise ValueError("COMPOSITION_DATA_INVALID: 样本预检需要本机绝对归一化参数路径")
-        return compose_data_config(self, assets_dirs, model_config, include_model_transforms=False)
+        return compose_data_config(self, assets_dirs, model_config, include_model_transforms=False,
+                                   load_norm_stats=load_norm_stats)
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -3471,6 +3481,9 @@ class MultiDataConfigFactory(DataConfigFactory):
     state_pad_dim: int | None = None
     use_merged_norm_stats: bool = True
     shared_norm_stats_path: str | None = None
+    # The training entrypoint computes a task-local weighted raw-sample
+    # statistic before constructing the model or training data loader.
+    auto_shared_norm: bool = False
 
     def _validated_weights(self) -> list[float]:
         if not self.datasets:
@@ -3506,7 +3519,7 @@ class MultiDataConfigFactory(DataConfigFactory):
 
     def validate_norm_stats(self, stats: dict[str, _transforms.NormStats]) -> None:
         """Also enforce the shared formula when a policy loads checkpoint assets."""
-        if self.shared_norm_stats_path is not None:
+        if self.shared_norm_stats_path is not None or self.auto_shared_norm:
             for key in ("state", "actions"):
                 if key not in stats or getattr(stats[key], "quantile_method", None) != "q01_q99":
                     raise ValueError("SHARED_NORM_INVALID: shared state/actions must declare q01_q99 normalization")
@@ -3528,8 +3541,16 @@ class MultiDataConfigFactory(DataConfigFactory):
         """
         if not self.datasets:
             raise ValueError("MultiDataConfigFactory.datasets must be non-empty")
-        first = self._apply_state_pad(self.datasets[0].create(assets_dirs, model_config))
+        factory = self.datasets[0]
+        if self.auto_shared_norm and len(self.datasets) > 1:
+            factory = factory.without_norm_stats()
+        first = self._apply_state_pad(factory.create(assets_dirs, model_config))
         first = dataclasses.replace(first, asset_id=self._checkpoint_id(first.asset_id, 0))
+        if self.auto_shared_norm and len(self.datasets) > 1 and self.shared_norm_stats_path is None:
+            # The frozen preflight config deliberately has no runtime output
+            # path. Policy consumers load the saved checkpoint's shared asset,
+            # not the first source's old per-dataset statistics.
+            return dataclasses.replace(first, asset_id="shared", norm_stats=None)
         if not self.use_merged_norm_stats:
             return first
         path = self._shared_path(assets_dirs)
@@ -3553,7 +3574,6 @@ class MultiDataConfigFactory(DataConfigFactory):
     ) -> list[DataConfig]:
         """Return DataConfig for every dataset (for multi-dataset loader)."""
         weights = self._validated_weights()
-        all_configs = [self._apply_state_pad(f.create(assets_dirs, model_config)) for f in self.datasets]
         if self.use_merged_norm_stats:
             from openpi.training.shared_norm import load_shared_norm_document
 
@@ -3566,12 +3586,19 @@ class MultiDataConfigFactory(DataConfigFactory):
             document = load_shared_norm_document(path, self.datasets, weights)
             metadata = document["shared_normalization"]
             shared = _normalize.deserialize_json(json.dumps(document))
+            # Bind only temporary factories to the verified training artifact.
+            # Per-source files are reference inputs in automatic mode and may
+            # be absent or deliberately incompatible with the new layout.
+            all_configs = [self._apply_state_pad(dataclasses.replace(factory, assets=dataclasses.replace(
+                factory.assets, assets_dir=str(path.parent), asset_id=".")).create(assets_dirs, model_config))
+                for factory in self.datasets]
             # A single object and checkpoint identity for every training source.
             all_configs = [dataclasses.replace(dc, norm_stats=shared, asset_id="shared", norm_stats_metadata=metadata)
                            for dc in all_configs]
             logging.info("Multi-dataset: loaded one verified weighted raw-sample statistic from %s", path)
             return all_configs
 
+        all_configs = [self._apply_state_pad(f.create(assets_dirs, model_config)) for f in self.datasets]
         # Legacy per-source normalization remains explicit. The platform often
         # binds every asset as '.', so give differing contents distinct output
         # identities rather than overwriting the previous source's statistics.

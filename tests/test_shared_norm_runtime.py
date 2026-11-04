@@ -195,6 +195,56 @@ def test_missing_common_shared_path_refuses_to_average_existing_quantiles(runtim
         factory.create_all(tmp_path, object())
 
 
+def test_frozen_automatic_policy_keeps_shared_checkpoint_identity(runtime, sources, tmp_path):
+    factories, weights, path, _ = sources
+    factory = runtime.MultiDataConfigFactory(datasets=factories, weights=weights,
+        state_pad_dim=8, auto_shared_norm=True, use_merged_norm_stats=True)
+    frozen = factory.create(tmp_path, object())
+    assert frozen.asset_id == "shared" and frozen.norm_stats is None
+    ready = dataclasses.replace(factory, shared_norm_stats_path=str(path))
+    configs = ready.create_all(tmp_path, object())
+    assert all(config.asset_id == frozen.asset_id for config in configs)
+    assert all(config.norm_stats is configs[0].norm_stats for config in configs)
+
+
+def test_shared_loader_never_deserializes_unused_source_statistics(runtime, sources, tmp_path):
+    factories, weights, path, _ = sources
+    original_assets = [factory.assets for factory in factories]
+    for factory in factories:
+        # These fields are historical references, not the current statistic.
+        (pathlib.Path(factory.assets.assets_dir) / 'norm_stats.json').write_text('{broken historical norm')
+    factory = runtime.MultiDataConfigFactory(datasets=factories, weights=weights,
+        state_pad_dim=8, auto_shared_norm=True, shared_norm_stats_path=str(path))
+    configs = factory.create_all(tmp_path, object())
+    assert len(configs) == 3 and all(config.asset_id == 'shared' for config in configs)
+    assert all(config.norm_stats is configs[0].norm_stats for config in configs)
+    assert [factory.assets for factory in factories] == original_assets
+    assert all((pathlib.Path(factory.assets.assets_dir) / 'norm_stats.json').read_text() ==
+               '{broken historical norm' for factory in factories)
+
+
+def test_frozen_automatic_policy_skips_unused_source_norm_load(runtime, tmp_path):
+    @dataclasses.dataclass(frozen=True)
+    class StandardSource(runtime.DataConfigFactory):
+        def create(self, assets_dirs, model_config):
+            return self.create_base_config(assets_dirs, model_config)
+    runtime.__dict__['epath'] = SimpleNamespace(Path=pathlib.Path)
+    runtime.__dict__['_download'] = SimpleNamespace(maybe_download=lambda value: value)
+    runtime.__dict__['ModelType'] = SimpleNamespace(PI0='pi0')
+    old = tmp_path / 'broken-norm'
+    old.mkdir(); (old / 'norm_stats.json').write_text('{broken norm')
+    child = StandardSource(repo_id=str(tmp_path / 'dataset'), assets=runtime.AssetsConfig(str(old), '.'))
+    model = SimpleNamespace(model_type='pi05')
+    with pytest.raises(json.JSONDecodeError):
+        child.create(tmp_path, model)
+    assert child.create_base_config(tmp_path, model, load_norm_stats=False).norm_stats is None
+    factory = runtime.MultiDataConfigFactory(datasets=[child, child], weights=[1., 1.],
+        state_pad_dim=8, auto_shared_norm=True)
+    assert factory.create(tmp_path, model).asset_id == 'shared'
+    assert factory.create(tmp_path, model).norm_stats is None
+    assert not hasattr(child, '_skip_norm_stats')
+
+
 def test_legacy_per_source_dot_assets_get_distinct_ids_with_consistent_first_policy(runtime, sources, tmp_path):
     factories, weights, _, _ = sources
     factory = runtime.MultiDataConfigFactory(datasets=factories, weights=weights, state_pad_dim=8,

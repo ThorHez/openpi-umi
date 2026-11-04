@@ -5,9 +5,9 @@ Same as train_hybrid.py but creates a multi-dataset data loader when config.data
 is MultiDataConfigFactory (multiple LeRobot datasets with optional per-dataset weights).
 Checkpoint saving deduplicates shared statistics and refuses conflicting assets.
 
-Norm stats: use_merged_norm_stats=True loads a previously computed, verified
-shared_norm_stats_path. Compute this artifact from all weighted raw samples;
-existing per-dataset quantiles are never averaged at training time.
+Norm stats: auto_shared_norm=True computes weighted raw-sample statistics
+before constructing the loader/model. An explicit shared_norm_stats_path can
+instead load a previously verified shared artifact. Old quantiles are never averaged.
 
 Usage:
     python scripts/train_multi_dataset.py --config pi05_umi_multi_dataset --exp_name multi_task_v1
@@ -85,6 +85,9 @@ if __name__ == "__main__":
     sys.argv = [sys.argv[0]] + remaining
 
     config = _config.cli()
+    from openpi.training.training_normalization import prepare_training_normalization
+
+    config = prepare_training_normalization(config)
     compute_grad_norms = args.compute_separate_grad_norms
 
     mesh = sharding.make_mesh(config.fsdp_devices)
