@@ -21,6 +21,18 @@ model horizon with the same episode-tail clamp as the training loader. All rows,
 including incomplete batches, contribute with their actual training repeat
 weights. Existing source `norm_stats.json` files are neither averaged nor edited.
 
+Automatic preparation uses `TrainConfig.num_workers` for numeric batch reads,
+with one worker pool reused across all sources and both passes. A value of `0`
+runs the same batch reader in the main process. The reader assembles complete
+action chunks in NumPy instead of converting every horizon step from an Arrow
+scalar. It preserves original numeric dtypes and includes episode tails.
+Human-readable `[norm_stats]` log entries report the pass, source,
+processed/total rows, worker count and throughput at each source boundary and
+every five seconds while batches complete. Validation, reuse and completed
+publication also emit flushed log lines before model startup. Workers are
+closed before model startup; statistics
+weights, histogram quantiles and normalization masks are unchanged.
+
 The script atomically writes one task-local statistic under
 `<checkpoint_dir.parent>/<experiment>-normalization/<fingerprint>/norm_stats.json`.
 The fingerprint covers all source/processor manifests, repeat weights, action

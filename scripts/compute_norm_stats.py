@@ -45,6 +45,13 @@ class _NumericDataset:
         sample = self.dataset[index]
         return {key: np.asarray(sample[key]) for key in ("state", "actions")}
 
+    def __getitems__(self, indices):
+        if any(not 0 <= index < self.limit for index in indices):
+            raise IndexError("Statistics index exceeds the selected frame limit")
+        bulk = getattr(self.dataset, "__getitems__", None)
+        samples = bulk(indices) if callable(bulk) else [self.dataset[index] for index in indices]
+        return [{key: np.asarray(sample[key]) for key in ("state", "actions")} for sample in samples]
+
 
 def _numeric_collate(samples):
     return {key: np.stack([sample[key] for sample in samples]) for key in ("state", "actions")}

@@ -58,6 +58,7 @@ def dataset(tmp_path, *, packed=False, history=1):
 def test_source_projection_never_reads_embedded_images_or_missing_videos(tmp_path, monkeypatch, packed):
     config, states, actions = dataset(tmp_path, packed=packed, history=2)
     read = pq.ParquetFile.read_row_group
+    batches = pq.ParquetFile.iter_batches
     projections = []
 
     def projected(self, index, columns=None, **kwargs):
@@ -67,6 +68,12 @@ def test_source_projection_never_reads_embedded_images_or_missing_videos(tmp_pat
         return read(self, index, columns=columns, **kwargs)
 
     monkeypatch.setattr(pq.ParquetFile, "read_row_group", projected)
+    def projected_batches(self, *args, columns=None, **kwargs):
+        projections.append(list(columns))
+        assert columns is not None and set(columns) <= set(config.columns)
+        assert not any("image" in column or "unused" in column for column in columns)
+        return batches(self, *args, columns=columns, **kwargs)
+    monkeypatch.setattr(pq.ParquetFile, "iter_batches", projected_batches)
     scan = Path.rglob
 
     def numeric_scan(self, pattern):
@@ -83,7 +90,8 @@ def test_source_projection_never_reads_embedded_images_or_missing_videos(tmp_pat
         np.testing.assert_array_equal(result["actions"], expected)
         assert result["state"].dtype == np.float32 and result["actions"].dtype == np.float32
         assert set(result) == {"state", "actions"}
-    assert projections and max(map(len, [source._cache])) <= 2
+    assert projections and source._cache_bytes <= numeric.MAX_NUMERIC_CACHE_BYTES
+    assert len(source._streams) <= 2 and len(source._cache) <= 256
     assert numeric.numeric_io_evidence(config)["columns"] == config.columns
     assert numeric.numeric_io_evidence(config)["video_decode"] is False
 

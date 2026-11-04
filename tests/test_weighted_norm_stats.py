@@ -18,7 +18,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from openpi.shared.weighted_stats import compute_weighted_statistics
+from openpi.shared.weighted_stats import _histogram_counts,compute_weighted_statistics
 
 
 def sources(arrays, batch_size=4):
@@ -58,6 +58,54 @@ def test_three_sources_match_explicit_one_two_two_repeated_raw_vectors():
         for name, q in (("q01", 0.01), ("q99", 0.99)):
             expected = np.quantile(repeated, q, axis=0, method="inverted_cdf")
             assert np.all(np.abs(result[key][name] - expected) <= tolerance)
+
+
+def test_progress_preserves_statistics_and_reports_full_ordered_coverage():
+    arrays=[sample(5),sample(7,20)]
+    before,counts=compute_weighted_statistics(sources(arrays,batch_size=3),[1.,2.])
+    events=[]
+    after,other=compute_weighted_statistics(sources(arrays,batch_size=3),[1.,2.],
+        progress=events.append,source_rows=[5,7])
+    assert counts==other
+    for key in before:
+        for name in before[key]:
+            np.testing.assert_array_equal(before[key][name],after[key][name])
+    completed=[event for event in events if event['event']=='source_done']
+    assert [(event['pass'],event['source_index'],event['rows_done'],event['pass_rows_done']) for event in completed]==[
+        (1,0,5,5),(1,1,7,12),(2,0,5,5),(2,1,7,12)]
+    assert all(event['rows_total'] in (5,7) and event['pass_rows_total']==12 for event in events)
+
+
+def test_declared_row_coverage_cannot_silently_omit_tail():
+    with pytest.raises(ValueError,match='declared full coverage'):
+        compute_weighted_statistics(sources([sample(5)],batch_size=3),[1.],source_rows=[6])
+
+
+@pytest.mark.parametrize('bounds',[(-3.,7.),(1.,np.nextafter(1.,2.)),(-1e308,1e308)])
+def test_histogram_fast_path_exactly_matches_numpy_at_every_edge(bounds):
+    low,high=bounds
+    fractions=np.linspace(0.,1.,5001)
+    edges=(1-fractions)*low+fractions*high
+    values=np.concatenate([edges,edges[::-1],np.array([low,high,(low/2+high/2)])])
+    if np.any(edges[:-1]>edges[1:]):
+        with pytest.raises(ValueError,match='monotonically'):
+            np.histogram(values,bins=edges)
+        with pytest.raises(ValueError,match='monotonically'):
+            _histogram_counts(values,edges,5000)
+        return
+    np.testing.assert_array_equal(_histogram_counts(values,edges,5000),np.histogram(values,bins=edges)[0])
+
+
+def test_fast_histogram_preserves_complete_statistics_bit_for_bit(monkeypatch):
+    import openpi.shared.weighted_stats as statistics
+    arrays=[sample(5),sample(7,20)]
+    optimized,counts=compute_weighted_statistics(sources(arrays,batch_size=3),[1.,2.])
+    monkeypatch.setattr(statistics,'_histogram_counts',lambda values,edges,bins:np.histogram(values,bins=edges)[0])
+    reference,coverage=compute_weighted_statistics(sources(arrays,batch_size=3),[1.,2.])
+    assert counts==coverage
+    for key in reference:
+        for name in reference[key]:
+            np.testing.assert_array_equal(optimized[key][name],reference[key][name])
 
 
 def test_quantiles_pool_raw_values_instead_of_averaging_existing_quantiles():

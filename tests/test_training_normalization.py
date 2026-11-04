@@ -64,6 +64,7 @@ class Config:
     batch_size: int = 2
     normalization_method: str = "quantile"
     resume: bool = False
+    num_workers: int = 0
 
 
 def source(root, values, *, packed=False, metadata_fps=10.):
@@ -142,7 +143,7 @@ def test_real_weighted_shared_statistic_is_generated_before_padding_and_reused(c
     assert receipt_doc['statistics_widths'] == {'state': 2, 'actions': 2}
     assert receipt_doc['normalization_method'] == 'quantile'
     assert projections
-    monkeypatch.setattr(automatic, '_batches', lambda *args: pytest.fail('Complete matching statistic should be reused'))
+    monkeypatch.setattr(automatic, 'NumericStatisticsLoader', lambda *args: pytest.fail('Complete matching statistic should be reused'))
     assert automatic.prepare_training_normalization(config).data.shared_norm_stats_path == plan['output_path']
     automatic.prepare_training_normalization(updated)
     assert json.loads(receipt.read_text())['fingerprint'] == plan['fingerprint']
@@ -262,3 +263,144 @@ def test_training_entrypoint_prepares_statistics_before_the_first_device_operati
     exec(compile(ast.fix_missing_locations(program), 'train_multi_dataset.py', 'exec'), namespace)
     with pytest.raises(ReachedDevice):
         namespace['main'](config)
+
+
+def test_statistics_progress_is_visible_without_info_logging_and_covers_both_passes(config,capsys,monkeypatch):
+    events=[]
+    reporter=automatic._StatisticsProgress
+    def recorded(*args,**kwargs):
+        visible=reporter(*args,**kwargs)
+        def receive(event):
+            events.append(dict(event))
+            visible(event)
+        return receive
+    monkeypatch.setattr(automatic,'_StatisticsProgress',recorded)
+    automatic.prepare_training_normalization(config)
+    output=capsys.readouterr().out
+    done=[entry for entry in events if entry['event']=='source_done']
+    assert [(entry['pass'],entry['source_index'],entry['rows_done'],entry['rows_total']) for entry in done]==[
+        (1,0,2,2),(1,1,3,3),(2,0,2,2),(2,1,3,3)]
+    assert done[-1]['pass_rows_done']==done[-1]['pass_rows_total']==5
+    assert 'VLA_NORM_PROGRESS:' not in output
+    for text in ('[norm_stats] 正在校验','开始完整两遍统计','第 1/2 轮（均值、方差与范围）',
+                 '第 2/2 轮（q01/q99 分位数）','数据集 2/2','3/3 行（100.00%）',
+                 '速度','行/秒','workers=0','已保存共享统计文件：','SHA-256：','归一化方式：q01/q99','统计准备完成，总耗时'):
+        assert text in output
+    assert all(str(child.repo_id) in output for child in config.data.datasets)
+
+
+def test_progress_reports_batches_every_five_seconds_and_flushes(monkeypatch):
+    ticks=iter([0.,0.,1.,5.,6.,10.])
+    monkeypatch.setattr(automatic.time,'monotonic',lambda:next(ticks))
+    writes=[]
+    monkeypatch.setattr('builtins.print',lambda *args,**kwargs:writes.append((args,kwargs)))
+    reporter=automatic._StatisticsProgress([SimpleNamespace(repo_id='/numeric/data')],2)
+    base={'pass':1,'pass_rows_total':100,'pass_rows_done':0,'source_index':0,'sources_total':1,
+          'rows_done':0,'rows_total':100,'event':'source_start'}
+    reporter(base)
+    for count in (1,2,3,4):
+        reporter({**base,'rows_done':count,'pass_rows_done':count,'event':'batch'})
+    progress=[args[0] for args,_ in writes if '｜' in args[0]]
+    assert len(progress)==3 and all(options.get('flush') is True for _,options in writes)
+    assert all(f'{count}/100 行（' in line for count,line in zip((0,2,4),progress))
+
+
+def test_reused_statistics_emit_matching_path_hash_formula_and_elapsed_without_scanning(config,capsys,monkeypatch):
+    ready=automatic.prepare_training_normalization(config)
+    capsys.readouterr()
+    monkeypatch.setattr(automatic,'NumericStatisticsLoader',lambda *args:pytest.fail('Matching statistics must not scan again'))
+    automatic.prepare_training_normalization(config)
+    output=capsys.readouterr().out
+    assert '复用已完整计算的统计，不重复扫描原始样本' in output
+    assert '已复用匹配的共享统计文件：'+ready.data.shared_norm_stats_path in output
+    assert 'SHA-256：' in output and '归一化方式：q01/q99' in output and '总耗时' in output
+    assert '开始完整两遍统计' not in output
+
+
+def test_failed_statistics_log_failure_and_never_announce_or_publish_partial_output(config,capsys):
+    object.__setattr__(config.data.datasets[0],'_norm_effective_fps',20.)
+    destination=Path(automatic.planned_training_normalization(config)['output_path'])
+    with pytest.raises(ValueError,match='FPS'):
+        automatic.prepare_training_normalization(config)
+    output=capsys.readouterr().out
+    assert '正在校验' in output and '统计准备失败，训练尚未启动' in output
+    assert '统计准备完成' not in output and '已保存共享统计文件' not in output
+    assert not destination.exists()
+    assert not destination.parent.exists()
+
+
+@pytest.mark.parametrize('workers',[True,-1,1.5])
+def test_statistics_loader_rejects_invalid_worker_counts_before_loading(config,workers,monkeypatch):
+    monkeypatch.setattr(numeric_stats,'NumericParquetDataset',lambda *_:pytest.fail('Invalid controls must fail before dataset access'))
+    with pytest.raises(ValueError,match='num_workers'):
+        automatic.NumericStatisticsLoader([],2,workers)
+
+
+def test_ordered_loader_h50_parallel_matches_inline_and_preserves_every_tail_row(config):
+    pytest.importorskip('torch')
+    from openpi.shared.weighted_stats import compute_weighted_statistics
+    numeric=[numeric_stats.build_numeric_statistics_config(child,
+        SimpleNamespace(action_horizon=50,action_dim=32),validate_model=False) for child in config.data.datasets]
+    actual=[]
+    for workers in (0,2):
+        with automatic.NumericStatisticsLoader(numeric,2,workers) as loader:
+            observed=[]
+            def factory(index):
+                def batches():
+                    for batch in loader.source_batches(index):
+                        observed.append((index,len(batch['state']),batch['actions'].shape))
+                        yield batch
+                return batches
+            result,counts=compute_weighted_statistics([factory(index) for index in range(2)],[1.,2.])
+        assert loader.closed
+        assert observed==[(0,2,(2,50,2)),(1,2,(2,50,2)),(1,1,(1,50,2))]*2
+        assert [entry['rows'] for entry in counts]==[2,3]
+        actual.append((result,counts))
+    assert actual[0][1]==actual[1][1]
+    for key in ('state','actions'):
+        for name in actual[0][0][key]:
+            np.testing.assert_array_equal(actual[0][0][key][name],actual[1][0][key][name])
+
+
+def test_shared_loader_disallows_overlapping_sources_and_cleans_up_early_close(config):
+    numeric=[numeric_stats.build_numeric_statistics_config(child,config.model,validate_model=False)
+             for child in config.data.datasets]
+    with automatic.NumericStatisticsLoader(numeric,1,0) as loader:
+        source=loader.source_batches(0)
+        next(source)
+        with pytest.raises(RuntimeError,match='sequentially'):
+            next(loader.source_batches(1))
+        source.close()
+        assert loader.closed
+        with pytest.raises(RuntimeError,match='open loader'):
+            next(loader.source_batches(1))
+
+
+def test_real_worker_numeric_failure_closes_pool_and_restores_spawn_environment(config,monkeypatch):
+    torch=pytest.importorskip('torch')
+    source_path=Path(config.data.datasets[0].repo_id)/'data/episode.parquet'
+    table=pq.read_table(source_path)
+    index=table.schema.get_field_index('observation.state')
+    table=table.set_column(index,table.schema.field(index),pa.array([[float('nan'),1.],[2.,3.]],
+        type=table.schema.field(index).type))
+    pq.write_table(table,source_path,row_group_size=2)
+    numeric=[numeric_stats.build_numeric_statistics_config(child,config.model,validate_model=False)
+             for child in config.data.datasets]
+    workers=[]
+    original=torch.utils.data.DataLoader.__iter__
+    def started(loader):
+        iterator=original(loader)
+        workers.extend(iterator._workers)
+        return iterator
+    monkeypatch.setattr(torch.utils.data.DataLoader,'__iter__',started)
+    monkeypatch.setenv('OMP_NUM_THREADS','7')
+    monkeypatch.setenv('OPENBLAS_NUM_THREADS','5')
+    names=('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','NUMEXPR_NUM_THREADS')
+    environment={name:os.environ.get(name) for name in names}
+    with automatic.NumericStatisticsLoader(numeric,1,2) as loader:
+        with pytest.raises(ValueError,match='数值|finite'):
+            next(loader.source_batches(0))
+        assert loader.closed
+    assert len(workers)==2
+    assert all(worker.exitcode is not None and not worker.is_alive() for worker in workers)
+    assert {name:os.environ.get(name) for name in names}==environment

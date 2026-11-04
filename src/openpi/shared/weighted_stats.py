@@ -18,6 +18,19 @@ import numpy as np
 KEYS = ("state", "actions")
 
 
+def _histogram_counts(values,edges,bins):
+    """Exact explicit-edge histogram without sorting every small batch.
+
+    The caller already checked global bounds. Match numpy.histogram's left
+    inclusive bins and inclusive final endpoint, including repeated edges.
+    """
+    if np.any(edges[:-1]>edges[1:]):
+        raise ValueError('Histogram bins must increase monotonically')
+    indices=np.searchsorted(edges,values,side='right')-1
+    np.minimum(indices,bins-1,out=indices)
+    return np.bincount(indices,minlength=bins)
+
+
 def _weights(values: Sequence[float], count: int) -> list[float]:
     if len(values) != count:
         raise ValueError("weights length must match the number of sources")
@@ -70,6 +83,8 @@ def compute_weighted_statistics(
     weights: Sequence[float],
     *,
     quantile_bins: int = 5000,
+    progress: Callable[[Mapping], None] | None = None,
+    source_rows: Sequence[int] | None = None,
 ) -> tuple[dict[str, dict[str, np.ndarray]], list[dict[str, int]]]:
     """Return pooled statistics and unweighted source coverage counts.
 
@@ -84,6 +99,9 @@ def compute_weighted_statistics(
     """
     if not source_factories:
         raise ValueError("At least one source is required")
+    if source_rows is not None and (len(source_rows) != len(source_factories)
+            or any(isinstance(value, bool) or not isinstance(value, numbers.Integral) or value <= 0 for value in source_rows)):
+        raise ValueError("source_rows must contain one positive integer per source")
     weights = _weights(weights, len(source_factories))
     if isinstance(quantile_bins, bool) or not isinstance(quantile_bins, int) or quantile_bins < 2:
         raise ValueError("quantile_bins must be an integer of at least two")
@@ -92,9 +110,20 @@ def compute_weighted_statistics(
     moments = {}
     counts = []
     digests = []
-    for factory, weight in zip(source_factories, weights, strict=True):
+    def report(pass_index, source_index, rows_done, event):
+        if progress is not None:
+            totals = source_rows if source_rows is not None else [value['rows'] for value in counts] if pass_index == 2 else None
+            preceding = sum(value['rows'] for value in counts[:source_index])
+            progress({'pass':pass_index, 'passes':2, 'pass_name':'moments' if pass_index==1 else 'quantiles',
+                'source_index':source_index, 'sources_total':len(source_factories), 'rows_done':rows_done,
+                'rows_total':int(totals[source_index]) if totals is not None else None,
+                'pass_rows_done':preceding+rows_done,
+                'pass_rows_total':int(sum(totals)) if totals is not None else None, 'event':event})
+
+    for index, (factory, weight) in enumerate(zip(source_factories, weights, strict=True)):
         source_count = {"rows": 0, "state_vectors": 0, "action_vectors": 0}
         digest = hashlib.sha256()
+        report(1,index,0,'source_start')
         for rows, arrays in _batches(factory, widths, digest):
             source_count["rows"] += rows
             for key, array in arrays.items():
@@ -123,8 +152,12 @@ def compute_weighted_statistics(
                     ]
                 if not all(np.isfinite(value).all() for value in moments[key][1:]):
                     raise ValueError(f"{key} statistics exceed finite float64 range")
+            report(1,index,source_count['rows'],'batch')
         if source_count["rows"] == 0:
             raise ValueError("Every source must contain at least one row")
+        if source_rows is not None and source_count['rows'] != source_rows[index]:
+            raise ValueError("Statistics source row count differs from declared full coverage")
+        report(1,index,source_count['rows'],'source_done')
         counts.append(source_count)
         digests.append(digest.hexdigest())
 
@@ -142,6 +175,7 @@ def compute_weighted_statistics(
     for index, (factory, weight) in enumerate(zip(source_factories, weights, strict=True)):
         observed = {"rows": 0, "state_vectors": 0, "action_vectors": 0}
         digest = hashlib.sha256()
+        report(2,index,0,'source_start')
         for rows, arrays in _batches(factory, widths, digest):
             observed["rows"] += rows
             for key, array in arrays.items():
@@ -153,10 +187,12 @@ def compute_weighted_statistics(
                     if low[dim] == high[dim]:
                         histograms[key][dim, 0] += len(array) * weight
                     else:
-                        hist, _ = np.histogram(array[:, dim], bins=edges[key][dim])
+                        hist = _histogram_counts(array[:, dim],edges[key][dim],quantile_bins)
                         histograms[key][dim] += hist * weight
+            report(2,index,observed['rows'],'batch')
         if observed != counts[index] or digest.hexdigest() != digests[index]:
             raise ValueError("Source rows or values changed between statistics passes")
+        report(2,index,observed['rows'],'source_done')
 
     result = {}
     for key, (mass, mean, m2, low, high) in moments.items():
