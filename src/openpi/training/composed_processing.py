@@ -99,7 +99,9 @@ def normalize_composition(value, *, norm_stats=False):
     if type(value["schema_version"]) is not int or value["schema_version"] != SCHEMA_VERSION:
         _fail("不支持的组合数据处理版本")
     result = {"schema_version": SCHEMA_VERSION, "robot_model": _text(value["robot_model"], "机器人型号", 100)}
-    representations = {"eef", "joint", "composite"} if norm_stats else {"eef", "joint"}
+    # An explicitly declared composite vector is passed through unchanged;
+    # its internal EEF/Joint semantics are neither guessed nor converted.
+    representations = {"eef", "joint", "composite"}
     for key, choices in {
         "arm_mode": {"single", "bimanual"}, "state_representation": representations,
         "action_representation": representations,
@@ -160,7 +162,7 @@ def normalize_composition(value, *, norm_stats=False):
         _fail("同一机械臂的动作语义块不能重复")
     if result["action_representation"] == "composite" and (len(result["action_layout"]) != 1 or
             result["action_layout"][0]["kind"] != "shared"):
-        _fail("组合动作向量统计只能使用一个完整共享动作块，不能推断内部机械臂或分量布局")
+        _fail("组合动作向量只能使用一个完整共享动作块，不能推断内部机械臂或分量布局")
     for key in ("state_fields", "action_layout"):
         if sum(field["width"] for field in result[key]) > 512:
             _fail("每时刻状态和动作总宽度分别不能超过 512")

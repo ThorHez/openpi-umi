@@ -66,6 +66,17 @@ def joint_composition():
     return spec
 
 
+def composite_composition():
+    spec = composition()
+    spec.update(robot_model="ARX5", arm_mode="bimanual", state_history=1,
+                state_representation="composite", action_representation="composite",
+                rotation_representation="", position_unit="", joint_unit="", coordinate_frame="",
+                gripper_range=None)
+    spec["state_fields"] = [{"key": "observation.state", "width": 14, "arm": "shared", "kind": "other", "normalize": True}]
+    spec["action_layout"] = [{"arm": "shared", "kind": "shared", "width": 14, "normalize": True}]
+    return spec
+
+
 class SchemaTests(unittest.TestCase):
     def test_schema_is_complete_strict_and_does_not_import_numpy_or_training_backends(self):
         result = subprocess.run([sys.executable, "-I", "-c",
@@ -260,7 +271,7 @@ class NumericTests(unittest.TestCase):
         self.assertEqual(self.apply(spec, sample)["state"].shape, (3, 6))
 
     def test_shared_raw_actions_keep_all_values_order_width_and_normalization_flags(self):
-        for representation in ("eef", "joint"):
+        for representation in ("eef", "joint", "composite"):
             for normalized in (True, False):
                 spec = composition(bimanual=True)
                 spec.update(action_representation=representation)
@@ -517,6 +528,49 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(self.build(spec, action_shape=[10]).action_sequence_keys, ("actions",))
         with self.assertRaises(ValueError):self.build(spec, action_shape=[15, 10])
         with self.assertRaises(ValueError):self.build(spec, action_shape=[16, 9])
+
+    def test_composite_sft_pipeline_preserves_raw_vectors_and_only_applies_declared_normalization_and_padding(self):
+        namespace = {"np": np, "dataclasses": dataclasses, "partial": partial, "DataTransformFn": object}
+        actual_definitions(ROOT / "src/openpi/transforms.py", {"Normalize"}, namespace)
+        normalizer = namespace["Normalize"](None)
+        stats = types.SimpleNamespace(mean=np.arange(14, dtype=np.float64) - 3,
+                                      std=np.arange(14, dtype=np.float64) + 1)
+        for pi05 in (False, True):
+            for mode in ("absolute", "delta"):
+                for normalize in (False, True):
+                    with self.subTest(pi05=pi05, mode=mode, normalize=normalize):
+                        spec = composite_composition(); spec["action_mode"] = mode
+                        spec["state_fields"][0]["normalize"] = normalize
+                        spec["action_layout"][0]["normalize"] = normalize
+                        sample = self.sample(spec)
+                        sample["observation.state"] = np.arange(14, dtype=np.float64) - 10
+                        sample["actions"] = np.arange(16 * 14, dtype=np.float64).reshape(16, 14) - 100
+                        original_state = sample["observation.state"].copy()
+                        original_actions = sample["actions"].copy()
+                        data = self.build(spec, model=self.models.Pi0Config(pi05=pi05))
+                        value = sample
+                        for transform in (*data.repack_transforms.inputs, *data.data_transforms.inputs):
+                            value = transform(value)
+                        np.testing.assert_array_equal(value["state"], original_state[None, :])
+                        np.testing.assert_array_equal(value["actions"], original_actions)
+                        self.assertEqual(data.normalize_masks, {"state": (normalize,) * 14, "actions": (normalize,) * 14})
+                        normalized = {}
+                        for key in ("state", "actions"):
+                            normalized[key] = normalizer._normalize(value[key], stats, norm_mask=data.normalize_masks[key])
+                            expected = (value[key] - stats.mean) / (stats.std + 1e-6) if normalize else value[key]
+                            np.testing.assert_allclose(normalized[key], expected)
+                        value = {**value, **normalized}
+                        for transform in data.model_transforms.inputs:
+                            value = transform(value)
+                        self.assertEqual(value["actions"].shape, (16, 32))
+                        np.testing.assert_array_equal(value["actions"][:, :14], normalized["actions"])
+                        np.testing.assert_array_equal(value["actions"][:, 14:], 0)
+                        np.testing.assert_array_equal(value["state"][:14], normalized["state"].reshape(-1))
+                        self.assertEqual(value["state"].shape, (14 if pi05 else 32,))
+                        if not pi05: np.testing.assert_array_equal(value["state"][14:], 0)
+                        self.assertEqual(data.action_loss_mask, (1.0,) * 14 + (0.0,) * 18)
+                        np.testing.assert_array_equal(sample["observation.state"], original_state)
+                        np.testing.assert_array_equal(sample["actions"], original_actions)
 
     def test_sample_hook_uses_training_data_pipeline_and_norm_without_importing_tokenizer(self):
         spec = composition();key = spec["cameras"][0]["key"]
