@@ -2883,6 +2883,13 @@ class UOTConfig:
     enabled: bool = False
     pair_info_path: str = ""
     target_dataset_index: int = -1
+    # Offline DTW pairing inputs. ``None`` uses every dataset except the target.
+    pair_source_dataset_indices: tuple[int, ...] | None = None
+    dtw_xyz_keys: tuple[str, ...] = ("robot0_eef_pos_wrt_start",)
+    dtw_rotation_keys: tuple[str, ...] = ("robot0_eef_rot_axis_angle_wrt_start",)
+    dtw_gripper_keys: tuple[str, ...] = ("robot0_gripper_width",)
+    dtw_top_k: int = 0
+    dtw_candidate_pool: int = 0
     ot_batch_size: int = 128
     alignment_weight: float = 0.1
     embedding_cost_scale: float = 1.0
@@ -4844,87 +4851,9 @@ _CONFIGS = [
         fsdp_devices=8,
         log_interval=10,
         keep_period=50_000,
-    ),
+    ),  
     TrainConfig(
-        name="pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_horizon_folding_260322",
-        model=pi0_config.Pi0Config(
-            pi05=True,
-            action_dim=32,
-            action_horizon=16,
-            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-            max_token_len=512,
-        ),
-        data=MultiDataConfigFactory(
-            state_pad_dim=128,
-            # 采样权重，与下面 datasets 一一对应；None 表示均匀采样
-            # weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],  # [v7.3_merge, pick_elec, fold_merge_exclude25, fold_desk_height_head]
-            weights=[1.0],
-            datasets=[
-                LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
-                    repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260316",
-                    assets=AssetsConfig(
-                        asset_id=".",
-                        assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260316",
-                    ),
-                    base_config=UmiDataConfig(
-                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-                        robot_type="ARM=2 G=1 H=0",
-                    ),
-                ),
-                # LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
-                #     repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260317",
-                #     assets=AssetsConfig(
-                #         asset_id=".",
-                #         assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_aligned_depth_qf06_260317",
-                #     ),
-                #     base_config=UmiDataConfig(
-                #         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-                #         robot_type="ARM=2 G=1 H=0",
-                #     ),
-                # ),
-                # LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
-                #     repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260320",
-                #     assets=AssetsConfig(
-                #         asset_id=".",
-                #         assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260320",
-                #     ),
-                #     base_config=UmiDataConfig(
-                #         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-                #         robot_type="ARM=2 G=1 H=0",
-                #     ),
-                # ),
-                # LeRobotUmiDataConfig_Bimamual_HeadView_Depth_ImageHorizon1_Hybrid(
-                #     repo_id="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260323",
-                #     assets=AssetsConfig(
-                #         asset_id=".",
-                #         assets_dir="/root/openpi-umi/data/umi_lerobot_dataset_fold_clothes_red_1815_right_horizon_260323",
-                #     ),
-                #     base_config=UmiDataConfig(
-                #         action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-                #         robot_type="ARM=2 G=1 H=0",
-                #     ),
-                # ),
-            ]
-        ),
-        weight_loader=CheckpointWeightLoaderWithDiscreteHead("/root/openpi-umi/checkpoints/pi05_umi_32d_80k_95_real_umi_batch_72_v4_hybrid_fold_clothes_horizon_folding_260322/my_experiment/19000/params"),
-        lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=2_000,
-            peak_lr=8e-5,
-            decay_steps=50_000,
-            decay_lr=1e-5,
-        ),
-        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        ema_decay=0.999,
-        num_train_steps=60_000,
-        batch_size=72,
-        num_workers=16,
-        fsdp_devices=8,
-        log_interval=10,
-        keep_period=30_000,
-    ),
-    # === [论文 Ours/UOT] WBCD 跨场景主配置：原权重由 loader 自动归一，0604 daytime 为 target。 ===
-    TrainConfig(
-        name="openpi_umi_robust_v0",
+        name="openpi_from_base_v0",
         model=pi0_config.Pi0Config(
             pi05=True,
             action_dim=32,
@@ -4932,10 +4861,9 @@ _CONFIGS = [
             action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
             max_token_len=360,
         ),
-        # === [论文 Ours/UOT] 直接展开数据集与采样权重，便于在本训练配置内独立核对和修改。 ===
         data=MultiDataConfigFactory(
             state_pad_dim=96,
-            weights=[0.1, 0.1, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3, 0.2, 0.3, 0.3, 0.3, 0.3, 0.3, 1.0, 3.0, 5.0],
+            weights=[0.1, 0.1, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3, 0.2, 0.3, 0.3, 0.6, 0.6],
             datasets=[
                 WBCD_Bimamual_4_views_ImageHorizon1(
                     repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
@@ -5036,7 +4964,6 @@ _CONFIGS = [
                         robot_type="ARM=2 G=2 H=0",
                     ),
                 ),
-                # target 数据集：UOTConfig.target_dataset_index 必须保持为 9。
                 WBCD_Bimamual_4_views_ImageHorizon1(
                     repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
                     assets=AssetsConfig(
@@ -5081,56 +5008,22 @@ _CONFIGS = [
                         robot_type="ARM=2 G=2 H=0",
                     ),
                 ),
-                WBCD_Bimamual_4_views_ImageHorizon1(
-                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0802_wbcd_hitl_with_wrist_hefei",
-                    assets=AssetsConfig(
-                        asset_id=".",
-                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0802_wbcd_hitl_with_wrist_hefei",
-                    ),
-                    base_config=UmiDataConfig(
-                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-                        robot_type="ARM=2 G=2 H=0",
-                    ),
-                ),
-                WBCD_Bimamual_4_views_ImageHorizon1(
-                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei",
-                    assets=AssetsConfig(
-                        asset_id=".",
-                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei",
-                    ),
-                    base_config=UmiDataConfig(
-                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-                        robot_type="ARM=2 G=2 H=0",
-                    ),
-                ),
-                WBCD_Bimamual_4_views_ImageHorizon1(
-                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_afternoon",
-                    assets=AssetsConfig(
-                        asset_id=".",
-                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_afternoon",
-                    ),
-                    base_config=UmiDataConfig(
-                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-                        robot_type="ARM=2 G=2 H=0",
-                    ),
-                ),
-                WBCD_Bimamual_4_views_ImageHorizon1(
-                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_evening",
-                    assets=AssetsConfig(
-                        asset_id=".",
-                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0803_wbcd_hitl_with_wrist_hefei_evening",
-                    ),
-                    base_config=UmiDataConfig(
-                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
-                        robot_type="ARM=2 G=2 H=0",
-                    ),
-                ),
             ],
         ),
         uot=UOTConfig(
             enabled=True,
-            pair_info_path="/data2/hzl_workspace_for_pi/openpi-umi-robustness/artifacts/dtw/pi05_umi_robustness_pair_info_v2.json.gz",
-            target_dataset_index=9,
+            pair_info_path="/data2/hzl_workspace_for_pi/openpi-umi-robustness/artifacts/dtw/openpi_robustness_v0_pair_info.json.gz",
+            target_dataset_index=12,
+            # Exclude the target itself (12) and the error dataset (8) from offline DTW sources.
+            pair_source_dataset_indices=(0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11),
+            dtw_xyz_keys=("robot0_eef_pos_wrt_start", "robot1_eef_pos_wrt_start"),
+            dtw_rotation_keys=(
+                "robot0_eef_rot_axis_angle_wrt_start",
+                "robot1_eef_rot_axis_angle_wrt_start",
+            ),
+            dtw_gripper_keys=("robot0_gripper_width", "robot1_gripper_width"),
+            dtw_top_k=0,
+            dtw_candidate_pool=0,
             # BC 分支复用上面的 MultiDataConfigFactory.weights，数据集长度自然参与采样占比。
             # DTW 离线配对使用 candidate-pool=0 全量比较；视觉代价保留每个同名相机的完整网格。
             ot_batch_size=16,
@@ -5146,11 +5039,13 @@ _CONFIGS = [
             # 严格使用 DTW 对齐帧，不再在 source 侧做随机时间扰动。
             temporal_window=0,
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/30000_wbcd_4views_h32_260608/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/data2/hzl_workspace_for_pi/.cache/openpi/openpi-assets/checkpoints/pi05_base/params"
+        ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
             peak_lr=8e-5,
-            decay_steps=60_000,
+            decay_steps=50_000,
             decay_lr=1e-5,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
@@ -5160,8 +5055,593 @@ _CONFIGS = [
         num_workers=16,
         fsdp_devices=8,
         log_interval=10,
-        save_interval=1_000,
-        keep_period=10_000,
+        keep_period=30_000,
+    ),  
+    TrainConfig(
+        name="openpi_robustness_1025",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=360,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[0.1, 0.1, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3, 0.2, 0.3, 0.3, 0.1, 0.1],
+            datasets=[
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+            ],
+        ),
+        uot=UOTConfig(
+            enabled=True,
+            pair_info_path="/data2/hzl_workspace_for_pi/openpi-umi-robustness/artifacts/dtw/openpi_robustness_1025_pair_info_v2.json.gz",
+            target_dataset_index=5,
+            # Exclude the target itself (5) and the error dataset (8) from offline DTW sources.
+            pair_source_dataset_indices=(0, 1, 2, 3, 4, 6, 7, 9, 10, 11, 12),
+            dtw_xyz_keys=("robot0_eef_pos_wrt_start", "robot1_eef_pos_wrt_start"),
+            dtw_rotation_keys=(
+                "robot0_eef_rot_axis_angle_wrt_start",
+                "robot1_eef_rot_axis_angle_wrt_start",
+            ),
+            dtw_gripper_keys=("robot0_gripper_width", "robot1_gripper_width"),
+            dtw_top_k=0,
+            dtw_candidate_pool=0,
+            # BC 分支复用上面的 MultiDataConfigFactory.weights，数据集长度自然参与采样占比。
+            # DTW 离线配对使用 candidate-pool=0 全量比较；视觉代价保留每个同名相机的完整网格。
+            ot_batch_size=16,
+            alignment_weight=0.1,
+            # === [论文 Ours/UOT] 以下数值逐项复现官方仓库 base_config.json。 ===
+            embedding_cost_scale=0.01,
+            label_cost_scale=0.05,
+            entropy_reg=0.1,
+            marginal_relaxation=0.05,
+            diagonal_reference=True,
+            dtw_distance_cutoff=0.009,
+            dtw_distance_sharpness=1000.0,
+            # 严格使用 DTW 对齐帧，不再在 source 侧做随机时间扰动。
+            temporal_window=0,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_wbcd_v3_260522_h32/260604/59999/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=60_000,
+        batch_size=72,
+        num_workers=16,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=30_000,
+    ),
+    TrainConfig(
+        name="openpi_robustness_1027",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=360,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[0.1, 0.1, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3, 0.2, 0.3, 0.3, 0.6, 0.6],
+            datasets=[
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+            ],
+        ),
+        uot=UOTConfig(
+            enabled=True,
+            pair_info_path="/data2/hzl_workspace_for_pi/openpi-umi-robustness/artifacts/dtw/openpi_robustness_v0_pair_info.json.gz",
+            target_dataset_index=12,
+            # Exclude the target itself (12) and the error dataset (8) from offline DTW sources.
+            pair_source_dataset_indices=(0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11),
+            dtw_xyz_keys=("robot0_eef_pos_wrt_start", "robot1_eef_pos_wrt_start"),
+            dtw_rotation_keys=(
+                "robot0_eef_rot_axis_angle_wrt_start",
+                "robot1_eef_rot_axis_angle_wrt_start",
+            ),
+            dtw_gripper_keys=("robot0_gripper_width", "robot1_gripper_width"),
+            dtw_top_k=0,
+            dtw_candidate_pool=0,
+            # BC 分支复用上面的 MultiDataConfigFactory.weights，数据集长度自然参与采样占比。
+            # DTW 离线配对使用 candidate-pool=0 全量比较；视觉代价保留每个同名相机的完整网格。
+            ot_batch_size=16,
+            alignment_weight=0.1,
+            # === [论文 Ours/UOT] 以下数值逐项复现官方仓库 base_config.json。 ===
+            embedding_cost_scale=0.01,
+            label_cost_scale=0.05,
+            entropy_reg=0.1,
+            marginal_relaxation=0.05,
+            diagonal_reference=True,
+            dtw_distance_cutoff=0.009,
+            dtw_distance_sharpness=1000.0,
+            # 严格使用 DTW 对齐帧，不再在 source 侧做随机时间扰动。
+            temporal_window=0,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_wbcd_v3_260522_h32/260604/59999/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=30_000,
+        batch_size=72,
+        num_workers=16,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=30_000,
+    ),
+    TrainConfig(
+        name="openpi_baseline_1023",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=32,
+            action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+            max_token_len=360,
+        ),
+        data=MultiDataConfigFactory(
+            state_pad_dim=96,
+            weights=[0.1, 0.1, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3, 0.2, 0.3, 0.3, 0.1, 0.1],
+            datasets=[
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0525_wbcd_hitl_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_1",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_2",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0526_wbcd_hitl_shanghai_3",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0601_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_afternoon",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0602_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0603_wbcd_hitl_with_wrist_1813_error",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0604_wbcd_hitl_with_wrist_1813_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+                WBCD_Bimamual_4_views_ImageHorizon1(
+                    repo_id="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai_night",
+                    assets=AssetsConfig(
+                        asset_id=".",
+                        assets_dir="/data1/hzl_workspace_for_pi/openpi-umi/data/wbcd/0608_wbcd_hitl_with_wrist_shanghai_night",
+                    ),
+                    base_config=UmiDataConfig(
+                        action_loss_mask=(1.0,) * 20 + (0.0,) * 12,
+                        robot_type="ARM=2 G=2 H=0",
+                    ),
+                ),
+            ],
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/data2/hzl_workspace_for_pi/openpi-umi/checkpoints/pi05_umi_wbcd_v3_260522_h32/260604/59999/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=8e-5,
+            decay_steps=50_000,
+            decay_lr=1e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=60_000,
+        batch_size=72,
+        num_workers=16,
+        fsdp_devices=8,
+        log_interval=10,
+        keep_period=30_000,
     ),
     TrainConfig(
         name="pi05_umi_wbcd_v3_260522_h32",

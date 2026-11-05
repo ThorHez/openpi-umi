@@ -209,11 +209,52 @@ def _trajectory_descriptor(state: dict[str, np.ndarray], points: int = 16) -> np
     return np.concatenate(descriptor_parts)
 
 
+def _pairing_parameters_from_config(config_name: str) -> dict[str, Any]:
+    """Resolve offline DTW parameters from a registered training config."""
+    from openpi.training import config as training_config
+
+    train_config = training_config.get_config(config_name)
+    if train_config.uot is None:
+        raise ValueError(f"Config {config_name!r} has no UOTConfig")
+    datasets = getattr(train_config.data, "datasets", None)
+    if not datasets:
+        raise ValueError(f"Config {config_name!r} does not define a multi-dataset data config")
+
+    target_index = train_config.uot.target_dataset_index
+    if not 0 <= target_index < len(datasets):
+        raise ValueError(
+            f"Config {config_name!r} target_dataset_index={target_index} is outside "
+            f"the dataset range [0, {len(datasets)})"
+        )
+    source_indices = train_config.uot.pair_source_dataset_indices
+    if source_indices is None:
+        source_indices = tuple(index for index in range(len(datasets)) if index != target_index)
+    if target_index in source_indices:
+        raise ValueError(f"Config {config_name!r} includes its target dataset in DTW sources")
+    invalid_indices = [index for index in source_indices if not 0 <= index < len(datasets)]
+    if invalid_indices:
+        raise ValueError(f"Config {config_name!r} has invalid DTW source indices: {invalid_indices}")
+    if len(set(source_indices)) != len(source_indices):
+        raise ValueError(f"Config {config_name!r} has duplicate DTW source indices")
+
+    return {
+        "sources": [datasets[index].repo_id for index in source_indices],
+        "target": datasets[target_index].repo_id,
+        "output": train_config.uot.pair_info_path,
+        "xyz_keys": list(train_config.uot.dtw_xyz_keys),
+        "rotation_keys": list(train_config.uot.dtw_rotation_keys),
+        "gripper_keys": list(train_config.uot.dtw_gripper_keys),
+        "top_k": train_config.uot.dtw_top_k,
+        "candidate_pool": train_config.uot.dtw_candidate_pool,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Precompute cross-scene DTW pairs for UOT co-training")
-    parser.add_argument("--source", action="append", required=True, help="辅助数据集路径；可重复传入")
-    parser.add_argument("--target", required=True, help="目标数据集路径")
-    parser.add_argument("--output", required=True, help="输出 JSON 路径")
+    parser.add_argument("--config-name", help="从已注册训练配置读取配对参数")
+    parser.add_argument("--source", action="append", help="辅助数据集路径；可重复传入")
+    parser.add_argument("--target", help="目标数据集路径")
+    parser.add_argument("--output", help="输出 JSON 路径")
     parser.add_argument("--xyz-key", action="append", dest="xyz_keys", help="相对起始 XYZ 列；每只手一次")
     parser.add_argument(
         "--rotation-key", action="append", dest="rotation_keys", help="相对起始 rot6d 列；每只手一次"
@@ -221,17 +262,39 @@ def main() -> None:
     parser.add_argument(
         "--gripper-key", action="append", dest="gripper_keys", help="绝对夹爪状态列；每只手一次"
     )
-    parser.add_argument("--top-k", type=int, default=0, help="每条目标轨迹仅保留最近 K 条辅助轨迹；0 表示全部")
+    parser.add_argument("--top-k", type=int, help="每条目标轨迹仅保留最近 K 条辅助轨迹；0 表示全部")
     parser.add_argument(
         "--candidate-pool",
         type=int,
-        default=0,
         help="每个 source 数据集先按轨迹描述子保留 K 条再做精确 DTW；0 表示论文式全量比较",
     )
     args = parser.parse_args()
-    xyz_keys = args.xyz_keys or ["robot0_eef_pos_wrt_start"]
-    rotation_keys = args.rotation_keys or ["robot0_eef_rot_axis_angle_wrt_start"]
-    gripper_keys = args.gripper_keys or ["robot0_gripper_width"]
+    config_parameters = _pairing_parameters_from_config(args.config_name) if args.config_name else {}
+    source_repo_ids = args.source if args.source is not None else config_parameters.get("sources")
+    target_repo_id = args.target if args.target is not None else config_parameters.get("target")
+    output_path_arg = args.output if args.output is not None else config_parameters.get("output")
+    xyz_keys = args.xyz_keys if args.xyz_keys is not None else config_parameters.get(
+        "xyz_keys", ["robot0_eef_pos_wrt_start"]
+    )
+    rotation_keys = args.rotation_keys if args.rotation_keys is not None else config_parameters.get(
+        "rotation_keys", ["robot0_eef_rot_axis_angle_wrt_start"]
+    )
+    gripper_keys = args.gripper_keys if args.gripper_keys is not None else config_parameters.get(
+        "gripper_keys", ["robot0_gripper_width"]
+    )
+    top_k = args.top_k if args.top_k is not None else config_parameters.get("top_k", 0)
+    candidate_pool = (
+        args.candidate_pool
+        if args.candidate_pool is not None
+        else config_parameters.get("candidate_pool", 0)
+    )
+    missing = [
+        name
+        for name, value in (("--source", source_repo_ids), ("--target", target_repo_id), ("--output", output_path_arg))
+        if not value
+    ]
+    if missing:
+        parser.error(f"Missing required pairing inputs: {', '.join(missing)}; pass them manually or use --config-name")
     if not (len(xyz_keys) == len(rotation_keys) == len(gripper_keys)):
         raise ValueError("Pass exactly one xyz, rotation and gripper key per arm")
 
@@ -240,9 +303,9 @@ def main() -> None:
             "repo_id": repo_id,
             "episodes": _extract_episodes(repo_id, xyz_keys, rotation_keys, gripper_keys),
         }
-        for repo_id in args.source
+        for repo_id in source_repo_ids
     ]
-    target_episodes = _extract_episodes(args.target, xyz_keys, rotation_keys, gripper_keys)
+    target_episodes = _extract_episodes(target_repo_id, xyz_keys, rotation_keys, gripper_keys)
     pairs = []
     for target_episode_index, target_episode in enumerate(target_episodes):
         target_state = {
@@ -252,7 +315,7 @@ def main() -> None:
         candidates = []
         for source_repo_index, source in enumerate(sources):
             source_episode_indices = list(range(len(source["episodes"])))
-            if args.candidate_pool > 0 and len(source_episode_indices) > args.candidate_pool:
+            if candidate_pool > 0 and len(source_episode_indices) > candidate_pool:
                 descriptor_distances = []
                 for source_episode_index in source_episode_indices:
                     source_state = {
@@ -262,7 +325,7 @@ def main() -> None:
                     descriptor_distances.append(
                         np.linalg.norm(_trajectory_descriptor(source_state) - target_descriptor)
                     )
-                source_episode_indices = np.argsort(descriptor_distances)[: args.candidate_pool].tolist()
+                source_episode_indices = np.argsort(descriptor_distances)[:candidate_pool].tolist()
             for source_episode_index in source_episode_indices:
                 source_episode = source["episodes"][source_episode_index]
                 source_state = {
@@ -280,8 +343,8 @@ def main() -> None:
                     }
                 )
         candidates.sort(key=lambda item: item["normalized_distance"])
-        if args.top_k > 0:
-            candidates = candidates[: args.top_k]
+        if top_k > 0:
+            candidates = candidates[:top_k]
         pairs.append({"target_episode_list_index": target_episode_index, "candidates": candidates})
 
     # 仅保留最终候选引用到的 source 轨迹，并重写索引，避免大数据集的 JSON 携带无关轨迹。
@@ -323,10 +386,10 @@ def main() -> None:
             "gripper": len(gripper_keys),
         },
         "sources": sources,
-        "target": {"repo_id": args.target, "episodes": target_episodes},
+        "target": {"repo_id": target_repo_id, "episodes": target_episodes},
         "pairs": pairs,
     }
-    output_path = Path(args.output)
+    output_path = Path(output_path_arg)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_file = (
         gzip.open(output_path, "wt", encoding="utf-8")

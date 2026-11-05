@@ -128,6 +128,7 @@ def create_multi_data_loader(
             index_weights,
             num_samples=len(concat),
             replacement=True,
+            generator=torch.Generator().manual_seed(seed),
         )
 
     if framework == "pytorch" and torch.distributed.is_initialized():
