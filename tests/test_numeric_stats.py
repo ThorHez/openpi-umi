@@ -74,16 +74,15 @@ def test_source_projection_never_reads_embedded_images_or_missing_videos(tmp_pat
     for index in range(5):
         result = source[index]
         np.testing.assert_array_equal(result["state"], states[index])
-        expected = actions[index, 0] if packed else actions[index]
-        np.testing.assert_array_equal(result["actions"], expected)
+        np.testing.assert_array_equal(result["actions"], actions[index])
         assert result["state"].dtype == np.float32 and result["actions"].dtype == np.float32
         assert set(result) == {"state", "actions"}
     assert projections and source._cache_bytes <= numeric.MAX_NUMERIC_CACHE_BYTES
     assert len(source._streams) <= 2 and len(source._cache) <= 256
     evidence = numeric.numeric_io_evidence(config)
     assert evidence["columns"] == ["observation.state", "actions"]
-    assert evidence["schema_version"] == 2
-    assert evidence["action_sequence"] == ("packed_first_step" if packed else "per_frame")
+    assert evidence["schema_version"] == 3
+    assert evidence["action_sequence"] == ("packed_all_steps" if packed else "per_frame")
     assert evidence["temporal_columns"] == []
     assert evidence["video_decode"] is False
 
@@ -156,5 +155,4 @@ def test_explicit_composite_numeric_config_preserves_raw_state_and_actions_witho
     source = numeric.NumericParquetDataset(config)
     for index in range(len(source)):
         np.testing.assert_array_equal(source[index]["state"], states[index])
-        expected = actions[index, 0] if packed else actions[index]
-        np.testing.assert_array_equal(source[index]["actions"], expected)
+        np.testing.assert_array_equal(source[index]["actions"], actions[index])

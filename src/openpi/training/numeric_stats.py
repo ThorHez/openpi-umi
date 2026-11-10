@@ -1,8 +1,8 @@
 """Statistics-only Parquet projection; never construct a LeRobot/image loader.
 
 Only explicitly declared numeric state/action fields are read. Each row
-contributes one action vector, using the first step of a stored action chunk.
-State history retains its stored axes.
+contributes its stored action vector or all steps of its stored action chunk.
+State history and action chunks retain their stored axes.
 """
 from __future__ import annotations
 
@@ -87,10 +87,10 @@ def build_numeric_statistics_config(factory, model_config, *, effective_fps=None
 
 def numeric_io_evidence(config):
     source = Path(__file__)
-    return {"schema_version": 2, "reader": "pyarrow_parquet_projection", "columns": config.columns,
+    return {"schema_version": 3, "reader": "pyarrow_parquet_projection", "columns": config.columns,
         "state_columns": [field["key"] for field in config.composition["state_fields"]],
         "action_column": config.composition["action_key"], "temporal_columns": [],
-        "action_sequence": "packed_first_step" if config.packed_actions else "per_frame",
+        "action_sequence": "packed_all_steps" if config.packed_actions else "per_frame",
         "image_columns": [], "video_decode": False,
         "source": {"path": "src/openpi/training/numeric_stats.py", "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}}
 
@@ -144,11 +144,9 @@ class NumericParquetDataset:
                        for row in config.composition["state_fields"]}
         width = sum(row["width"] for row in config.composition["action_layout"])
         action_key = config.composition["action_key"]
-        self._shapes[action_key] = (width,)
-        self._stored_action_shape = (config.action_horizon, width) if config.packed_actions else (width,)
+        self._shapes[action_key] = (config.action_horizon, width) if config.packed_actions else (width,)
         row_bytes = sum(
-            int(np.prod(self._stored_action_shape if key == action_key else self._shapes[key]))
-            * np.dtype(self._dtypes[key]).itemsize
+            math.prod(self._shapes[key]) * np.dtype(self._dtypes[key]).itemsize
             for key in self._numeric_columns
         )
         if row_bytes > MAX_NUMERIC_CHUNK_BYTES:
@@ -176,7 +174,7 @@ class NumericParquetDataset:
                 value = np.asarray(batch.column(batch.schema.get_field_index(key)).to_pylist(), dtype=self._dtypes[key])
             except (TypeError, ValueError, OverflowError) as exc:
                 _fail("数值字段形状与声明不一致：" + key + ": " + str(exc)[:200])
-            shape = self._stored_action_shape if key == action_key else self._shapes[key]
+            shape = self._shapes[key]
             if (key != action_key and shape[0] == 1
                     and value.shape == (rows, shape[1])):
                 value = value[:, None, :]
@@ -192,8 +190,6 @@ class NumericParquetDataset:
             if block["kind"] == "gripper":
                 self._check_gripper(actions[..., start:start + block["width"]])
             start += block["width"]
-        if self.config.packed_actions:
-            arrays[action_key] = actions[:, 0, :].copy()
         return arrays
 
     def _chunk(self, group, offset):
@@ -268,7 +264,7 @@ class NumericParquetDataset:
             yield self.get_batch(range(start, min(start + batch_size, len(self))))
 
     def get_batch(self, indices):
-        """Gather one ordered batch of state histories and single-step actions."""
+        """Gather one ordered batch of state histories and stored actions."""
         import numpy as np
         values = list(indices)
         if not values or any(isinstance(index, (bool, np.bool_)) or not isinstance(index, (int, np.integer))
@@ -277,9 +273,9 @@ class NumericParquetDataset:
         indices = np.asarray(values, dtype=np.int64)
         spec = self.config.composition
         action_key = spec["action_key"]
-        state_size = sum(int(np.prod(self._shapes[field["key"]])) * np.dtype(self._dtypes[field["key"]]).itemsize
+        state_size = sum(math.prod(self._shapes[field["key"]]) * np.dtype(self._dtypes[field["key"]]).itemsize
                          for field in spec["state_fields"])
-        action_size = self._shapes[action_key][0] * np.dtype(self._dtypes[action_key]).itemsize
+        action_size = math.prod(self._shapes[action_key]) * np.dtype(self._dtypes[action_key]).itemsize
         if len(indices) * (state_size + action_size) > MAX_NUMERIC_BATCH_BYTES:
             _fail("统计批次超过受限内存大小，请降低 batch_size")
         states = [self._take(indices, field["key"]) for field in spec["state_fields"]]

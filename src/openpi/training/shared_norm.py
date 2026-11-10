@@ -26,6 +26,8 @@ _IGNORED_RESOURCES = {
 _MAX_FILES = 100_000
 _MAX_JSON = 8 * 1024 * 1024
 _MAX_SOURCE = 16 * 1024 * 1024
+STORED_STEPS_SCHEMA_VERSION = 3
+STORED_STEPS_ACTION_STATISTICS = "stored_steps"
 
 
 def _error(message):
@@ -288,7 +290,7 @@ def validate_shared_metadata(document, factories, weights):
     _validate_statistics(document)
     metadata = document.get("shared_normalization")
     version = metadata.get("schema_version") if isinstance(metadata, dict) else None
-    if type(version) is not int or version not in (1, 2):
+    if type(version) is not int or version not in (1, 2, STORED_STEPS_SCHEMA_VERSION):
         raise _error("missing or unsupported weighted raw-sample shared_normalization provenance; recompute statistics")
     required = {
         "schema_version": version, "method": "weighted_raw_samples", "weight_semantics": "per_sample_repeat",
@@ -296,6 +298,8 @@ def validate_shared_metadata(document, factories, weights):
     }
     if version == 2:
         required["action_statistics"] = "single_step"
+    elif version == STORED_STEPS_SCHEMA_VERSION:
+        required["action_statistics"] = STORED_STEPS_ACTION_STATISTICS
     if (set(metadata) != {*required, "sources"}
             or type(metadata.get("quantile_bins")) is not int
             or any(metadata.get(key) != value for key, value in required.items())):
@@ -304,19 +308,42 @@ def validate_shared_metadata(document, factories, weights):
     recorded = metadata.get("sources")
     if not isinstance(recorded, list) or len(recorded) != len(expected):
         raise _error("shared normalization source count differs; recompute statistics")
-    for current, saved in zip(expected, recorded):
+    for factory, current, saved in zip(factories, expected, recorded, strict=True):
         if (not isinstance(saved, dict) or set(saved) != {*current, "rows", "state_vectors", "action_vectors"}
                 or any(saved.get(key) != value for key, value in current.items())
                 or any(type(saved.get(key)) is not int or saved[key] <= 0
                        for key in ("rows", "state_vectors", "action_vectors"))):
             raise _error("shared normalization source, weight or processor changed; recompute statistics")
-        info, _ = _read_document(Path(current["repo_id"]) / "meta/info.json")
+        info, info_sha = _read_document(Path(current["repo_id"]) / "meta/info.json")
+        if info_sha != current["info_sha256"]:
+            raise _error("source metadata changed during shared normalization verification")
         if (saved["rows"] != info["total_frames"] or saved["state_vectors"] < saved["rows"]
                 or saved["action_vectors"] < saved["rows"]):
             raise _error("shared normalization does not cover every source row; recompute statistics")
         if version == 2 and saved["action_vectors"] != saved["rows"]:
             raise _error("single-step normalization must count exactly one action vector per source row")
+        if version == STORED_STEPS_SCHEMA_VERSION:
+            steps, width = _stored_action_dimensions(factory, info)
+            if saved["action_vectors"] != saved["rows"] * steps:
+                raise _error("stored-step normalization must count every stored action vector")
+            if len(document["norm_stats"]["actions"]["mean"]) != width:
+                raise _error("stored-step normalization must retain the stored action feature width")
     return metadata
+
+
+def _stored_action_dimensions(factory, info):
+    from openpi.training.composed_processing import normalize_composition
+
+    if type(factory).__name__ != "ComposableDataConfig":
+        raise _error("stored-step normalization requires an explicit composable action field")
+    composition = normalize_composition(factory.composition, norm_stats=True)
+    features = info.get("features") or {}
+    action = features.get(composition["action_key"])
+    shape = action.get("shape") if isinstance(action, dict) else None
+    if (not isinstance(shape, list) or len(shape) not in (1, 2)
+            or any(type(size) is not int or size <= 0 for size in shape)):
+        raise _error("stored-step normalization requires a declared action shape of [D] or [H,D]")
+    return (shape[0] if len(shape) == 2 else 1), shape[-1]
 
 
 def load_shared_norm_document(path, factories, weights):

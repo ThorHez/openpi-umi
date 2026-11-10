@@ -15,7 +15,13 @@ from pathlib import Path
 import tempfile
 import time
 
-from openpi.training.shared_norm import load_shared_norm_document, source_descriptors, validate_shared_metadata
+from openpi.training.shared_norm import (
+    STORED_STEPS_ACTION_STATISTICS,
+    STORED_STEPS_SCHEMA_VERSION,
+    load_shared_norm_document,
+    source_descriptors,
+    validate_shared_metadata,
+)
 
 
 def _digest(value):
@@ -169,9 +175,9 @@ def _worker_environment():
 class NumericStatisticsLoader:
     """One bounded ordered worker pool reused across all sources and both passes.
 
-    Source constructors validate only numeric schema and temporal indexes in
-    the parent. No image column or video decoder is used. Payload projection
-    and action-chunk gathering happen in vectorized batches inside workers.
+    Source constructors validate numeric schema in the parent. No image column
+    or video decoder is used. Payload projection preserves stored action steps
+    in vectorized batches inside workers.
     With zero workers the identical batch implementation runs inline.
     """
 
@@ -352,8 +358,8 @@ def _prepare_training_normalization(config,started):
             automatic = planned_training_normalization(dataclasses.replace(config,
                 data=dataclasses.replace(factory, shared_norm_stats_path=None)))
             if (document["training_normalization"] != {"schema_version": 1, "fingerprint": automatic["fingerprint"]}
-                    or document["shared_normalization"]["schema_version"] != 2):
-                raise ValueError("SHARED_NORM_INVALID: automatic statistics do not match the current single-step sampling or execution context")
+                    or document["shared_normalization"]["schema_version"] != STORED_STEPS_SCHEMA_VERSION):
+                raise ValueError("SHARED_NORM_INVALID: automatic statistics do not match stored-action sampling or the current execution context")
         _write_receipt(config, path, document)
         _ready_log(config,path,started,reused=True)
         return config
@@ -374,7 +380,7 @@ def _prepare_training_normalization(config,started):
     if reused:
         document = load_shared_norm_document(path, factory.datasets, weights)
         if (document.get("training_normalization") != {"schema_version": 1, "fingerprint": plan["fingerprint"]}
-                or document["shared_normalization"]["schema_version"] != 2):
+                or document["shared_normalization"]["schema_version"] != STORED_STEPS_SCHEMA_VERSION):
             raise ValueError("SHARED_NORM_INVALID: existing automatic statistics have a conflicting execution context")
         _norm_log('数据、处理方式与权重匹配，复用已完整计算的统计，不重复扫描原始样本。')
     else:
@@ -387,7 +393,8 @@ def _prepare_training_normalization(config,started):
             effective_fps=getattr(child, "_norm_effective_fps", None), validate_model=False) for child in factory.datasets]
         workers=getattr(config,'num_workers',0)
         progress=_StatisticsProgress(numeric,workers,started=started)
-        _norm_log(f'开始完整两遍统计：{len(numeric)} 个数据集，共 {sum(item.total_frames for item in numeric):,} 行，workers={workers}；每行统计一个动作向量，只读取数值字段。')
+        _norm_log(f'开始完整两遍统计：{len(numeric)} 个数据集，共 {sum(item.total_frames for item in numeric):,} 行，'
+                  f'workers={workers}。只读取数值字段，逐帧动作每行计一次，已存动作块的所有时间步均计入。')
         with NumericStatisticsLoader(numeric,batch_size,workers) as loader:
             values, coverage = compute_weighted_statistics(
                 [lambda index=index: loader.source_batches(index) for index in range(len(numeric))],weights,
@@ -396,8 +403,8 @@ def _prepare_training_normalization(config,started):
             raise ValueError("SHARED_NORM_INVALID: data or numeric processing changed during automatic statistics")
         document = {"norm_stats": {key: {**{name: array.tolist() for name, array in stats.items()},
             "quantile_method": "q01_q99"} for key, stats in values.items()}, "shared_normalization": {
-                "schema_version": 2, "method": "weighted_raw_samples", "weight_semantics": "per_sample_repeat",
-                "action_statistics": "single_step",
+                "schema_version": STORED_STEPS_SCHEMA_VERSION, "method": "weighted_raw_samples",
+                "weight_semantics": "per_sample_repeat", "action_statistics": STORED_STEPS_ACTION_STATISTICS,
                 "coverage": "full", "sources": [{**source, **count} for source, count in
                     zip(plan["sources"], coverage, strict=True)],
                 "quantile_method": "weighted_histogram", "quantile_bins": 5000},

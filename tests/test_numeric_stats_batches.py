@@ -1,4 +1,4 @@
-"""Bounded batch decoding of state histories and single-step actions."""
+"""Bounded batch decoding of state histories and stored actions."""
 import importlib.util
 from pathlib import Path
 import pickle
@@ -52,9 +52,8 @@ def test_batches_are_bitwise_equal_across_files_groups_and_episode_boundaries(tm
     reader = numeric.NumericParquetDataset(config)
     for indices in ([0, 1, 2, 3, 4, 5, 6], [13, 0, 3, 3, 12, 1], [7, 8, 9, 10, 11, 12, 13]):
         batch = reader.get_batch(indices)
-        expected = actions[indices, 0] if packed else actions[indices]
         np.testing.assert_array_equal(batch["state"], states[indices])
-        np.testing.assert_array_equal(batch["actions"], expected)
+        np.testing.assert_array_equal(batch["actions"], actions[indices])
         assert batch["state"].dtype == batch["actions"].dtype == np.float32
         items = reader.__getitems__(indices)
         np.testing.assert_array_equal(np.stack([row["state"] for row in items]), batch["state"])
@@ -90,8 +89,8 @@ def test_decoded_blocks_and_returned_batches_obey_memory_limits(tmp_path, monkey
         reader.get_batch(range(start, min(start + 3, len(reader))))
         assert reader._cache_bytes <= 6000
         assert all(size <= 3000 for _, _, size in reader._cache.values())
-    monkeypatch.setattr(numeric, 'MAX_NUMERIC_BATCH_BYTES', 96)
-    assert reader.get_batch([0, 1])["actions"].shape == (2, 4)
+    monkeypatch.setattr(numeric, 'MAX_NUMERIC_BATCH_BYTES', 2 * (2 * 4 + 50 * 4) * 4)
+    assert reader.get_batch([0, 1])["actions"].shape == (2, 50, 4)
     with pytest.raises(ValueError, match='批次超过受限内存'):
         reader.get_batch([0, 1, 2])
 
