@@ -6,7 +6,7 @@ import dataclasses
 import json
 import logging
 import pathlib
-from typing import Protocol
+from typing import Protocol, TYPE_CHECKING
 
 from etils import epath
 import jax
@@ -15,8 +15,9 @@ import orbax.checkpoint.future as future
 
 from openpi.shared import array_typing as at
 import openpi.shared.normalize as _normalize
-import openpi.training.data_loader as _data_loader
-import openpi.training.utils as training_utils
+if TYPE_CHECKING:
+    import openpi.training.data_loader as _data_loader
+    import openpi.training.utils as training_utils
 
 
 def initialize_checkpoint_dir(
@@ -129,20 +130,86 @@ def restore_state(
     state: training_utils.TrainState,
     data_loader: _data_loader.DataLoader,
     step: int | None = None,
+    *,
+    sharding=None,
 ) -> training_utils.TrainState:
     del data_loader
 
     with at.disable_typechecking():
         # Split params that can be used for inference into a separate item.
         train_state, params = _split_params(state)
-        restored = checkpoint_manager.restore(
-            step,
-            items={
-                "train_state": train_state,
-                "params": {"params": params},
-            },
-        )
+        items = {"train_state": train_state, "params": {"params": params}}
+        if sharding is None:
+            restored = checkpoint_manager.restore(step, items=items)
+        else:
+            state_sharding, params_sharding = _split_params(sharding)
+            restore_args = ocp.checkpoint_utils.construct_restore_args(
+                items, {"train_state": state_sharding, "params": {"params": params_sharding}},
+            )
+            restored = checkpoint_manager.restore(step, args=ocp.args.Composite(**{
+                key: ocp.args.PyTreeRestore(item=item, restore_args=restore_args[key]) for key, item in items.items()
+            }))
     return _merge_params(restored["train_state"], restored["params"])
+
+
+def resolve_resume_checkpoint(checkpoint: str, destination: epath.Path | str, target_steps: int) -> pathlib.Path:
+    """Check the explicit native source step before opening the destination writer."""
+    source = pathlib.Path(checkpoint)
+    if (not source.is_absolute() or not source.name.isascii() or not source.name.isdigit()
+            or str(int(source.name)) != source.name):
+        raise ValueError("RESUME_CHECKPOINT_INVALID: expected an absolute numbered OpenPI checkpoint directory")
+    try:
+        resolved = source.resolve(strict=True)
+        destination = pathlib.Path(destination).resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("RESUME_CHECKPOINT_INVALID: checkpoint or output path is unavailable") from exc
+    if source != resolved or not source.is_dir():
+        raise ValueError("RESUME_CHECKPOINT_INVALID: checkpoint must be an existing directory without symlinks")
+    if destination.is_relative_to(source.parent) or source.parent.is_relative_to(destination):
+        raise ValueError("RESUME_CHECKPOINT_INVALID: checkpoint input and output directories must be separate")
+    if target_steps <= int(source.name) + 1:
+        raise ValueError("RESUME_STEP_INVALID: target total steps must exceed the checkpoint's completed steps")
+    return source
+
+
+def restore_state_from_checkpoint(
+    source: pathlib.Path,
+    state: training_utils.TrainState,
+    data_loader: _data_loader.DataLoader,
+    *,
+    sharding,
+    target_steps: int,
+) -> training_utils.TrainState:
+    """Restore weights, optimizer and EMA from one finalized step using a read-only manager."""
+    step = int(source.name)
+    with ocp.CheckpointManager(
+        source.parent,
+        item_handlers={"train_state": ocp.PyTreeCheckpointHandler(), "params": ocp.PyTreeCheckpointHandler()},
+        options=ocp.CheckpointManagerOptions(
+            read_only=True,
+            save_interval_steps=0,
+            create=False,
+            cleanup_tmp_directories=False,
+            save_root_metadata=False,
+            enable_async_checkpointing=False,
+        ),
+    ) as reader:
+        if step not in reader.all_steps():
+            raise ValueError("RESUME_CHECKPOINT_INVALID: selected checkpoint step is missing or incomplete")
+        restored = restore_state(reader, state, data_loader, step=step, sharding=sharding)
+    expected_leaves, expected_structure = jax.tree.flatten(state)
+    restored_leaves, restored_structure = jax.tree.flatten(restored)
+    if expected_structure != restored_structure or any(
+        expected.shape != actual.shape or expected.dtype != actual.dtype
+        for expected, actual in zip(expected_leaves, restored_leaves, strict=True)
+    ):
+        raise ValueError("RESUME_CHECKPOINT_INCOMPATIBLE: restored training state does not match the model or optimizer")
+    actual_step = int(restored.step)
+    # Native save_state labels the checkpoint with the loop index after applying
+    # that update. The state carries the next iteration's index.
+    if actual_step != step + 1 or target_steps <= actual_step:
+        raise ValueError("RESUME_STEP_INVALID: restored train step does not match checkpoint label or target total")
+    return restored
 
 
 def load_norm_stats(assets_dir: epath.Path | str, asset_id: str) -> dict[str, _normalize.NormStats] | None:

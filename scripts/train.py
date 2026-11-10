@@ -35,6 +35,9 @@ import openpi.training.utils as training_utils
 import openpi.training.weight_loaders as _weight_loaders
 
 
+PLATFORM_CHECKPOINT_RESUME_VERSION = 1
+
+
 def init_logging():
     """Custom logging format for better readability."""
     level_mapping = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
@@ -291,6 +294,13 @@ def main(config: _config.TrainConfig):
     data_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(sharding.DATA_AXIS))
     replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
 
+    resume_source = None
+    if config.resume_checkpoint is not None:
+        if hasattr(config.data, "datasets"):
+            raise ValueError("RESUME_CHECKPOINT_UNSUPPORTED: external checkpoint resume requires single-dataset SFT")
+        resume_source = _checkpoints.resolve_resume_checkpoint(
+            config.resume_checkpoint, config.checkpoint_dir, config.num_train_steps,
+        )
     checkpoint_manager, resuming = _checkpoints.initialize_checkpoint_dir(
         config.checkpoint_dir,
         keep_period=config.keep_period,
@@ -315,11 +325,19 @@ def main(config: _config.TrainConfig):
     # ]
     # wandb.log({"camera_views": images_to_log}, step=0)
 
-    train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
+    train_state, train_state_sharding = init_train_state(
+        config, init_rng, mesh, resume=resuming or resume_source is not None,
+    )
     jax.block_until_ready(train_state)
     logging.info(f"Initialized train state:\n{training_utils.array_tree_to_info(train_state.params)}")
 
-    if resuming:
+    if resume_source is not None:
+        train_state = _checkpoints.restore_state_from_checkpoint(
+            resume_source, train_state, data_loader, sharding=train_state_sharding, target_steps=config.num_train_steps,
+        )
+        jax.block_until_ready(train_state)
+        logging.info("Restored training state from %s. Continuing at step %d.", resume_source, int(train_state.step))
+    elif resuming:
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
 
     ptrain_step = jax.jit(

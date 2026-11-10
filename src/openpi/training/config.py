@@ -4542,6 +4542,9 @@ class TrainConfig:
         default_factory=ShellgameMemoryClassifierConfig
     )
 
+    # Exact numbered source checkpoint for native JAX train.py. Saves use checkpoint_dir.
+    resume_checkpoint: str | None = None
+
     @property
     def assets_dirs(self) -> pathlib.Path:
         """Get the assets directory for this config."""
@@ -4562,6 +4565,8 @@ class TrainConfig:
     def __post_init__(self) -> None:
         if self.resume and self.overwrite:
             raise ValueError("Cannot resume and overwrite at the same time.")
+        if self.resume_checkpoint is not None and (self.resume or self.overwrite or self.wandb_enabled):
+            raise ValueError("External checkpoint resume requires fresh output with overwrite, resume and W&B disabled.")
 
 
 # Pi0Value config instances for value-only training (freeze backbone, train value head only).
