@@ -137,6 +137,14 @@ def _processor(factory, *, compatibility=False):
         composition = value["fields"].get("composition")
         if not isinstance(composition, dict):
             raise _error("ComposableDataConfig requires an explicit numeric composition")
+        # Named factories may still carry an explicit uniform mask. Use the
+        # same effective action block as training for source compatibility.
+        layout = factory.composition.get("action_layout")
+        for index, block in enumerate(layout if isinstance(layout, list) else ()):
+            if isinstance(block, dict) and "normalize_mask" in block:
+                from openpi.training.composed_processing import _normalize_action_block
+
+                composition["action_layout"][index] = _normalize_action_block(block)
         # Formula choice is downstream of raw numeric statistics. Camera
         # routing and language may differ across compatible source layouts.
         omitted = {"normalization"}

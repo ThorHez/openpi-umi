@@ -93,8 +93,34 @@ def _unspecified(value):
     return value is None or isinstance(value, str) and not value.strip(_ECMASCRIPT_TRIM)
 
 
+def _normalize_action_block(block, *, norm_stats=False):
+    block = _object(block, {"arm", "kind", "width", "normalize", "normalize_mask"},
+                    "动作块", optional={"normalize_mask"})
+    normalized = {
+        "arm": _enum(block["arm"], {"left", "right", "shared"}, "动作机械臂"),
+        "kind": _enum(block["kind"], {"position", "rotation", "joint", "gripper", "shared"}, "动作语义"),
+        "width": _integer(block["width"], 1, 128, "动作块宽度"),
+        "normalize": _boolean(block["normalize"], "动作归一化标志"),
+    }
+    if (normalized["arm"] == "shared") != (normalized["kind"] == "shared"):
+        _fail("共享动作类型必须使用共享归属，普通动作类型必须明确归属机械臂")
+    if "normalize_mask" in block:
+        mask = block["normalize_mask"]
+        if (normalized["kind"] != "shared" or not isinstance(mask, list) or len(mask) != normalized["width"]
+                or any(type(enabled) is not bool for enabled in mask)):
+            _fail("逐维归一化掩码仅支持共享动作，且必须与动作块等宽，每项为布尔值")
+        if any(mask) and not all(mask):
+            if not normalized["normalize"]:
+                _fail("使用混合逐维归一化掩码时必须启用动作归一化")
+            if not norm_stats:
+                normalized["normalize_mask"] = list(mask)
+        elif not norm_stats:
+            normalized["normalize"] = all(mask)
+    return normalized
+
+
 def normalize_composition(value, *, norm_stats=False):
-    """Validate v1 inputs and preserve explicit per-camera augmentation choices."""
+    """Validate v1 inputs and canonicalize optional training choices."""
     value = _object(value, _FIELDS, "组合数据处理", optional=_OPTIONAL_FIELDS)
     if type(value["schema_version"]) is not int or value["schema_version"] != SCHEMA_VERSION:
         _fail("不支持的组合数据处理版本")
@@ -146,18 +172,7 @@ def normalize_composition(value, *, norm_stats=False):
     action_layout = value["action_layout"]
     if not isinstance(action_layout, list) or not 1 <= len(action_layout) <= 16:
         _fail("动作块数量必须是 1 到 16")
-    result["action_layout"] = []
-    for block in action_layout:
-        block = _object(block, {"arm", "kind", "width", "normalize"}, "动作块")
-        normalized = {
-            "arm": _enum(block["arm"], {"left", "right", "shared"}, "动作机械臂"),
-            "kind": _enum(block["kind"], {"position", "rotation", "joint", "gripper", "shared"}, "动作语义"),
-            "width": _integer(block["width"], 1, 128, "动作块宽度"),
-            "normalize": _boolean(block["normalize"], "动作归一化标志"),
-        }
-        if (normalized["arm"] == "shared") != (normalized["kind"] == "shared"):
-            _fail("共享动作类型必须使用共享归属，普通动作类型必须明确归属机械臂")
-        result["action_layout"].append(normalized)
+    result["action_layout"] = [_normalize_action_block(block, norm_stats=norm_stats) for block in action_layout]
     if len({(field["arm"], field["kind"]) for field in result["action_layout"]}) != len(result["action_layout"]):
         _fail("同一机械臂的动作语义块不能重复")
     if result["action_representation"] == "composite" and (len(result["action_layout"]) != 1 or
@@ -239,7 +254,8 @@ def normalize_composition(value, *, norm_stats=False):
 
 def normalization_masks(composition):
     spec = normalize_composition(composition)
-    return {target: tuple(field["normalize"] for field in spec[source] for _ in range(field["width"]))
+    return {target: tuple(enabled for field in spec[source]
+                          for enabled in field.get("normalize_mask", (field["normalize"],) * field["width"]))
             for target, source in (("state", "state_fields"), ("actions", "action_layout"))}
 
 

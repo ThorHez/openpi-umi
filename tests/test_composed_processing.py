@@ -134,6 +134,38 @@ class SchemaTests(unittest.TestCase):
                     self.assertEqual(COMPOSED.normalize_composition(spec, norm_stats=True),
                                      COMPOSED.normalize_composition(legacy, norm_stats=True))
 
+    def test_shared_action_mask_canonicalizes_uniform_values_and_keeps_stats_projection(self):
+        legacy = composite_composition()
+        mixed = [True, False] * 7
+        for mask in ([True] * 14, [False] * 14, mixed):
+            with self.subTest(mask=mask):
+                spec = deepcopy(legacy)
+                spec["action_layout"][0]["normalize_mask"] = mask
+                expected = deepcopy(legacy)
+                block = expected["action_layout"][0]
+                if mask == mixed:
+                    block["normalize_mask"] = mixed
+                else:
+                    block["normalize"] = all(mask)
+                self.assertEqual(COMPOSED.normalize_composition(spec), expected)
+                self.assertEqual(COMPOSED.normalize_composition(expected), expected)
+                self.assertEqual(COMPOSED.normalization_masks(spec)["actions"], tuple(mask))
+                self.assertEqual(COMPOSED.normalize_composition(spec, norm_stats=True),
+                                 COMPOSED.normalize_composition(legacy, norm_stats=True))
+
+    def test_shared_action_mask_requires_boolean_width_and_an_enabled_mixed_block(self):
+        for mask, normalize in (([True] * 13, True), ([True] * 13 + [0], True), (None, True),
+                                (tuple([True] * 14), True), ([True, False] * 7, False)):
+            spec = composite_composition()
+            spec["action_layout"][0].update(normalize_mask=mask, normalize=normalize)
+            for stats in (False, True):
+                with self.subTest(mask=mask, normalize=normalize, stats=stats), self.assertRaisesRegex(ValueError, "掩码"):
+                    COMPOSED.normalize_composition(spec, norm_stats=stats)
+        spec = joint_composition()
+        spec["action_layout"][0]["normalize_mask"] = [True] * 6
+        with self.assertRaisesRegex(ValueError, "掩码"):
+            COMPOSED.normalize_composition(spec)
+
     def test_supplied_optional_declarations_are_still_validated(self):
         for key, invalid_values in {
             "position_unit": ("cm", " m ", False, 0, [], "m\x1f"),
@@ -314,12 +346,13 @@ class NumericTests(unittest.TestCase):
 
     def test_mixed_shared_values_do_not_shift_explicit_gripper_validation(self):
         spec = composition()
-        spec["action_layout"].insert(1, {"arm": "shared", "kind": "shared", "width": 4, "normalize": False})
+        spec["action_layout"].insert(1, {"arm": "shared", "kind": "shared", "width": 4,
+            "normalize": True, "normalize_mask": [True, False, False, True]})
         sample = self.sample(spec)
         sample["actions"][:, 3:7] = 200.0
         result = self.apply(spec, sample)
         np.testing.assert_array_equal(result["actions"], sample["actions"])
-        self.assertEqual(COMPOSED.normalization_masks(spec)["actions"][3:7], (False,) * 4)
+        self.assertEqual(COMPOSED.normalization_masks(spec)["actions"][3:7], (True, False, False, True))
         sample["actions"][:, -1] = 200.0
         with self.assertRaisesRegex(ValueError, "夹爪"):
             self.apply(spec, sample)
@@ -606,6 +639,39 @@ class BuilderTests(unittest.TestCase):
                         self.assertEqual(data.action_loss_mask, (1.0,) * 14 + (0.0,) * 18)
                         np.testing.assert_array_equal(sample["observation.state"], original_state)
                         np.testing.assert_array_equal(sample["actions"], original_actions)
+
+    def test_shared_action_dimension_mask_round_trips_after_model_padding(self):
+        namespace = {"np": np, "dataclasses": dataclasses, "partial": partial, "DataTransformFn": object}
+        actual_definitions(ROOT / "src/openpi/transforms.py",
+                           {"Normalize", "Unnormalize", "_assert_normalization_stats"}, namespace)
+        spec = composite_composition()
+        mask = [True, False] * 7
+        spec["action_layout"][0]["normalize_mask"] = mask
+        data = self.build(spec)
+        self.assertEqual(data.normalize_masks, {"state": (True,) * 14, "actions": tuple(mask)})
+        self.assertEqual(data.action_loss_mask, (1.0,) * 14 + (0.0,) * 18)
+        physical = np.arange(16 * 14, dtype=np.float64).reshape(16, 14) - 100
+        stats = types.SimpleNamespace(mean=np.arange(14) - 3, std=np.arange(14) + 1,
+                                      q01=np.arange(14) - 10, q99=np.arange(14) + 40,
+                                      min=np.arange(14) - 20, max=np.arange(14) + 80)
+        suffix = np.broadcast_to(np.arange(18), (16, 18))
+        for method in ("zscore", "quantile", "minmax"):
+            with self.subTest(method=method):
+                normalize = namespace["Normalize"](None, method=method)
+                unnormalize = namespace["Unnormalize"](None, method=method)
+                if method == "zscore":
+                    forward, inverse = normalize._normalize, unnormalize._unnormalize
+                    scaled = (physical - stats.mean) / (stats.std + 1e-6)
+                else:
+                    forward, inverse = normalize._normalize_quantile, unnormalize._unnormalize_quantile
+                    low, high = (stats.q01, stats.q99) if method == "quantile" else (stats.min, stats.max)
+                    scaled = (physical - low) / (high - low + 1e-6) * 2 - 1
+                normalized = forward(physical, stats, norm_mask=data.normalize_masks["actions"])
+                np.testing.assert_allclose(normalized, np.where(mask, scaled, physical))
+                padded = np.concatenate([normalized, suffix], axis=-1)
+                restored = inverse(padded, stats, norm_mask=data.normalize_masks["actions"])
+                np.testing.assert_allclose(restored[:, :14], physical, atol=1e-12)
+                np.testing.assert_array_equal(restored[:, 14:], suffix)
 
     def test_sample_hook_uses_training_data_pipeline_and_norm_without_importing_tokenizer(self):
         spec = composition();key = spec["cameras"][0]["key"]

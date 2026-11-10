@@ -334,6 +334,30 @@ def test_incompatible_layouts_fail_at_planning(config):
         automatic.planned_training_normalization(dataclasses.replace(config, data=data))
 
 
+def test_shared_compatibility_uses_effective_mask_but_measures_every_raw_dimension(config):
+    def with_masks(first_mask, second_mask):
+        children = []
+        for child, mask in zip(config.data.datasets, (first_mask, second_mask), strict=True):
+            spec = deepcopy(child.composition)
+            spec["action_layout"][0]["normalize_mask"] = mask
+            children.append(dataclasses.replace(child, composition=spec))
+        return dataclasses.replace(config, data=dataclasses.replace(config.data, datasets=children))
+
+    legacy = automatic.planned_training_normalization(config)
+    uniform = automatic.planned_training_normalization(with_masks([True, True], [True, True]))
+    assert legacy == uniform
+    with pytest.raises(ValueError, match="layouts, ordering"):
+        automatic.planned_training_normalization(with_masks([True, False], [False, True]))
+    mixed = with_masks([True, False], [True, False])
+    assert automatic.planned_training_normalization(mixed)["fingerprint"] != legacy["fingerprint"]
+    statistics = []
+    for value in (config, mixed):
+        ready = automatic.prepare_training_normalization(value)
+        document = json.loads(Path(ready.data.shared_norm_stats_path).read_text())
+        statistics.append(document["norm_stats"])
+    assert statistics[0] == statistics[1]
+
+
 def test_training_entrypoint_prepares_statistics_before_the_first_device_operation(config, monkeypatch):
     tree = ast.parse((ROOT / 'scripts/train_multi_dataset.py').read_text())
     main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
