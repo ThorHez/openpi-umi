@@ -73,11 +73,19 @@ def preprocess_observation_pytorch(
             image = image_tools.resize_with_pad_torch(image, *image_resolution)
 
         if train and key not in depth_keys:
+            unaugmented_image = image
+            policies = getattr(observation, "image_augmentation", None)
+            codes = None
+            if policies is not None and key in policies:
+                codes = torch.as_tensor(policies[key], device=image.device)
+                if codes.shape != batch_shape or codes.dtype not in (torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8):
+                    raise ValueError(f"Augmentation codes for {key} must be integers with shape {batch_shape}")
             # Convert from [-1, 1] to [0, 1] for PyTorch augmentations
             image = image / 2.0 + 0.5
+            color_only_image = image
 
             # Apply PyTorch-based augmentations
-            if "wrist" not in key:
+            if "wrist" not in key or codes is not None:
                 # Geometric augmentations for non-wrist cameras
                 height, width = image.shape[1:3]
 
@@ -139,6 +147,10 @@ def preprocess_observation_pytorch(
                         align_corners=False,
                     ).permute(0, 2, 3, 1)  # [b, c, h, w] -> [b, h, w, c]
 
+            if codes is not None:
+                geometric = (codes == 3) | ((codes == 0) & ("wrist" not in key))
+                image = torch.where(geometric.reshape(-1, 1, 1, 1), image, color_only_image)
+
             # Color augmentations for all cameras
             # Random brightness
             # Use tensor operations instead of .item() for torch.compile compatibility
@@ -163,6 +175,8 @@ def preprocess_observation_pytorch(
 
             # Back to [-1, 1]
             image = image * 2.0 - 1.0
+            if codes is not None:
+                image = torch.where((codes == 1).reshape(-1, 1, 1, 1), unaugmented_image, image)
 
         # Keep actual and synthesized views in the same backbone input layout.
         out_images[key] = image.permute(0, 3, 1, 2)
@@ -202,4 +216,5 @@ def preprocess_observation_pytorch(
         frame_valid_masks=getattr(observation, "frame_valid_masks", None),
         semantic_memory=getattr(observation, "semantic_memory", None),
         action_loss_mask=getattr(observation, "action_loss_mask", None),
+        image_augmentation=getattr(observation, "image_augmentation", None),
     )

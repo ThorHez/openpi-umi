@@ -140,6 +140,12 @@ def _processor(factory, *, compatibility=False):
         omitted = {"normalization"}
         if compatibility:
             omitted.update({"cameras", "prompt_key"})
+        elif isinstance(composition.get("cameras"), list):
+            # Training augmentation never changes the raw state/action sample.
+            # Keep the other camera declarations in full source provenance.
+            for camera in composition["cameras"]:
+                if isinstance(camera, dict):
+                    camera.pop("augmentation", None)
         value["fields"]["composition"] = {
             key: item for key, item in composition.items() if key not in omitted
         }
@@ -281,12 +287,16 @@ def validate_shared_metadata(document, factories, weights):
         raise _error("shared normalization document must be an object")
     _validate_statistics(document)
     metadata = document.get("shared_normalization")
+    version = metadata.get("schema_version") if isinstance(metadata, dict) else None
+    if type(version) is not int or version not in (1, 2):
+        raise _error("missing or unsupported weighted raw-sample shared_normalization provenance; recompute statistics")
     required = {
-        "schema_version": 1, "method": "weighted_raw_samples", "weight_semantics": "per_sample_repeat",
+        "schema_version": version, "method": "weighted_raw_samples", "weight_semantics": "per_sample_repeat",
         "coverage": "full", "quantile_method": "weighted_histogram", "quantile_bins": 5000,
     }
-    if (not isinstance(metadata, dict) or set(metadata) != {*required, "sources"}
-            or type(metadata.get("schema_version")) is not int
+    if version == 2:
+        required["action_statistics"] = "single_step"
+    if (set(metadata) != {*required, "sources"}
             or type(metadata.get("quantile_bins")) is not int
             or any(metadata.get(key) != value for key, value in required.items())):
         raise _error("missing or unsupported weighted raw-sample shared_normalization provenance; recompute statistics")
@@ -304,6 +314,8 @@ def validate_shared_metadata(document, factories, weights):
         if (saved["rows"] != info["total_frames"] or saved["state_vectors"] < saved["rows"]
                 or saved["action_vectors"] < saved["rows"]):
             raise _error("shared normalization does not cover every source row; recompute statistics")
+        if version == 2 and saved["action_vectors"] != saved["rows"]:
+            raise _error("single-step normalization must count exactly one action vector per source row")
     return metadata
 
 

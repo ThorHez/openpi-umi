@@ -94,7 +94,7 @@ def _unspecified(value):
 
 
 def normalize_composition(value, *, norm_stats=False):
-    """Validate v1 inputs and return every canonical key, including optional declarations."""
+    """Validate v1 inputs and preserve explicit per-camera augmentation choices."""
     value = _object(value, _FIELDS, "组合数据处理", optional=_OPTIONAL_FIELDS)
     if type(value["schema_version"]) is not int or value["schema_version"] != SCHEMA_VERSION:
         _fail("不支持的组合数据处理版本")
@@ -201,7 +201,8 @@ def normalize_composition(value, *, norm_stats=False):
         _fail("组合处理支持 1 到 3 路明确的视觉输入")
     result["cameras"] = []
     for camera in cameras:
-        camera = _object(camera, {"key", "slot", "kind", "layout", "time_index", "depth_min", "depth_max"}, "视觉输入")
+        camera = _object(camera, {"key", "slot", "kind", "layout", "time_index", "depth_min", "depth_max", "augmentation"},
+                         "视觉输入", optional={"augmentation"})
         index = camera["time_index"]
         if index is not None:
             index = _integer(index, -64, 63, "显式图像时间索引")
@@ -212,6 +213,11 @@ def normalize_composition(value, *, norm_stats=False):
                  "depth_max": _number(camera["depth_max"], "深度最大值")}
         if clean["depth_min"] >= clean["depth_max"]:
             _fail("深度最小值必须小于最大值")
+        if "augmentation" in camera:
+            choices = {"default", "none"}
+            if clean["kind"] == "rgb":
+                choices.update({"color", "crop_rotate_color"})
+            clean["augmentation"] = _enum(camera["augmentation"], choices, "视觉增强")
         result["cameras"].append(clean)
     if len({camera["key"] for camera in result["cameras"]}) != len(result["cameras"]):
         _fail("视觉源字段不能重复")

@@ -1,4 +1,4 @@
-"""Real Parquet projection and temporal semantics without model dependencies."""
+"""Real Parquet projection of single-step statistics without model dependencies."""
 from copy import deepcopy
 import importlib
 import json
@@ -38,9 +38,6 @@ def dataset(tmp_path, *, packed=False, history=1):
         "actions": pa.array(actions.tolist(), type=pa.list_(pa.list_(pa.float32(), 2), 3) if packed else pa.list_(pa.float32(), 2)),
         "observation.images.invalid": pa.array([{"bytes": b"NOT_AN_IMAGE", "path": "missing.jpg"}] * 5),
         "unused_numeric": pa.array([90.] * 5)}
-    if not packed:
-        columns.update(episode_index=pa.array([0, 0, 0, 1, 1]), frame_index=pa.array([0, 1, 2, 0, 1]),
-                       timestamp=pa.array([0., .1, .2, 0., .1]))
     table = pa.table(columns)
     pq.write_table(table.slice(0, 3), root / "data/chunk-000/episode_000.parquet", row_group_size=2)
     pq.write_table(table.slice(3), root / "data/chunk-000/episode_001.parquet", row_group_size=1)
@@ -57,21 +54,12 @@ def dataset(tmp_path, *, packed=False, history=1):
 @pytest.mark.parametrize("packed", [False, True])
 def test_source_projection_never_reads_embedded_images_or_missing_videos(tmp_path, monkeypatch, packed):
     config, states, actions = dataset(tmp_path, packed=packed, history=2)
-    read = pq.ParquetFile.read_row_group
     batches = pq.ParquetFile.iter_batches
     projections = []
 
-    def projected(self, index, columns=None, **kwargs):
-        projections.append(list(columns))
-        assert columns is not None and set(columns) <= set(config.columns)
-        assert not any("image" in column or "unused" in column for column in columns)
-        return read(self, index, columns=columns, **kwargs)
-
-    monkeypatch.setattr(pq.ParquetFile, "read_row_group", projected)
     def projected_batches(self, *args, columns=None, **kwargs):
         projections.append(list(columns))
-        assert columns is not None and set(columns) <= set(config.columns)
-        assert not any("image" in column or "unused" in column for column in columns)
+        assert columns == ["observation.state", "actions"]
         return batches(self, *args, columns=columns, **kwargs)
     monkeypatch.setattr(pq.ParquetFile, "iter_batches", projected_batches)
     scan = Path.rglob
@@ -86,30 +74,37 @@ def test_source_projection_never_reads_embedded_images_or_missing_videos(tmp_pat
     for index in range(5):
         result = source[index]
         np.testing.assert_array_equal(result["state"], states[index])
-        expected = actions[index] if packed else actions[[min(index + step, 2 if index < 3 else 4) for step in range(3)]]
+        expected = actions[index, 0] if packed else actions[index]
         np.testing.assert_array_equal(result["actions"], expected)
         assert result["state"].dtype == np.float32 and result["actions"].dtype == np.float32
         assert set(result) == {"state", "actions"}
     assert projections and source._cache_bytes <= numeric.MAX_NUMERIC_CACHE_BYTES
     assert len(source._streams) <= 2 and len(source._cache) <= 256
-    assert numeric.numeric_io_evidence(config)["columns"] == config.columns
-    assert numeric.numeric_io_evidence(config)["video_decode"] is False
+    evidence = numeric.numeric_io_evidence(config)
+    assert evidence["columns"] == ["observation.state", "actions"]
+    assert evidence["schema_version"] == 2
+    assert evidence["action_sequence"] == ("packed_first_step" if packed else "per_frame")
+    assert evidence["temporal_columns"] == []
+    assert evidence["video_decode"] is False
 
 
-def test_action_horizon_clamps_each_episode_without_repacking_already_packed_actions(tmp_path):
+def test_per_frame_statistics_read_one_action_per_row_regardless_of_training_horizon(tmp_path):
     config, _, actions = dataset(tmp_path)
-    source = numeric.NumericParquetDataset(config)
-    np.testing.assert_array_equal(source[1]["actions"], actions[[1, 2, 2]])
-    np.testing.assert_array_equal(source[2]["actions"], actions[[2, 2, 2]])
-    np.testing.assert_array_equal(source[3]["actions"], actions[[3, 4, 4]])
-    np.testing.assert_array_equal(source[4]["actions"], actions[[4, 4, 4]])
+    for horizon in (1, 50):
+        source = numeric.NumericParquetDataset(numeric.dataclasses.replace(config, action_horizon=horizon))
+        batches = list(source.iter_batches(2))
+        np.testing.assert_array_equal(np.concatenate([batch["actions"] for batch in batches]), actions)
 
 
-def test_registered_fps_must_match_real_timestamps_without_resampling(tmp_path):
-    config, _, _ = dataset(tmp_path)
-    config = numeric.dataclasses.replace(config, effective_fps=20.)
-    with pytest.raises(ValueError, match="FPS"):
-        numeric.NumericParquetDataset(config)
+def test_stored_action_chunk_must_still_match_training_horizon(tmp_path):
+    config, _, _ = dataset(tmp_path, packed=True)
+    factory = type("ComposableDataConfig", (), {})()
+    factory.repo_id = config.repo_id
+    factory.composition = config.composition
+    with pytest.raises(ValueError, match="匹配预测长度"):
+        numeric.build_numeric_statistics_config(
+            factory, SimpleNamespace(action_horizon=50, action_dim=32), validate_model=False,
+        )
 
 
 def test_invalid_source_numeric_selection_rejected_before_any_parquet_payload_read(tmp_path, monkeypatch):
@@ -161,5 +156,5 @@ def test_explicit_composite_numeric_config_preserves_raw_state_and_actions_witho
     source = numeric.NumericParquetDataset(config)
     for index in range(len(source)):
         np.testing.assert_array_equal(source[index]["state"], states[index])
-        expected = actions[index] if packed else actions[[min(index + step, 2 if index < 3 else 4) for step in range(3)]]
+        expected = actions[index, 0] if packed else actions[index]
         np.testing.assert_array_equal(source[index]["actions"], expected)

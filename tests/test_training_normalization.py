@@ -2,13 +2,15 @@
 from copy import deepcopy
 import ast
 import dataclasses
+import hashlib
+import importlib.util
 import json
 import logging
 import os
 from pathlib import Path
 import subprocess
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pyarrow as pa
@@ -19,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from openpi.training import training_normalization as automatic
 from openpi.training import numeric_stats
-from openpi.training.shared_norm import load_shared_norm_document
+from openpi.training.shared_norm import load_shared_norm_document, validate_shared_metadata
 
 
 def composition():
@@ -71,7 +73,7 @@ def source(root, values, *, packed=False, metadata_fps=10.):
     (root / "meta").mkdir(parents=True)
     (root / "data").mkdir()
     raw = np.asarray([[value, value + 1] for value in values], dtype=np.float32)
-    actions = np.repeat(raw[:, None], 3, axis=1) if packed else raw
+    actions = raw[:, None] + np.arange(3, dtype=raw.dtype)[None, :, None] * 1000 if packed else raw
     table = pa.table({"observation.state": pa.array(raw.tolist(), type=pa.list_(pa.float32(), 2)),
         "action": pa.array(actions.tolist(), type=pa.list_(pa.list_(pa.float32(), 2), 3) if packed else pa.list_(pa.float32(), 2)),
         "observation.images.invalid": pa.array([{"bytes": b"BROKEN_IMAGE"}] * len(raw)),
@@ -107,6 +109,8 @@ def test_planning_does_not_import_backends_scan_payloads_or_publish(config, monk
     assert plan["mode"] == "auto_shared" and plan["action_horizon"] == 3
     assert plan["effective_fps"] == [10., 10.]
     assert all(row["video_decode"] is False for row in plan["numeric_io"])
+    reader = ROOT / 'src/openpi/training/numeric_stats.py'
+    assert plan['implementation']['training/numeric_stats.py'] == hashlib.sha256(reader.read_bytes()).hexdigest()
     assert {name for name in sys.modules if name.split('.')[0] in {'torch', 'jax'}} == before
     assert not config.checkpoint_dir.parent.exists()
     result = subprocess.run([sys.executable, '-c',
@@ -116,13 +120,13 @@ def test_planning_does_not_import_backends_scan_payloads_or_publish(config, monk
 
 
 def test_real_weighted_shared_statistic_is_generated_before_padding_and_reused(config, monkeypatch):
-    read = pq.ParquetFile.read_row_group
+    read = pq.ParquetFile.iter_batches
     projections = []
-    def projected(self, index, columns=None, **kwargs):
-        assert columns is not None and not any('image' in column for column in columns)
+    def projected(self, *args, columns=None, **kwargs):
+        assert columns == ['observation.state', 'action']
         projections.append(columns)
-        return read(self, index, columns=columns, **kwargs)
-    monkeypatch.setattr(pq.ParquetFile, 'read_row_group', projected)
+        return read(self, *args, columns=columns, **kwargs)
+    monkeypatch.setattr(pq.ParquetFile, 'iter_batches', projected)
     before = [(Path(child.assets.assets_dir) / 'norm_stats.json').read_bytes() for child in config.data.datasets]
     plan = automatic.planned_training_normalization(config)
     updated = automatic.prepare_training_normalization(config)
@@ -133,15 +137,17 @@ def test_real_weighted_shared_statistic_is_generated_before_padding_and_reused(c
     expected_state = np.concatenate([np.array([[0., 1.], [2., 3.]]), np.repeat(
         np.array([[100., 101.], [102., 103.], [104., 105.]]), 2, axis=0)])
     np.testing.assert_allclose(document['norm_stats']['state']['mean'], expected_state.mean(axis=0))
-    assert len(document['norm_stats']['actions']['mean']) == 2
+    np.testing.assert_allclose(document['norm_stats']['actions']['mean'], expected_state.mean(axis=0))
+    assert document['shared_normalization']['action_statistics'] == 'single_step'
     assert [row['rows'] for row in document['shared_normalization']['sources']] == [2, 3]
-    assert [row['action_vectors'] for row in document['shared_normalization']['sources']] == [6, 9]
+    assert [row['action_vectors'] for row in document['shared_normalization']['sources']] == [2, 3]
     assert document['training_normalization']['fingerprint'] == plan['fingerprint']
     receipt = config.checkpoint_dir.parent / 'experiment-normalization.json'
     receipt_doc = json.loads(receipt.read_text())
     assert receipt_doc['norm_path'] == plan['output_path'] and receipt_doc['checkpoint_asset_id'] == 'shared'
     assert receipt_doc['statistics_widths'] == {'state': 2, 'actions': 2}
     assert receipt_doc['normalization_method'] == 'quantile'
+    assert receipt_doc['shared_normalization']['action_statistics'] == 'single_step'
     assert projections
     monkeypatch.setattr(automatic, 'NumericStatisticsLoader', lambda *args: pytest.fail('Complete matching statistic should be reused'))
     assert automatic.prepare_training_normalization(config).data.shared_norm_stats_path == plan['output_path']
@@ -181,15 +187,80 @@ def test_formula_can_reuse_statistics_but_not_change_a_resumed_model(config):
         automatic.prepare_training_normalization(dataclasses.replace(config, resume=True))
 
 
-def test_packed_action_horizon_is_preserved_and_not_chunked_twice(tmp_path):
+def test_camera_augmentation_keeps_the_raw_numeric_statistics_fingerprint(config):
+    camera = {"key": "observation.images.invalid", "slot": "base_0_rgb", "kind": "rgb", "layout": "chw",
+              "time_index": None, "depth_min": 0., "depth_max": 1.}
+
+    def with_camera(value):
+        children = [dataclasses.replace(child, composition={**child.composition, "cameras": [value]})
+                    for child in config.data.datasets]
+        return dataclasses.replace(config, data=dataclasses.replace(config.data, datasets=children))
+
+    legacy = automatic.planned_training_normalization(with_camera(camera))
+    for augmentation in ("default", "none", "color", "crop_rotate_color"):
+        selected = {**camera, "augmentation": augmentation}
+        plan = automatic.planned_training_normalization(with_camera(selected))
+        assert plan["fingerprint"] == legacy["fingerprint"]
+        assert selected["augmentation"] == augmentation
+    changed_layout = automatic.planned_training_normalization(with_camera({**camera, "layout": "hwc"}))
+    assert changed_layout["fingerprint"] != legacy["fingerprint"]
+
+
+def test_packed_action_statistics_only_count_the_first_step(tmp_path):
     first, _ = source(tmp_path / 'one', [0, 2], packed=True)
     second, _ = source(tmp_path / 'two', [10, 12, 14], packed=True)
     config = Config(Multi([first, second], [1., 2.]), tmp_path / 'output/checkpoints/run',
         tmp_path / 'defaults', SimpleNamespace(action_horizon=3, action_dim=32))
     updated = automatic.prepare_training_normalization(config)
     document = json.loads(Path(updated.data.shared_norm_stats_path).read_text())
-    assert [row['action_vectors'] for row in document['shared_normalization']['sources']] == [6, 9]
-    assert len(document['norm_stats']['actions']['q01']) == 2
+    assert [row['action_vectors'] for row in document['shared_normalization']['sources']] == [2, 3]
+    np.testing.assert_allclose(document['norm_stats']['actions']['mean'], [9.25, 10.25])
+
+
+def test_legacy_shared_statistics_are_readable_but_new_records_require_one_action_per_row(config):
+    ready = automatic.prepare_training_normalization(config)
+    path = Path(ready.data.shared_norm_stats_path)
+    document = json.loads(path.read_text())
+    metadata = document['shared_normalization']
+    metadata['sources'][0]['action_vectors'] *= config.model.action_horizon
+    with pytest.raises(ValueError, match='exactly one action vector'):
+        validate_shared_metadata(document, config.data.datasets, config.data.weights)
+    metadata['schema_version'] = 1
+    metadata.pop('action_statistics')
+    path.write_text(json.dumps(document))
+    assert load_shared_norm_document(path, config.data.datasets, config.data.weights) == document
+    with pytest.raises(ValueError, match='conflicting execution context'):
+        automatic.prepare_training_normalization(config)
+
+
+@pytest.mark.parametrize('packed', [False, True])
+def test_platform_numeric_only_entrypoint_counts_one_action_per_row(tmp_path, monkeypatch, packed):
+    pytest.importorskip('torch')
+    child, raw = source(tmp_path / 'dataset', [0, 2, 10], packed=packed)
+    config = Config(child, tmp_path / 'checkpoints', tmp_path / 'defaults',
+        SimpleNamespace(action_horizon=3, action_dim=32))
+    config_module = ModuleType('openpi.training.config')
+    config_module.MultiDataConfigFactory = Multi
+    config_module.get_config = lambda _name: config
+    monkeypatch.setitem(sys.modules, config_module.__name__, config_module)
+    # The model implementation is irrelevant to this CPU-only script fixture.
+    monkeypatch.setattr(numeric_stats, 'composition_runtime_contract', lambda *_args, **_kwargs: None)
+    from openpi.shared import runtime_paths
+
+    monkeypatch.setattr(runtime_paths, 'configure_training_cache', lambda: None)
+    entry = ROOT / 'scripts/compute_norm_stats.py'
+    spec = importlib.util.spec_from_file_location('single_step_norm_script', entry)
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    builder = tmp_path / 'training_config.py'
+    builder.write_text('from openpi.training.config import get_config\n'
+        'def build_config(output_dir):\n    return get_config("fixture")\n')
+    output = tmp_path / 'norm-output'
+    script.main(config_file=str(builder), output_dir=str(output), numeric_only=True)
+    document = json.loads((output / 'norm_stats.json').read_text())
+    assert document['action_statistics'] == 'single_step'
+    np.testing.assert_allclose(document['norm_stats']['actions']['mean'], raw.mean(axis=0))
+    np.testing.assert_allclose(document['norm_stats']['actions']['max'], raw.max(axis=0))
 
 
 def test_single_dataset_and_explicit_legacy_modes_are_unchanged(config):
@@ -217,12 +288,13 @@ def test_conflicting_existing_artifact_is_rejected_without_overwrite(config):
     assert path.read_bytes() == before
 
 
-def test_bad_timestamps_fail_before_a_statistic_is_published(config):
+def test_effective_fps_does_not_change_single_step_statistics(config):
+    first = automatic.prepare_training_normalization(config)
     object.__setattr__(config.data.datasets[0], '_norm_effective_fps', 20.)
-    plan = automatic.planned_training_normalization(config)
-    with pytest.raises(ValueError, match='FPS'):
-        automatic.prepare_training_normalization(config)
-    assert not Path(plan['output_path']).exists()
+    second = automatic.prepare_training_normalization(config)
+    assert first.data.shared_norm_stats_path != second.data.shared_norm_stats_path
+    documents = [json.loads(Path(ready.data.shared_norm_stats_path).read_text()) for ready in (first, second)]
+    assert documents[0]['norm_stats'] == documents[1]['norm_stats']
 
 
 def test_changed_execution_context_cannot_reuse_an_already_bound_runtime_config(config):
@@ -317,10 +389,12 @@ def test_reused_statistics_emit_matching_path_hash_formula_and_elapsed_without_s
     assert '开始完整两遍统计' not in output
 
 
-def test_failed_statistics_log_failure_and_never_announce_or_publish_partial_output(config,capsys):
-    object.__setattr__(config.data.datasets[0],'_norm_effective_fps',20.)
+def test_failed_statistics_log_failure_and_never_announce_or_publish_partial_output(config,capsys,monkeypatch):
     destination=Path(automatic.planned_training_normalization(config)['output_path'])
-    with pytest.raises(ValueError,match='FPS'):
+    def read_failed(*_args, **_kwargs):
+        raise OSError('Unreadable parquet')
+    monkeypatch.setattr(pq, 'ParquetFile', read_failed)
+    with pytest.raises(OSError,match='Unreadable parquet'):
         automatic.prepare_training_normalization(config)
     output=capsys.readouterr().out
     assert '正在校验' in output and '统计准备失败，训练尚未启动' in output
@@ -336,7 +410,7 @@ def test_statistics_loader_rejects_invalid_worker_counts_before_loading(config,w
         automatic.NumericStatisticsLoader([],2,workers)
 
 
-def test_ordered_loader_h50_parallel_matches_inline_and_preserves_every_tail_row(config):
+def test_ordered_loader_single_step_parallel_matches_inline_and_preserves_every_tail_row(config):
     pytest.importorskip('torch')
     from openpi.shared.weighted_stats import compute_weighted_statistics
     numeric=[numeric_stats.build_numeric_statistics_config(child,
@@ -353,7 +427,7 @@ def test_ordered_loader_h50_parallel_matches_inline_and_preserves_every_tail_row
                 return batches
             result,counts=compute_weighted_statistics([factory(index) for index in range(2)],[1.,2.])
         assert loader.closed
-        assert observed==[(0,2,(2,50,2)),(1,2,(2,50,2)),(1,1,(1,50,2))]*2
+        assert observed==[(0,2,(2,2)),(1,2,(2,2)),(1,1,(1,2))]*2
         assert [entry['rows'] for entry in counts]==[2,3]
         actual.append((result,counts))
     assert actual[0][1]==actual[1][1]

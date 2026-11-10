@@ -330,7 +330,7 @@ def prepare_training_normalization(config):
         and (getattr(config.data,'auto_shared_norm',False) or getattr(config.data,'use_merged_norm_stats',False)))
     started=time.monotonic()
     if enabled:
-        _norm_log('正在校验数据源、处理配置、时间索引、混采权重及共享统计来源……')
+        _norm_log('正在校验数据源、处理配置、混采权重及共享统计来源……')
     try:
         return _prepare_training_normalization(config,started)
     except Exception:
@@ -351,8 +351,9 @@ def _prepare_training_normalization(config,started):
         if getattr(factory, "auto_shared_norm", False) and "training_normalization" in document:
             automatic = planned_training_normalization(dataclasses.replace(config,
                 data=dataclasses.replace(factory, shared_norm_stats_path=None)))
-            if document["training_normalization"] != {"schema_version": 1, "fingerprint": automatic["fingerprint"]}:
-                raise ValueError("SHARED_NORM_INVALID: automatic statistics do not match the current horizon, FPS or execution context")
+            if (document["training_normalization"] != {"schema_version": 1, "fingerprint": automatic["fingerprint"]}
+                    or document["shared_normalization"]["schema_version"] != 2):
+                raise ValueError("SHARED_NORM_INVALID: automatic statistics do not match the current single-step sampling or execution context")
         _write_receipt(config, path, document)
         _ready_log(config,path,started,reused=True)
         return config
@@ -372,7 +373,8 @@ def _prepare_training_normalization(config,started):
     reused=path.is_file()
     if reused:
         document = load_shared_norm_document(path, factory.datasets, weights)
-        if document.get("training_normalization") != {"schema_version": 1, "fingerprint": plan["fingerprint"]}:
+        if (document.get("training_normalization") != {"schema_version": 1, "fingerprint": plan["fingerprint"]}
+                or document["shared_normalization"]["schema_version"] != 2):
             raise ValueError("SHARED_NORM_INVALID: existing automatic statistics have a conflicting execution context")
         _norm_log('数据、处理方式与权重匹配，复用已完整计算的统计，不重复扫描原始样本。')
     else:
@@ -385,7 +387,7 @@ def _prepare_training_normalization(config,started):
             effective_fps=getattr(child, "_norm_effective_fps", None), validate_model=False) for child in factory.datasets]
         workers=getattr(config,'num_workers',0)
         progress=_StatisticsProgress(numeric,workers,started=started)
-        _norm_log(f'开始完整两遍统计：{len(numeric)} 个数据集，共 {sum(item.total_frames for item in numeric):,} 行，workers={workers}；只读取数值字段，不解码图像。')
+        _norm_log(f'开始完整两遍统计：{len(numeric)} 个数据集，共 {sum(item.total_frames for item in numeric):,} 行，workers={workers}；每行统计一个动作向量，只读取数值字段。')
         with NumericStatisticsLoader(numeric,batch_size,workers) as loader:
             values, coverage = compute_weighted_statistics(
                 [lambda index=index: loader.source_batches(index) for index in range(len(numeric))],weights,
@@ -394,7 +396,8 @@ def _prepare_training_normalization(config,started):
             raise ValueError("SHARED_NORM_INVALID: data or numeric processing changed during automatic statistics")
         document = {"norm_stats": {key: {**{name: array.tolist() for name, array in stats.items()},
             "quantile_method": "q01_q99"} for key, stats in values.items()}, "shared_normalization": {
-                "schema_version": 1, "method": "weighted_raw_samples", "weight_semantics": "per_sample_repeat",
+                "schema_version": 2, "method": "weighted_raw_samples", "weight_semantics": "per_sample_repeat",
+                "action_statistics": "single_step",
                 "coverage": "full", "sources": [{**source, **count} for source, count in
                     zip(plan["sources"], coverage, strict=True)],
                 "quantile_method": "weighted_histogram", "quantile_bins": 5000},

@@ -923,6 +923,7 @@ MODEL_KEYS = frozenset({
     "semantic_memory",
     "image",
     "image_mask",
+    "image_augmentation",
     "tokenized_prompt",
     "tokenized_prompt_mask",
     "token_ar_mask",

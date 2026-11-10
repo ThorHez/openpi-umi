@@ -1,8 +1,8 @@
 """Statistics-only Parquet projection; never construct a LeRobot/image loader.
 
-Only explicitly declared numeric state/action leaves and, for per-frame actions,
-three scalar temporal indices are read. Packed action chunks and state history
-retain their stored axes; per-frame actions clamp at each episode's last row.
+Only explicitly declared numeric state/action fields are read. Each row
+contributes one action vector, using the first step of a stored action chunk.
+State history retains its stored axes.
 """
 from __future__ import annotations
 
@@ -40,11 +40,7 @@ class NumericStatisticsConfig:
     @property
     def columns(self):
         return list(dict.fromkeys([field["key"] for field in self.composition["state_fields"]]
-                    + [self.composition["action_key"]] + self.temporal_columns))
-
-    @property
-    def temporal_columns(self):
-        return [] if self.packed_actions else ["episode_index", "frame_index", "timestamp"]
+                    + [self.composition["action_key"]]))
 
 
 def build_numeric_statistics_config(factory, model_config, *, effective_fps=None, validate_model=True):
@@ -91,10 +87,10 @@ def build_numeric_statistics_config(factory, model_config, *, effective_fps=None
 
 def numeric_io_evidence(config):
     source = Path(__file__)
-    return {"schema_version": 1, "reader": "pyarrow_parquet_projection", "columns": config.columns,
+    return {"schema_version": 2, "reader": "pyarrow_parquet_projection", "columns": config.columns,
         "state_columns": [field["key"] for field in config.composition["state_fields"]],
-        "action_column": config.composition["action_key"], "temporal_columns": config.temporal_columns,
-        "action_sequence": "packed" if config.packed_actions else "episode_clamp",
+        "action_column": config.composition["action_key"], "temporal_columns": [],
+        "action_sequence": "packed_first_step" if config.packed_actions else "per_frame",
         "image_columns": [], "video_decode": False,
         "source": {"path": "src/openpi/training/numeric_stats.py", "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}}
 
@@ -142,15 +138,19 @@ class NumericParquetDataset:
                 parquet.close()
         if self._size != config.total_frames:
             _fail("Parquet 行数与登记 total_frames 不一致，不能遗漏数据")
-        self._episode_end = self._temporal_indices() if not config.packed_actions else None
         import numpy as np
-        self._numeric_columns = list(dict.fromkeys([row["key"] for row in config.composition["state_fields"]]
-            + [config.composition["action_key"]]))
+        self._numeric_columns = config.columns
         self._shapes = {row["key"]: (config.composition["state_history"], row["width"])
                        for row in config.composition["state_fields"]}
         width = sum(row["width"] for row in config.composition["action_layout"])
-        self._shapes[config.composition["action_key"]] = ((config.action_horizon, width) if config.packed_actions else (width,))
-        row_bytes = sum(int(np.prod(self._shapes[key])) * np.dtype(self._dtypes[key]).itemsize for key in self._numeric_columns)
+        action_key = config.composition["action_key"]
+        self._shapes[action_key] = (width,)
+        self._stored_action_shape = (config.action_horizon, width) if config.packed_actions else (width,)
+        row_bytes = sum(
+            int(np.prod(self._stored_action_shape if key == action_key else self._shapes[key]))
+            * np.dtype(self._dtypes[key]).itemsize
+            for key in self._numeric_columns
+        )
         if row_bytes > MAX_NUMERIC_CHUNK_BYTES:
             _fail("单行数值字段超过受限内存大小，请检查字段形状")
         self._chunk_rows = max(1, min(4096, MAX_NUMERIC_CHUNK_BYTES // max(1, row_bytes)))
@@ -166,56 +166,18 @@ class NumericParquetDataset:
             stream["parquet"].close()
         self._streams.clear()
 
-    def _read_group(self, index, columns):
-        import pyarrow.parquet as pq
-        path, group, _ = self._groups[index]
-        parquet = pq.ParquetFile(path)
-        try:
-            table = parquet.read_row_group(group, columns=list(columns), use_threads=False)
-        finally:
-            parquet.close()
-        if set(table.column_names) != set(columns) or len(table.column_names) != len(columns):
-            _fail("Parquet 投影未严格返回声明的数值列")
-        return table.select(list(columns))
-
-    def _temporal_indices(self):
-        import numpy as np
-        episodes, frames, timestamps = [], [], []
-        for index in range(len(self._groups)):
-            table = self._read_group(index, self.config.temporal_columns)
-            episodes.extend(table["episode_index"].to_pylist())
-            frames.extend(table["frame_index"].to_pylist())
-            timestamps.extend(table["timestamp"].to_pylist())
-        end = np.empty(self._size, dtype=np.int64)
-        start, seen = 0, set()
-        for index in range(self._size):
-            episode, frame, timestamp = episodes[index], frames[index], timestamps[index]
-            if type(episode) is not int or episode < 0 or type(frame) is not int or frame < 0 or type(timestamp) not in (int, float) or not math.isfinite(timestamp):
-                _fail("动作采样需要有效的 episode_index/frame_index/timestamp 数值")
-            if index == 0 or episode != episodes[index - 1]:
-                if episode in seen:
-                    _fail("同一 episode 的行必须在原始索引中连续，不能猜测或重排")
-                if frame != 0:
-                    _fail("episode 的逐帧索引必须从 0 开始")
-                if index:
-                    end[start:index] = index - 1
-                seen.add(episode); start = index
-            elif frame != frames[index - 1] + 1 or not math.isclose(timestamp - timestamps[index - 1], 1 / self.config.effective_fps, rel_tol=0, abs_tol=1e-4):
-                _fail("逐帧动作索引或时间戳与生效 FPS 不一致，不自动重采样")
-        end[start:] = self._size - 1
-        return end
-
     def _decode_chunk(self, batch):
         import numpy as np
         arrays = {}
         rows = batch.num_rows
+        action_key = self.config.composition["action_key"]
         for key in self._numeric_columns:
             try:
                 value = np.asarray(batch.column(batch.schema.get_field_index(key)).to_pylist(), dtype=self._dtypes[key])
             except (TypeError, ValueError, OverflowError) as exc:
                 _fail("数值字段形状与声明不一致：" + key + ": " + str(exc)[:200])
-            shape = self._shapes[key]
-            if (key != self.config.composition["action_key"] and shape[0] == 1
+            shape = self._stored_action_shape if key == action_key else self._shapes[key]
+            if (key != action_key and shape[0] == 1
                     and value.shape == (rows, shape[1])):
                 value = value[:, None, :]
             if value.shape != (rows, *shape) or value.dtype.kind not in "iuf" or not np.isfinite(value).all():
@@ -224,12 +186,14 @@ class NumericParquetDataset:
         for field in self.config.composition["state_fields"]:
             if field["kind"] == "gripper":
                 self._check_gripper(arrays[field["key"]])
-        actions = arrays[self.config.composition["action_key"]]
+        actions = arrays[action_key]
         start = 0
         for block in self.config.composition["action_layout"]:
             if block["kind"] == "gripper":
                 self._check_gripper(actions[..., start:start + block["width"]])
             start += block["width"]
+        if self.config.packed_actions:
+            arrays[action_key] = actions[:, 0, :].copy()
         return arrays
 
     def _chunk(self, group, offset):
@@ -304,27 +268,22 @@ class NumericParquetDataset:
             yield self.get_batch(range(start, min(start + batch_size, len(self))))
 
     def get_batch(self, indices):
-        """Gather one ordered batch; no per-row Arrow scalar or H-step loop."""
+        """Gather one ordered batch of state histories and single-step actions."""
         import numpy as np
         values = list(indices)
         if not values or any(isinstance(index, (bool, np.bool_)) or not isinstance(index, (int, np.integer))
                              or not 0 <= index < self._size for index in values):
             raise IndexError("Numeric batch indices must be nonempty valid integer rows")
         indices = np.asarray(values, dtype=np.int64)
-        config, spec = self.config, self.config.composition
-        width = sum(block["width"] for block in spec["action_layout"])
+        spec = self.config.composition
+        action_key = spec["action_key"]
         state_size = sum(int(np.prod(self._shapes[field["key"]])) * np.dtype(self._dtypes[field["key"]]).itemsize
                          for field in spec["state_fields"])
-        action_size = config.action_horizon * width * np.dtype(self._dtypes[spec["action_key"]]).itemsize
-        if len(indices) * (state_size + action_size + config.action_horizon * 8) > MAX_NUMERIC_BATCH_BYTES:
+        action_size = self._shapes[action_key][0] * np.dtype(self._dtypes[action_key]).itemsize
+        if len(indices) * (state_size + action_size) > MAX_NUMERIC_BATCH_BYTES:
             _fail("统计批次超过受限内存大小，请降低 batch_size")
         states = [self._take(indices, field["key"]) for field in spec["state_fields"]]
-        if config.packed_actions:
-            actions = self._take(indices, spec["action_key"])
-        else:
-            action_indices = np.minimum(indices[:, None] + np.arange(config.action_horizon)[None, :], self._episode_end[indices, None])
-            actions = self._take(action_indices.reshape(-1), spec["action_key"]).reshape(len(indices), config.action_horizon, width)
-        return {"state": np.concatenate(states, axis=-1), "actions": actions}
+        return {"state": np.concatenate(states, axis=-1), "actions": self._take(indices, action_key)}
 
     def _check_gripper(self, value):
         import numpy as np

@@ -3,7 +3,7 @@
 Shared statistics scan every transformed row twice with per-row source weights.
 Existing per-dataset quantiles are never averaged. Platform tasks require
 ``numeric_only=True``: a trusted composable contract projects numeric Parquet
-columns before loading samples, with no image/video reads or decoding. Legacy
+columns and counts one action vector per row without reading images. Legacy
 CLI paths retain their existing shared-statistics behavior; unsupported numeric
 processors fail explicitly rather than falling back to a visual loader.
 """
@@ -316,6 +316,8 @@ def main(
             for key, accumulator in stats.items():
                 accumulator.update(np.asarray(batch[key]))
         document = json.loads(normalize.serialize_json({key: value.get_statistics() for key, value in stats.items()}))
+        if numeric_only:
+            document["action_statistics"] = "single_step"
     _publish(output, document, overwrite=overwrite)
     print(f"Wrote normalization statistics to: {output / 'norm_stats.json'}")
 

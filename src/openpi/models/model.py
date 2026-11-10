@@ -43,6 +43,10 @@ DEPTH_KEYS = ("base_0_depth",)
 # This may need change if we release a small model.
 IMAGE_RESOLUTION = (224, 224)
 
+# Asset-selected, per-sample augmentation codes. A separate observation field
+# keeps mixed datasets independent without changing camera validity masks.
+IMAGE_AUGMENTATION_POLICY_VERSION = 1
+
 
 # Data format
 #
@@ -138,6 +142,9 @@ class Observation(Generic[ArrayT]):
     # LeRobot global row index (optional; kept by KeepModelKeys for some pipelines).
     index: at.Float[ArrayT, "*b"] | at.Int[ArrayT, "*b"] | None = None
 
+    # 0: recipe default, 1: none, 2: color, 3: crop/rotate/color.
+    image_augmentation: dict[str, at.Int[ArrayT, "*b"]] | None = None
+
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "Observation[ArrayT]":
         """This method defines the mapping between unstructured data (i.e., nested dict) to the structured Observation format."""
@@ -154,6 +161,7 @@ class Observation(Generic[ArrayT]):
             images=data["image"],
             image_masks=data["image_mask"],
             state=data["state"],
+            image_augmentation=data.get("image_augmentation"),
             semantic_memory=data.get("semantic_memory"),
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
@@ -213,6 +221,37 @@ def resolve_view_keys(
     return images, depth
 
 
+def _augment_rgb(rng, image, *, geometric):
+    """The original OpenPI augmentation chain for a single HWC frame."""
+    height, width = image.shape[:2]
+    transforms = []
+    if geometric:
+        transforms += [augmax.RandomCrop(int(width * 0.95), int(height * 0.95)),
+                       augmax.Resize(width, height), augmax.Rotate((-5, 5))]
+    transforms += [augmax.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5)]
+    return augmax.Chain(*transforms)(rng, image / 2.0 + 0.5) * 2.0 - 1.0
+
+
+def _augment_rgb_with_policy(rng, image, policy, *, default_geometric):
+    # Switch separately for each sample (and each video frame). Every branch
+    # starts from the unaugmented image, so selected policies never accumulate
+    # the default augmentation as well.
+    policy = jnp.where(policy == 0, 3 if default_geometric else 2, policy)
+
+    # Batched switch selects its operands. Pass plain key data through that
+    # selection to avoid JAX's opaque-key lowering assertion under sharding.
+    key_impl = jax.random.key_impl(rng)
+
+    def augment(key_data, frame, *, geometric):
+        return _augment_rgb(jax.random.wrap_key_data(key_data, impl=key_impl), frame, geometric=geometric)
+
+    return jax.lax.switch(policy - 1, (
+        lambda args: args[1],
+        lambda args: augment(*args, geometric=False),
+        lambda args: augment(*args, geometric=True),
+    ), (jax.random.key_data(rng), image))
+
+
 def preprocess_observation(
     rng: at.KeyArrayLike | None,
     observation: Observation,
@@ -222,6 +261,7 @@ def preprocess_observation(
     depth_keys: Sequence[str] | None = None,
     image_resolution: tuple[int, int] = IMAGE_RESOLUTION,
     allow_all_masked_images: bool = False,
+    fixed_image_augmentation: tuple[tuple[str, int], ...] = (),
 ) -> Observation:
     """Resize/augment the selected views, retaining image and video validity.
 
@@ -244,6 +284,7 @@ def preprocess_observation(
     out_images = {}
     out_masks = {}
     out_frame_masks = {} if observation.frame_valid_masks is not None else None
+    fixed_policies = dict(fixed_image_augmentation)
     for key in keys:
         present_view = key in observation.images
         if not present_view:
@@ -258,15 +299,26 @@ def preprocess_observation(
             if image.shape[1:3] != image_resolution:
                 image = image_tools.resize_with_pad(image, *image_resolution)
             if train and rng is not None and key not in depth_keys:
-                image = image / 2.0 + 0.5
-                transforms = []
-                if "wrist" not in key:
-                    height, width = image.shape[1:3]
-                    transforms += [augmax.RandomCrop(int(width * 0.95), int(height * 0.95)),
-                                   augmax.Resize(width, height), augmax.Rotate((-5, 5))]
-                transforms += [augmax.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5)]
-                image = jax.vmap(augmax.Chain(*transforms))(jax.random.split(rng, image.shape[0]), image)
-                image = image * 2.0 - 1.0
+                policies = observation.image_augmentation
+                fixed_code = fixed_policies.get(key)
+                default_geometric = "wrist" not in key
+                if fixed_code is None and policies is not None and key in policies:
+                    codes = jnp.asarray(policies[key])
+                    if codes.shape != batch_shape or not jnp.issubdtype(codes.dtype, jnp.integer):
+                        raise ValueError(f"Augmentation codes for {key} must be integers with shape {batch_shape}")
+                    # One camera policy per sample; video frames inherit it.
+                    codes = codes.reshape((*batch_shape, *((1,) * (len(shape_prefix) - len(batch_shape)))))
+                    codes = jnp.broadcast_to(codes, shape_prefix).reshape(-1)
+                    sub_rngs = jax.random.split(rng, image.shape[0])
+                    image = jax.vmap(lambda key_rng, frame, code: _augment_rgb_with_policy(
+                        key_rng, frame, code, default_geometric=default_geometric
+                    ))(sub_rngs, image, codes)
+                elif fixed_code != 1:
+                    geometric = default_geometric if fixed_code in (None, 0) else fixed_code == 3
+                    sub_rngs = jax.random.split(rng, image.shape[0])
+                    image = jax.vmap(lambda key_rng, frame: _augment_rgb(
+                        key_rng, frame, geometric=geometric
+                    ))(sub_rngs, image)
             image = image.reshape((*shape_prefix, *image.shape[-3:]))
             mask = jnp.broadcast_to(jnp.asarray(observation.image_masks.get(key, True), dtype=jnp.bool_), batch_shape)
         if out_frame_masks is not None and image.ndim == len(batch_shape) + 4:
@@ -305,6 +357,8 @@ class BaseModelConfig(abc.ABC):
     image_keys: tuple[str, ...] | None = dataclasses.field(default=None, kw_only=True)
     depth_keys: tuple[str, ...] | None = dataclasses.field(default=None, kw_only=True)
     allow_all_masked_images: bool = dataclasses.field(default=False, kw_only=True)
+    # A single-source training launcher may freeze one policy code per model view.
+    fixed_image_augmentation: tuple[tuple[str, int], ...] = dataclasses.field(default=(), kw_only=True)
 
     def spec_view_keys(self, default_keys: Sequence[str] = IMAGE_KEYS) -> tuple[str, ...]:
         images, depth = resolve_view_keys(default_keys, self.image_keys, self.depth_keys)
@@ -362,6 +416,7 @@ class BaseModel(nnx.Module, abc.ABC):
         self.image_keys = config.image_keys
         self.depth_keys = config.depth_keys
         self.allow_all_masked_images = config.allow_all_masked_images
+        self.fixed_image_augmentation = config.fixed_image_augmentation
 
     def preprocess_observation(self, rng, observation, *, train=False) -> Observation:
         return preprocess_observation(
@@ -369,6 +424,7 @@ class BaseModel(nnx.Module, abc.ABC):
             image_keys=getattr(self, "image_keys", None),
             depth_keys=getattr(self, "depth_keys", None),
             allow_all_masked_images=getattr(self, "allow_all_masked_images", False),
+            fixed_image_augmentation=getattr(self, "fixed_image_augmentation", ()),
         )
 
     @abc.abstractmethod

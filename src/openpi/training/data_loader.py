@@ -597,13 +597,19 @@ def _collate_fn(items, *, image_keys=None, depth_keys=None):
         if any_reference is None:
             raise ValueError(f"None of the configured image views {keys} are present in this batch")
         frame_masks_present = any(item.get("frame_valid_mask") is not None for item in items)
+        augmentation_present = any(item.get("image_augmentation") is not None for item in items)
         normalized = []
         for item in items:
             item = dict(item)
             original_images = item["image"]
             original_masks = item.get("image_mask", {})
+            augmentation = item.get("image_augmentation") or {}
+            if not isinstance(augmentation, dict):
+                raise ValueError("image_augmentation must map camera views to integer policy codes")
             item["image"] = {}
             item["image_mask"] = {}
+            if augmentation_present:
+                item["image_augmentation"] = {}
             frames = item.get("frame_valid_mask") or {}
             if frame_masks_present:
                 item["frame_valid_mask"] = {}
@@ -614,6 +620,14 @@ def _collate_fn(items, *, image_keys=None, depth_keys=None):
                 mask = np.asarray(original_masks.get(key, True), dtype=bool) if present else np.asarray(False)
                 item["image"][key] = image
                 item["image_mask"][key] = mask
+                if augmentation_present:
+                    code = np.asarray(augmentation.get(key, 0) if present else 1)
+                    if (code.shape != () or not np.issubdtype(code.dtype, np.integer)
+                            or not 0 <= int(code) <= 3):
+                        raise ValueError(f"Invalid image augmentation policy for {key}; expected an integer from 0 to 3")
+                    if key in depth and int(code) not in (0, 1):
+                        raise ValueError(f"RGB augmentation cannot be applied to depth view {key}")
+                    item["image_augmentation"][key] = code.astype(np.int32)
                 if frame_masks_present and image.ndim == 4:
                     frame_mask = np.asarray(frames.get(key, np.ones(image.shape[0], dtype=bool)), dtype=bool)
                     if frame_mask.shape != (image.shape[0],):

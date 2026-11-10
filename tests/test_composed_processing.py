@@ -112,6 +112,28 @@ class SchemaTests(unittest.TestCase):
                     self.assertEqual(set(normalized), set(original))
                     self.assertEqual(COMPOSED.normalization_masks(normalized), COMPOSED.normalization_masks(original))
 
+    def test_optional_camera_augmentation_preserves_explicit_choices_and_numeric_projection(self):
+        legacy = composition()
+        self.assertNotIn("augmentation", COMPOSED.normalize_composition(legacy)["cameras"][0])
+        for kind in ("rgb", "depth"):
+            for augmentation in ("default", "none", "color", "crop_rotate_color", "", None, True, " default "):
+                spec = deepcopy(legacy)
+                spec["cameras"][0].update(kind=kind, augmentation=augmentation)
+                with self.subTest(kind=kind, augmentation=augmentation):
+                    supported = augmentation in ("default", "none") or (
+                        kind == "rgb" and augmentation in ("color", "crop_rotate_color")
+                    )
+                    if supported:
+                        normalized = COMPOSED.normalize_composition(spec)
+                        self.assertEqual(normalized["cameras"][0]["augmentation"], augmentation)
+                        self.assertEqual(COMPOSED.normalize_composition(normalized), normalized)
+                        self.assertEqual(COMPOSED.normalization_masks(spec), COMPOSED.normalization_masks(legacy))
+                    else:
+                        with self.assertRaisesRegex(ValueError, "视觉增强"):
+                            COMPOSED.normalize_composition(spec)
+                    self.assertEqual(COMPOSED.normalize_composition(spec, norm_stats=True),
+                                     COMPOSED.normalize_composition(legacy, norm_stats=True))
+
     def test_supplied_optional_declarations_are_still_validated(self):
         for key, invalid_values in {
             "position_unit": ("cm", " m ", False, 0, [], "m\x1f"),
@@ -528,6 +550,19 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(self.build(spec, action_shape=[10]).action_sequence_keys, ("actions",))
         with self.assertRaises(ValueError):self.build(spec, action_shape=[15, 10])
         with self.assertRaises(ValueError):self.build(spec, action_shape=[16, 9])
+
+    def test_builder_carries_augmentation_without_applying_it_to_composed_pixels(self):
+        spec = composition()
+        camera = spec["cameras"][0]
+        camera["augmentation"] = "crop_rotate_color"
+        data = self.build(spec)
+        repack, = data.repack_transforms.inputs
+        inputs, = data.data_transforms.inputs
+        self.assertEqual(inputs.composition["cameras"][0]["augmentation"], "crop_rotate_color")
+        sample = self.sample(spec)
+        composed = inputs(repack(sample))
+        self.assertNotIn("image_augmentation", composed)
+        np.testing.assert_array_equal(composed["image"][camera["slot"]], sample[camera["key"]].transpose(1, 2, 0))
 
     def test_composite_sft_pipeline_preserves_raw_vectors_and_only_applies_declared_normalization_and_padding(self):
         namespace = {"np": np, "dataclasses": dataclasses, "partial": partial, "DataTransformFn": object}
