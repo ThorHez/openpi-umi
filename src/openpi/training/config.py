@@ -253,6 +253,7 @@ class ComposableDataConfig(DataConfigFactory):
     """
 
     COMPOSITION_SCHEMA_VERSION: ClassVar[int] = 1
+    SUPPORTS_FLAT_STATE_TOKENS: ClassVar[bool] = True
     composition: dict | None = None
     acp_dropout: float = 0.1
     training_stage: str = "sft"

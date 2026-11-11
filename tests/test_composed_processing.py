@@ -845,6 +845,24 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(self.tokenizer_calls[0]["robot_type"], "ARM=1,G=0,H=0")
         self.assertNotIn("prompt", output)
 
+    def test_state_tokenization_flattens_in_frame_order_when_configured(self):
+        model = self.models.Pi0Config(discrete_state_input=True)
+        for history in (1, 2):
+            state = np.linspace(-1, 1, history * 14, dtype=np.float32).reshape(history, 14)
+            for mode in ("standard", "flat_state"):
+                with self.subTest(mode=mode, history=history):
+                    spec = {**composite_composition(), "state_history": history, "model_transform": mode}
+                    config = self.build(spec, model=model)
+                    sample = self.sample(spec)
+                    sample["observation.state"] = state
+                    output = config.data_transforms.inputs[0](config.repack_transforms.inputs[0](sample))
+                    for transform in config.model_transforms.inputs:
+                        output = transform(output)
+                    tokenized_state = self.tokenizer_calls[-1]["state"]
+                    np.testing.assert_array_equal(tokenized_state, state.ravel() if mode == "flat_state" else state)
+                    np.testing.assert_array_equal(output["actions"][:, :14], sample["actions"])
+                    np.testing.assert_array_equal(output["actions"][:, 14:], 0)
+
     def test_pi0_flattens_and_pads_state_without_silently_truncating(self):
         spec = joint_composition();model = self.models.Pi0Config(pi05=False)
         config = self.build(spec, model=model);sample = self.sample(spec)

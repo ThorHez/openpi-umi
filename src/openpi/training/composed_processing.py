@@ -131,7 +131,7 @@ def normalize_composition(value, *, norm_stats=False):
     for key, choices in {
         "arm_mode": {"single", "bimanual"}, "state_representation": representations,
         "action_representation": representations,
-        "normalization": {"quantile", "zscore"}, "model_transform": {"standard"},
+        "normalization": {"quantile", "zscore"}, "model_transform": {"standard", "flat_state"},
     }.items():
         result[key] = _enum(value[key], choices, key)
     # These declarations do not perform conversions. Unknown units or frames
@@ -578,6 +578,9 @@ def composition_runtime_contract(factory, model_config, *, norm_stats=False):
     stage = factory.training_stage
     if not isinstance(stage, str) or stage not in {"sft", "value", "offline_rl", "uot"}:
         _fail("组合处理不支持此训练阶段", "COMPOSITION_STAGE_UNSUPPORTED")
+    if not norm_stats and spec["model_transform"] == "flat_state" and (
+            not pi05 or stage != "sft" or not getattr(model_config, "discrete_state_input", False)):
+        _fail("一维状态 token 格式需要启用离散状态的 Pi0.5 SFT", "COMPOSITION_MODEL_UNSUPPORTED")
     if stage == "value" and "value_target" not in spec["aux_keys"]:
         _fail("价值训练需要显式 value_target 辅助字段", "COMPOSITION_STAGE_UNSUPPORTED")
     if (stage == "value") != (type(model_config) is pi0_value.Pi0ValueConfig):
@@ -624,10 +627,15 @@ def compose_data_config(factory, assets_dirs, model_config, *, include_model_tra
         model_inputs = [transforms.InjectDefaultPrompt(None), transforms.ResizeImages(224, 224)]
         if stage == "offline_rl":
             model_inputs.insert(1, transforms.ACPConditionPrompt(indicator_key="is_positive", dropout=float(dropout), default_positive=False))
+        flat_state = spec["model_transform"] == "flat_state"
+        if flat_state:
+            model_inputs.append(transforms.FlattenState())
         model_inputs.append(transforms.TokenizePrompt(tokenizer.PaligemmaTokenizer(model_config.max_token_len),
                             discrete_state_input=bool(getattr(model_config, "discrete_state_input", False))))
         if pi05:
-            model_inputs.extend([transforms.PadActionsOnly(action_dim), transforms.FlattenState()])
+            model_inputs.append(transforms.PadActionsOnly(action_dim))
+            if not flat_state:
+                model_inputs.append(transforms.FlattenState())
         else:
             model_inputs.extend([transforms.FlattenState(), transforms.PadStatesAndActions(action_dim)])
         model_inputs.append(transforms.KeepModelKeys(extra_keys=frozenset(spec["aux_keys"])))
