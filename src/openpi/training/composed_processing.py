@@ -243,9 +243,10 @@ def normalize_composition(value, *, norm_stats=False):
             or result["prompt_key"] in source_keys or result["action_key"] == result["prompt_key"]):
         _fail("状态、视觉、动作和任务字段不能互相占用")
     aux_keys = value["aux_keys"]
-    if (not isinstance(aux_keys, list) or len(aux_keys) > 2 or not all(type(key) is str and key in {"value_target", "is_positive"} for key in aux_keys)
+    if (not isinstance(aux_keys, list) or len(aux_keys) > 3
+            or not all(type(key) is str and key in {"value_target", "stage_progress_gt", "is_positive"} for key in aux_keys)
             or len(set(aux_keys)) != len(aux_keys)):
-        _fail("辅助字段只支持唯一的 value_target / is_positive")
+        _fail("辅助字段只支持唯一的 value_target / stage_progress_gt / is_positive")
     result["aux_keys"] = list(aux_keys)
     if any(key in {*source_keys, result["action_key"], result["prompt_key"]} for key in result["aux_keys"]):
         _fail("辅助字段不能与其它输入字段重名")
@@ -439,6 +440,8 @@ class ComposedInputs:
                 _fail("辅助监督字段必须是有限标量：" + key, "COMPOSITION_DATA_INVALID")
             if key == "is_positive" and value.reshape(-1)[0] not in (0, 1):
                 _fail("is_positive 只能是显式的 0 或 1", "COMPOSITION_DATA_INVALID")
+            if key == "stage_progress_gt" and not 0 <= value.reshape(-1)[0] <= 1:
+                _fail("stage_progress_gt 必须介于 0 与 1 之间", "COMPOSITION_DATA_INVALID")
             result[key] = value
         return result
 
@@ -550,8 +553,14 @@ def composition_runtime_contract(factory, model_config, *, norm_stats=False):
     """
     from openpi.models import pi0_config, pi0_gripper, pi0_value
     spec = normalize_composition(factory.composition, norm_stats=norm_stats)
-    if type(model_config) not in {pi0_config.Pi0Config, pi0_gripper.Pi0GripperConfig, pi0_value.Pi0ValueConfig}:
-        _fail("组合处理首版只支持标准 Pi0/Pi05、Value 和 Gripper 模型；MEM/Hybrid 使用原配方", "COMPOSITION_MODEL_UNSUPPORTED")
+    stage = factory.training_stage
+    if stage == "stage_progress":
+        from openpi.models import pi0_stage_progress
+
+        if type(model_config) is not pi0_stage_progress.Pi0StageProgressConfig:
+            _fail("阶段进度估计器与 stage_progress 训练阶段必须一致", "COMPOSITION_STAGE_UNSUPPORTED")
+    elif type(model_config) not in {pi0_config.Pi0Config, pi0_gripper.Pi0GripperConfig, pi0_value.Pi0ValueConfig}:
+        _fail("组合处理支持标准 Pi0/Pi05、Value、阶段进度和 Gripper 模型", "COMPOSITION_MODEL_UNSUPPORTED")
     action_dim, horizon = model_config.action_dim, model_config.action_horizon
     if type(action_dim) is not int or type(horizon) is not int or action_dim <= 0 or horizon <= 0:
         _fail("模型动作维度/预测长度无效", "COMPOSITION_MODEL_UNSUPPORTED")
@@ -575,8 +584,7 @@ def composition_runtime_contract(factory, model_config, *, norm_stats=False):
     state_dim = sum(field["width"] for field in spec["state_fields"])
     if not pi05 and spec["state_history"] * state_dim > action_dim:
         _fail("Pi0 展平后状态宽度超过模型 action_dim，禁止静默截断", "COMPOSITION_MODEL_UNSUPPORTED")
-    stage = factory.training_stage
-    if not isinstance(stage, str) or stage not in {"sft", "value", "offline_rl", "uot"}:
+    if not isinstance(stage, str) or stage not in {"sft", "value", "stage_progress", "offline_rl", "uot"}:
         _fail("组合处理不支持此训练阶段", "COMPOSITION_STAGE_UNSUPPORTED")
     if not norm_stats and spec["model_transform"] == "flat_state" and (
             not pi05 or stage != "sft" or not getattr(model_config, "discrete_state_input", False)):
@@ -585,6 +593,8 @@ def composition_runtime_contract(factory, model_config, *, norm_stats=False):
         _fail("价值训练需要显式 value_target 辅助字段", "COMPOSITION_STAGE_UNSUPPORTED")
     if (stage == "value") != (type(model_config) is pi0_value.Pi0ValueConfig):
         _fail("价值模型与 value 训练阶段必须一致", "COMPOSITION_STAGE_UNSUPPORTED")
+    if stage == "stage_progress" and "stage_progress_gt" not in spec["aux_keys"]:
+        _fail("阶段进度训练需要显式 stage_progress_gt 辅助字段", "COMPOSITION_STAGE_UNSUPPORTED")
     if stage == "offline_rl" and "is_positive" not in spec["aux_keys"]:
         _fail("ACP 训练需要显式 is_positive 辅助字段", "COMPOSITION_STAGE_UNSUPPORTED")
     dropout = factory.acp_dropout

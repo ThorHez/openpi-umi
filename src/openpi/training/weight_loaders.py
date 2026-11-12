@@ -228,6 +228,17 @@ class CheckpointWeightLoaderWithValueHead(WeightLoader):
 
 
 @dataclasses.dataclass(frozen=True)
+class CheckpointWeightLoaderWithStageProgressHead(WeightLoader):
+    """Initialize a stage-progress estimator from a π0.5 policy or estimator checkpoint."""
+
+    params_path: str
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
+        return _merge_params(loaded_params, params, missing_regex=r".*(lora|stage_progress).*")
+
+
+@dataclasses.dataclass(frozen=True)
 class CheckpointWeightLoaderWithGripperHead(WeightLoader):
     """Loads weights from a checkpoint, gracefully handling missing binary gripper head weights."""
 

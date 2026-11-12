@@ -1,5 +1,7 @@
 # ReCap 训练全流程说明
 
+平台新建 ReCap 作业使用 `scripts/acp/train_recap_pytorch.py`。价值估计器、Kai0 进度估计器和 ACP 策略读取及输出 PyTorch `model.safetensors`。价值路线使用 `scripts/acp/lerobot_value_infer_pytorch.py` 生成派生数据，Kai0 作业在训练后自动生成派生数据。下方保留旧版 JAX 配方和 Orbax checkpoint 的操作说明。
+
 本仓库中的 ReCap 训练链路由三个阶段组成：先训练状态价值模型，再离线计算每帧动作的 advantage 并生成条件标签，最后训练 Advantage Conditioned Policy（ACP，优势条件策略）。部署时固定使用 `Advantage: positive` 条件生成动作。理解这条链路的关键，是区分价值监督目标 `value_target`、模型预测 `predicted_value`、动作优势 `advantage` 和策略条件 `is_positive`。
 
 代码基准为 `openpi-umi` 当前 `wbcd` 分支，提交 `07f2e02`，整理日期为 2026 年 10 月 9 日。本地 `recap` 分支指向 `944f093`；下文以当前工作区实现和配置为准。用户所称的 `reacap` 在本文统一记为 ReCap。代码中主要使用 `Value`、`Advantage` 和 `ACP` 命名，没有统一的 `train_recap.py` 入口。

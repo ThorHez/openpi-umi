@@ -97,14 +97,14 @@ class PI0Pytorch(nn.Module):
             precision=config.dtype,
         )
 
-        self.action_in_proj = nn.Linear(32, action_expert_config.width)
-        self.action_out_proj = nn.Linear(action_expert_config.width, 32)
+        self.action_in_proj = nn.Linear(config.action_dim, action_expert_config.width)
+        self.action_out_proj = nn.Linear(action_expert_config.width, config.action_dim)
 
         if self.pi05:
             self.time_mlp_in = nn.Linear(action_expert_config.width, action_expert_config.width)
             self.time_mlp_out = nn.Linear(action_expert_config.width, action_expert_config.width)
         else:
-            self.state_proj = nn.Linear(32, action_expert_config.width)
+            self.state_proj = nn.Linear(config.action_dim, action_expert_config.width)
             self.action_time_mlp_in = nn.Linear(2 * action_expert_config.width, action_expert_config.width)
             self.action_time_mlp_out = nn.Linear(action_expert_config.width, action_expert_config.width)
 
@@ -219,14 +219,11 @@ class PI0Pytorch(nn.Module):
             lang_emb_dim = lang_emb.shape[-1]
             return lang_emb * math.sqrt(lang_emb_dim)
 
-        lang_emb = self._apply_checkpoint(lang_embed_func, lang_tokens)
-
-        embs.append(lang_emb)
-        pad_masks.append(lang_masks)
-
-        # full attention between image and language inputs
-        num_lang_embs = lang_emb.shape[1]
-        att_masks += [0] * num_lang_embs
+        if lang_tokens is not None:
+            lang_emb = self._apply_checkpoint(lang_embed_func, lang_tokens)
+            embs.append(lang_emb)
+            pad_masks.append(lang_masks)
+            att_masks += [0] * lang_emb.shape[1]
 
         embs = torch.cat(embs, dim=1)
         pad_masks = torch.cat(pad_masks, dim=1)
@@ -317,22 +314,9 @@ class PI0Pytorch(nn.Module):
 
         return embs, pad_masks, att_masks, adarms_cond
 
-    def forward(self, observation, actions, noise=None, time=None) -> Tensor:
-        """Do a full training forward pass and compute the loss (batch_size x num_steps x num_motors)"""
-        images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(observation, train=True)
-
-        if noise is None:
-            noise = self.sample_noise(actions.shape, actions.device)
-
-        if time is None:
-            time = self.sample_time(actions.shape[0], actions.device)
-
-        time_expanded = time[:, None, None]
-        x_t = time_expanded * noise + (1 - time_expanded) * actions
-        u_t = noise - actions
-
-        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
-        suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(state, x_t, time)
+    def _joint_suffix(self, prefix, suffix):
+        prefix_embs, prefix_pad_masks, prefix_att_masks = prefix
+        suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = suffix
         if (
             self.paligemma_with_expert.paligemma.language_model.layers[0].self_attn.q_proj.weight.dtype
             == torch.bfloat16
@@ -361,20 +345,28 @@ class PI0Pytorch(nn.Module):
             )
             return suffix_out
 
-        suffix_out = self._apply_checkpoint(
+        return self._apply_checkpoint(
             forward_func, prefix_embs, suffix_embs, att_2d_masks_4d, position_ids, adarms_cond
         )
 
-        suffix_out = suffix_out[:, -self.config.action_horizon :]
-        suffix_out = suffix_out.to(dtype=torch.float32)
+    def _flow_matching_features(self, observation, actions, noise=None, time=None, *, train):
+        images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(observation, train=train)
+        if noise is None:
+            noise = self.sample_noise(actions.shape, actions.device)
+        if time is None:
+            time = self.sample_time(actions.shape[0], actions.device)
+        time_expanded = time[:, None, None]
+        noisy_actions = time_expanded * noise + (1 - time_expanded) * actions
+        prefix = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
+        suffix = self.embed_suffix(state, noisy_actions, time)
+        hidden = self._joint_suffix(prefix, suffix)[:, -self.config.action_horizon :].float()
+        return hidden, noise - actions
 
-        # Apply gradient checkpointing to final action projection if enabled
-        def action_out_proj_func(suffix_out):
-            return self.action_out_proj(suffix_out)
-
-        v_t = self._apply_checkpoint(action_out_proj_func, suffix_out)
-
-        return F.mse_loss(u_t, v_t, reduction="none")
+    def forward(self, observation, actions, noise=None, time=None) -> Tensor:
+        """Return one flow-matching loss for every action component."""
+        hidden, velocity = self._flow_matching_features(observation, actions, noise, time, train=True)
+        predicted = self._apply_checkpoint(self.action_out_proj, hidden)
+        return F.mse_loss(velocity, predicted, reduction="none")
 
     def sample_actions(
         self,
@@ -460,7 +452,10 @@ class PI0Pytorch(nn.Module):
             # Euler step - use new tensor assignment instead of in-place operation
             x_t = (x_t + dt * v_t).detach()
             time += dt
-        return x_t
+        return self._decode_actions(state, prefix_pad_masks, past_key_values, x_t)
+
+    def _decode_actions(self, state, prefix_pad_masks, past_key_values, actions):
+        return actions
 
     def denoise_step(
         self,
@@ -471,6 +466,10 @@ class PI0Pytorch(nn.Module):
         timestep,
     ):
         """Apply one denoising step of the noise `x_t` at a given timestep."""
+        hidden = self._denoise_features(state, prefix_pad_masks, past_key_values, x_t, timestep)
+        return self.action_out_proj(hidden)
+
+    def _denoise_features(self, state, prefix_pad_masks, past_key_values, x_t, timestep):
         suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(state, x_t, timestep)
 
         suffix_len = suffix_pad_masks.shape[1]
@@ -499,7 +498,4 @@ class PI0Pytorch(nn.Module):
             adarms_cond=[None, adarms_cond],
         )
 
-        suffix_out = outputs_embeds[1]
-        suffix_out = suffix_out[:, -self.config.action_horizon :]
-        suffix_out = suffix_out.to(dtype=torch.float32)
-        return self.action_out_proj(suffix_out)
+        return outputs_embeds[1][:, -self.config.action_horizon :].float()

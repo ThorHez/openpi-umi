@@ -108,6 +108,15 @@ class Pi0GripperConfig(pi0_config.Pi0Config):
     def create(self, rng: at.KeyArrayLike) -> "Pi0":
         return Pi0(self, rngs=nnx.Rngs(rng))
 
+    @override
+    def load_pytorch(self, train_config, weight_path: str):
+        from openpi.models_pytorch.recap import create_recap_model
+        from openpi.models_pytorch.recap import load_recap_weights
+
+        model = create_recap_model(self, "offline_rl", self.dtype)
+        load_recap_weights(model, weight_path, "offline_rl", require_trained_head=True)
+        return model
+
 
 class Pi0(_model.BaseModel):
     def __init__(self, config: pi0_config.Pi0Config, rngs: nnx.Rngs):
