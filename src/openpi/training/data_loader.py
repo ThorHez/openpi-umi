@@ -196,6 +196,18 @@ def _apply_global_normalization(data_config, train_config):
     return dataclasses.replace(data_config, normalization_method=method)
 
 
+def _model_transforms_for_normalization(data_config, norm_stats):
+    # The train config can override the normalization method chosen by the data factory.
+    method = getattr(data_config, "normalization_method", None)
+    use_range = method in {"minmax", "quantile"} if method is not None else data_config.use_quantile_norm
+    padding_value = -1.0 if "actions" in norm_stats and use_range else 0.0
+    return [
+        dataclasses.replace(transform, padding_value=padding_value)
+        if isinstance(transform, _transforms.PadKai0Actions) else transform
+        for transform in data_config.model_transforms.inputs
+    ]
+
+
 def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip_norm_stats: bool = False) -> Dataset:
     """Transform the dataset by applying the data transforms."""
     norm_stats = {}
@@ -217,7 +229,7 @@ def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip
             key_masks=getattr(data_config, "normalize_masks", None),
             method=getattr(data_config, "normalization_method", None),
         ),
-        *data_config.model_transforms.inputs,
+        *_model_transforms_for_normalization(data_config, norm_stats),
     ]
     if data_config.action_loss_mask is not None:
         transform_inputs.append(_transforms.InjectActionLossMask(tuple(data_config.action_loss_mask)))
@@ -251,7 +263,7 @@ def transform_iterable_dataset(
             key_masks=getattr(data_config, "normalize_masks", None),
             method=getattr(data_config, "normalization_method", None),
         ),
-        *data_config.model_transforms.inputs,
+        *_model_transforms_for_normalization(data_config, norm_stats),
     ]
     if data_config.action_loss_mask is not None:
         transform_inputs.append(_transforms.InjectActionLossMask(tuple(data_config.action_loss_mask)))

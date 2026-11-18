@@ -32,7 +32,9 @@ def test_derived_dataset_joins_indices_and_preserves_task_metadata(tmp_path, inv
     root = tmp_path / "source"
     parquet = root / "data" / "chunk-000" / "episode_000000.parquet"
     parquet.parent.mkdir(parents=True)
-    table = pa.table({"index": [101, 502, 700, 900 if invalid_index else 901], "task_index": [12] * 4})
+    progress_key = "annotation.progress"
+    table = pa.table({"index": [101, 502, 700, 900 if invalid_index else 901], "task_index": [12] * 4,
+                      progress_key: [0.0, 0.25, 0.5, 1.0]})
     pq.write_table(table, parquet)
     (root / "meta").mkdir()
     (root / "meta" / "info.json").write_text('{"features": {"task_index": {"dtype": "int64"}}}')
@@ -57,6 +59,7 @@ def test_derived_dataset_joins_indices_and_preserves_task_metadata(tmp_path, inv
         labeled = pq.read_table(derived / parquet.relative_to(root))
         assert labeled["is_positive"].to_pylist() == [0, 1, 1, 0]
         assert labeled["task_index"].to_pylist() == [12] * 4
+        assert labeled[progress_key].equals(table[progress_key])
         assert (derived / "meta" / "tasks.jsonl").read_text() == tasks
         assert (derived / "videos" / "frame.mp4").read_bytes() == b"source video"
         receipt = json.loads((derived / "meta" / "stage_advantage.json").read_text())

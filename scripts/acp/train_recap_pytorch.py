@@ -9,8 +9,11 @@ from openpi.training import config as train_config
 from openpi.training.recap_pytorch import init_wandb, run
 
 
-def main(config, *, output_dir=None, worker_setup=None):
-    run(config, output_dir=output_dir, worker_setup=worker_setup)
+PLATFORM_STAGE_PROGRESS_TRAIN_ONLY_VERSION = 1
+
+
+def main(config, *, worker_setup=None):
+    run(config, worker_setup=worker_setup)
 
 
 if __name__ == "__main__":
@@ -20,4 +23,4 @@ if __name__ == "__main__":
         stage = {"Pi0ValueConfig": "value", "Pi0StageProgressConfig": "stage_progress"}.get(type(config.model).__name__)
         if stage is None and config.name.startswith("pi05_acp_"):
             stage = "offline_rl"
-    main(dataclasses.replace(config, recap_training_stage=stage, ema_decay=None), output_dir=config.checkpoint_dir)
+    main(dataclasses.replace(config, recap_training_stage=stage, ema_decay=None))

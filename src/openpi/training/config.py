@@ -254,6 +254,7 @@ class ComposableDataConfig(DataConfigFactory):
 
     COMPOSITION_SCHEMA_VERSION: ClassVar[int] = 1
     SUPPORTS_FLAT_STATE_TOKENS: ClassVar[bool] = True
+    SUPPORTS_KAI0_PAD32_STATE_TOKENS: ClassVar[bool] = True
     composition: dict | None = None
     acp_dropout: float = 0.1
     training_stage: str = "sft"
@@ -4460,7 +4461,7 @@ class TrainConfig:
 
     # Precision for PyTorch training.
     pytorch_training_precision: Literal["bfloat16", "float32"] = "bfloat16"
-    recap_training_stage: Literal["value", "stage_progress", "offline_rl"] | None = None
+    recap_training_stage: Literal["value", "value_annotation", "stage_progress", "stage_annotation", "offline_rl"] | None = None
 
     lr_schedule: _optimizer.LRScheduleConfig = dataclasses.field(default_factory=_optimizer.CosineDecaySchedule)
     optimizer: _optimizer.OptimizerConfig = dataclasses.field(default_factory=_optimizer.AdamW)

@@ -974,6 +974,31 @@ class FlattenState(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class PadKai0StateTokens(DataTransformFn):
+    """Pad normalized Kai0 state with the value that maps to token bin zero."""
+
+    def __call__(self, data: DataDict) -> DataDict:
+        state = data["state"]
+        if state.shape != (14,):
+            raise ValueError("Kai0 state token padding requires a flat 14-dimensional state")
+        # Kai0's quantile bounds for the 18 padded zero values are both zero.
+        # Reproduce their normalized value without extending the raw statistics.
+        return {**data, "state": pad_to_dim(state, 32, value=-1.0)}
+
+
+@dataclasses.dataclass(frozen=True)
+class PadKai0Actions(DataTransformFn):
+    """Add the normalized value of Kai0's zero-filled action dimensions."""
+
+    padding_value: float
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "actions" not in data:
+            return data
+        return {**data, "actions": pad_to_dim(data["actions"], 32, value=self.padding_value)}
+
+
+@dataclasses.dataclass(frozen=True)
 class ChunkActions(DataTransformFn):
     """Truncate actions to a specified dimension.
 

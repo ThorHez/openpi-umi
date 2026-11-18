@@ -2,6 +2,7 @@
 
 import argparse
 import dataclasses
+import json
 import os
 from pathlib import Path
 import runpy
@@ -11,12 +12,18 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 import numpy as np
 import torch
 
-from openpi.training import config as train_config, data_loader, recap_pytorch
+from openpi.training import recap_pytorch
 from openpi.training.recap_advantages import label_value_advantages, load_existing_value_targets
 from openpi.training.stage_progress_labels import publish_labeled_copy
 
 
+init_wandb = recap_pytorch.init_wandb
+DATASET_NAME = "value_advantage_dataset"
+
+
 def _data_config(config, dataset_root, checkpoint, dataset_index, norm_asset_id):
+    from openpi.training import config as train_config, data_loader
+
     factory = config.data
     multi = hasattr(factory, "datasets")
     children = factory.datasets if multi else [factory]
@@ -59,6 +66,14 @@ def annotate(config, checkpoint, dataset_root, output, *, dataset_index=0, norm_
     if config.batch_size < 1 or n_step < 1 or not 0 < positive_ratio <= 1:
         raise ValueError("batch 和优势窗口必须为正数，正例比例必须在 (0, 1] 内")
     data = _data_config(config, dataset_root, checkpoint, dataset_index, norm_asset_id)
+    device = torch.device(device or ("cuda:0" if torch.cuda.is_available() else "cpu"))
+    return _annotate_bound(config, data, checkpoint, dataset_root, output,
+                           n_step=n_step, positive_ratio=positive_ratio, device=device)
+
+
+def _annotate_bound(config, data, checkpoint, dataset_root, output, *, n_step, positive_ratio, device):
+    from openpi.training import data_loader
+
     dataset = data_loader.create_torch_dataset(data, config.model.action_horizon, config.model)
     source = dataset._dataset if isinstance(dataset, data_loader.TransformedDataset) else dataset
     raw = source.hf_dataset.with_format(None)
@@ -68,7 +83,6 @@ def annotate(config, checkpoint, dataset_root, output, *, dataset_index=0, norm_
     tasks = np.asarray(raw["task_index"], dtype=np.int64).reshape(-1)
     targets = load_existing_value_targets(raw, "value_target")
     transformed = data_loader.transform_dataset(dataset, data)
-    device = torch.device(device or ("cuda:0" if torch.cuda.is_available() else "cpu"))
     values = _predict_values(config, transformed, checkpoint, device)
     if len(values) != len(indices):
         raise ValueError("价值预测没有覆盖每个源帧")
@@ -83,7 +97,55 @@ def annotate(config, checkpoint, dataset_root, output, *, dataset_index=0, norm_
         receipt_name="value_advantage.json")
 
 
-def main():
+def _trained_value_checkpoint(path):
+    checkpoint = Path(path).resolve(strict=True)
+    if checkpoint.name == "model.safetensors" and checkpoint.is_file():
+        checkpoint = checkpoint.parent
+    marker = checkpoint / "recap_checkpoint.json"
+    if not (checkpoint / "model.safetensors").is_file() or not marker.is_file():
+        raise ValueError("价值标注需要包含 model.safetensors 和 recap_checkpoint.json 的已训练价值 checkpoint")
+    try:
+        with marker.open("rb") as stream:
+            contents = stream.read(64 * 1024 + 1)
+        if len(contents) > 64 * 1024:
+            raise ValueError("checkpoint receipt is too large")
+        receipt = json.loads(contents)
+    except (OSError, ValueError) as exc:
+        raise ValueError("无法读取价值 checkpoint 的 recap_checkpoint.json") from exc
+    if (not isinstance(receipt, dict) or type(receipt.get("schema_version")) is not int
+            or receipt["schema_version"] != 1 or receipt.get("backend") != "pytorch"
+            or receipt.get("stage") != "value" or type(receipt.get("step")) is not int or receipt["step"] < 0):
+        raise ValueError("所选 checkpoint 不是有效的 PyTorch ReCap 价值模型")
+    return checkpoint
+
+
+def main(config, *, output_dir=None, n_step=50, positive_ratio=0.3):
+    if config.recap_training_stage != "value_annotation" or config.pytorch_weight_path is None:
+        raise ValueError("价值标注需要 value_annotation 配置和已训练的价值模型权重")
+    factory = config.data
+    datasets = getattr(factory, "datasets", None)
+    if (datasets is not None and len(datasets) != 1) or config.batch_size < 1:
+        raise ValueError("价值标注需要单个 LeRobot 数据集和正数 batch")
+    if (type(n_step) is not int or not 1 <= n_step <= 1000
+            or type(positive_ratio) not in (int, float) or not 0.001 <= positive_ratio <= 1):
+        raise ValueError("价值标注的优势窗口须为 1–1000 帧，正例比例须为 0.001–1")
+    checkpoint = _trained_value_checkpoint(config.pytorch_weight_path)
+
+    from openpi.training import data_loader
+
+    if datasets is None:
+        data = factory.create(config.assets_dirs, config.model)
+    else:
+        (data,) = factory.create_all(config.assets_dirs, config.model)
+    data = data_loader._apply_global_normalization(data, config)
+    dataset_root = Path(data.repo_id).resolve(strict=True)
+    output_root = Path(config.checkpoint_base_dir).parent if output_dir is None else Path(output_dir)
+    device = recap_pytorch._device(0)
+    return _annotate_bound(config, data, checkpoint, dataset_root, output_root / DATASET_NAME,
+                           n_step=n_step, positive_ratio=positive_ratio, device=device)
+
+
+def cli():
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--config-name")
@@ -103,6 +165,8 @@ def main():
         builder = runpy.run_path(str(args.config_file))["build_config"]
         config = builder(args.config_file.resolve().parent)
     else:
+        from openpi.training import config as train_config
+
         config = train_config.get_config(args.config_name)
     config = dataclasses.replace(config, batch_size=args.batch_size, num_workers=args.num_workers)
     print(annotate(config, args.checkpoint_dir, args.dataset_root, args.output_dir, dataset_index=args.dataset_index,
@@ -111,4 +175,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    cli()

@@ -17,15 +17,20 @@ import stat
 
 SCHEMA_VERSION = 1
 SLOTS = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
+STAGE_PROGRESS_AUX_KEY = "stage_progress_gt"
+_RESERVED_STAGE_PROGRESS_KEYS = {
+    "index", "episode_index", "frame_index", "task_index", "timestamp", "task", "value_target", "is_positive",
+    "absolute_value", "absolute_advantage", "relative_advantage",
+}
 _ECMASCRIPT_TRIM = "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
 _FIELDS = {
     "schema_version", "robot_model", "arm_mode", "state_representation", "state_fields", "state_history",
     "action_representation", "action_key", "action_layout", "action_mode", "rotation_representation",
     "position_unit", "joint_unit", "coordinate_frame", "gripper_range", "cameras", "prompt_key",
-    "normalization", "model_transform", "aux_keys",
+    "normalization", "model_transform", "aux_keys", "stage_progress_key",
 }
 _OPTIONAL_FIELDS = {"position_unit", "joint_unit", "coordinate_frame", "gripper_range",
-                    "action_mode", "rotation_representation", "prompt_key"}
+                    "action_mode", "rotation_representation", "prompt_key", "stage_progress_key"}
 
 
 def _fail(message, code="COMPOSITION_INVALID"):
@@ -119,6 +124,11 @@ def _normalize_action_block(block, *, norm_stats=False):
     return normalized
 
 
+def stage_progress_source_key(composition):
+    """Resolve the source column for normalized composition metadata."""
+    return composition.get("stage_progress_key", STAGE_PROGRESS_AUX_KEY)
+
+
 def normalize_composition(value, *, norm_stats=False):
     """Validate v1 inputs and canonicalize optional training choices."""
     value = _object(value, _FIELDS, "组合数据处理", optional=_OPTIONAL_FIELDS)
@@ -131,9 +141,11 @@ def normalize_composition(value, *, norm_stats=False):
     for key, choices in {
         "arm_mode": {"single", "bimanual"}, "state_representation": representations,
         "action_representation": representations,
-        "normalization": {"quantile", "zscore"}, "model_transform": {"standard", "flat_state"},
+        "normalization": {"quantile", "zscore"}, "model_transform": {"standard", "flat_state", "kai0_pad32"},
     }.items():
         result[key] = _enum(value[key], choices, key)
+    if norm_stats and result["model_transform"] == "kai0_pad32":
+        result["model_transform"] = "standard"
     # These declarations do not perform conversions. Unknown units or frames
     # stay unspecified rather than receiving invented dataset semantics.
     for key, choices in (("position_unit", {"m", "mm"}), ("joint_unit", {"rad", "deg"}),
@@ -244,11 +256,23 @@ def normalize_composition(value, *, norm_stats=False):
         _fail("状态、视觉、动作和任务字段不能互相占用")
     aux_keys = value["aux_keys"]
     if (not isinstance(aux_keys, list) or len(aux_keys) > 3
-            or not all(type(key) is str and key in {"value_target", "stage_progress_gt", "is_positive"} for key in aux_keys)
+            or not all(type(key) is str and key in {"value_target", STAGE_PROGRESS_AUX_KEY, "is_positive"} for key in aux_keys)
             or len(set(aux_keys)) != len(aux_keys)):
         _fail("辅助字段只支持唯一的 value_target / stage_progress_gt / is_positive")
     result["aux_keys"] = list(aux_keys)
-    if any(key in {*source_keys, result["action_key"], result["prompt_key"]} for key in result["aux_keys"]):
+    progress_key = STAGE_PROGRESS_AUX_KEY
+    if "stage_progress_key" in value:
+        if STAGE_PROGRESS_AUX_KEY not in aux_keys:
+            _fail("选择阶段进度源列必须同时声明 stage_progress_gt 辅助字段")
+        progress_key = _key(value["stage_progress_key"], "阶段进度源列")
+        if "/" in progress_key or progress_key in _RESERVED_STAGE_PROGRESS_KEYS:
+            _fail("阶段进度源列必须是独立的 Parquet 列，不能使用保留列名")
+        if not norm_stats and progress_key != STAGE_PROGRESS_AUX_KEY:
+            result["stage_progress_key"] = progress_key
+    aux_sources = set(aux_keys)
+    if STAGE_PROGRESS_AUX_KEY in aux_sources:
+        aux_sources.add(progress_key)
+    if aux_sources & {*source_keys, result["action_key"], result["prompt_key"]}:
         _fail("辅助字段不能与其它输入字段重名")
     return result
 
@@ -268,6 +292,9 @@ class ComposedRepack:
     def __call__(self, data):
         import numpy as np
         spec = normalize_composition(self.composition)
+        aux_sources = {key: stage_progress_source_key(spec) if key == STAGE_PROGRESS_AUX_KEY else key
+                       for key in spec["aux_keys"]}
+
         def get(key):
             if key in data:
                 return data[key]
@@ -283,7 +310,7 @@ class ComposedRepack:
             # Only unclaimed task/prompt inputs may be used as automatic text;
             # a numeric state/action source can legitimately have either name.
             claimed = {field["key"] for field in spec["state_fields"] + spec["cameras"]}
-            claimed.update([spec["action_key"], *spec["aux_keys"]])
+            claimed.update([spec["action_key"], *aux_sources.values()])
             prompt = ""
             for key in ("task", "prompt"):
                 if any(source == key or source.startswith(key + "/") for source in claimed) or key not in data:
@@ -301,7 +328,7 @@ class ComposedRepack:
             result["_composition_state_" + str(index)] = get(field["key"])
         for index, camera in enumerate(spec["cameras"]):
             result["_composition_camera_" + str(index)] = get(camera["key"])
-        result.update({key: get(key) for key in spec["aux_keys"]})
+        result.update({key: get(source) for key, source in aux_sources.items()})
         return result
 
 
@@ -440,8 +467,8 @@ class ComposedInputs:
                 _fail("辅助监督字段必须是有限标量：" + key, "COMPOSITION_DATA_INVALID")
             if key == "is_positive" and value.reshape(-1)[0] not in (0, 1):
                 _fail("is_positive 只能是显式的 0 或 1", "COMPOSITION_DATA_INVALID")
-            if key == "stage_progress_gt" and not 0 <= value.reshape(-1)[0] <= 1:
-                _fail("stage_progress_gt 必须介于 0 与 1 之间", "COMPOSITION_DATA_INVALID")
+            if key == STAGE_PROGRESS_AUX_KEY and (value.dtype.kind == "b" or not 0 <= value.reshape(-1)[0] <= 1):
+                _fail(stage_progress_source_key(spec) + " 必须是介于 0 与 1 之间的数值", "COMPOSITION_DATA_INVALID")
             result[key] = value
         return result
 
@@ -554,12 +581,16 @@ def composition_runtime_contract(factory, model_config, *, norm_stats=False):
     from openpi.models import pi0_config, pi0_gripper, pi0_value
     spec = normalize_composition(factory.composition, norm_stats=norm_stats)
     stage = factory.training_stage
+    state_layout = spec["model_transform"]
     if stage == "stage_progress":
         from openpi.models import pi0_stage_progress
 
         if type(model_config) is not pi0_stage_progress.Pi0StageProgressConfig:
             _fail("阶段进度估计器与 stage_progress 训练阶段必须一致", "COMPOSITION_STAGE_UNSUPPORTED")
-    elif type(model_config) not in {pi0_config.Pi0Config, pi0_gripper.Pi0GripperConfig, pi0_value.Pi0ValueConfig}:
+    elif not (
+        type(model_config) in {pi0_config.Pi0Config, pi0_gripper.Pi0GripperConfig, pi0_value.Pi0ValueConfig}
+        or state_layout == "kai0_pad32" and type(model_config) is pi0_config.Pi0RTCConfig
+    ):
         _fail("组合处理支持标准 Pi0/Pi05、Value、阶段进度和 Gripper 模型", "COMPOSITION_MODEL_UNSUPPORTED")
     action_dim, horizon = model_config.action_dim, model_config.action_horizon
     if type(action_dim) is not int or type(horizon) is not int or action_dim <= 0 or horizon <= 0:
@@ -586,14 +617,18 @@ def composition_runtime_contract(factory, model_config, *, norm_stats=False):
         _fail("Pi0 展平后状态宽度超过模型 action_dim，禁止静默截断", "COMPOSITION_MODEL_UNSUPPORTED")
     if not isinstance(stage, str) or stage not in {"sft", "value", "stage_progress", "offline_rl", "uot"}:
         _fail("组合处理不支持此训练阶段", "COMPOSITION_STAGE_UNSUPPORTED")
-    if not norm_stats and spec["model_transform"] == "flat_state" and (
+    if not norm_stats and state_layout != "standard" and (
             not pi05 or stage != "sft" or not getattr(model_config, "discrete_state_input", False)):
         _fail("一维状态 token 格式需要启用离散状态的 Pi0.5 SFT", "COMPOSITION_MODEL_UNSUPPORTED")
+    if not norm_stats and state_layout == "kai0_pad32" and (
+            type(model_config) not in {pi0_config.Pi0Config, pi0_config.Pi0RTCConfig}
+            or state_dim != 14 or spec["state_history"] != 1 or action_dim != 32):
+        _fail("Kai0 32 维状态 token 格式需要单帧 14 维状态和 action_dim=32 的标准 Pi0.5", "COMPOSITION_MODEL_UNSUPPORTED")
     if stage == "value" and "value_target" not in spec["aux_keys"]:
         _fail("价值训练需要显式 value_target 辅助字段", "COMPOSITION_STAGE_UNSUPPORTED")
     if (stage == "value") != (type(model_config) is pi0_value.Pi0ValueConfig):
         _fail("价值模型与 value 训练阶段必须一致", "COMPOSITION_STAGE_UNSUPPORTED")
-    if stage == "stage_progress" and "stage_progress_gt" not in spec["aux_keys"]:
+    if stage == "stage_progress" and STAGE_PROGRESS_AUX_KEY not in spec["aux_keys"]:
         _fail("阶段进度训练需要显式 stage_progress_gt 辅助字段", "COMPOSITION_STAGE_UNSUPPORTED")
     if stage == "offline_rl" and "is_positive" not in spec["aux_keys"]:
         _fail("ACP 训练需要显式 is_positive 辅助字段", "COMPOSITION_STAGE_UNSUPPORTED")
@@ -602,11 +637,16 @@ def composition_runtime_contract(factory, model_config, *, norm_stats=False):
         _fail("ACP dropout 必须是 0..1 的有限数值")
     metadata = _action_metadata_contract(factory.repo_id, spec["action_key"], horizon, width)
     views = {"image_keys": [], "depth_keys": []} if norm_stats else _view_contract(spec, model_config)
+    # The Kai0 action expert supervises its synthetic padding as well as the recorded actions.
+    supervised_width = action_dim if state_layout == "kai0_pad32" else width
+    progress_mapping = ({"stage_progress_key": spec["stage_progress_key"]}
+                        if stage == "stage_progress" and "stage_progress_key" in spec else {})
     return {"training_stage": stage, "model_type": type(model_config).__name__, "pi05": pi05,
             "action_dim": action_dim, "action_horizon": horizon, "raw_state_dim": state_dim,
             "raw_action_dim": width, "state_history": spec["state_history"],
             "normalization": spec["normalization"], "acp_dropout": float(dropout),
-            "action_loss_mask": [1.0] * width + [0.0] * (action_dim - width), **metadata, **views}
+            "action_loss_mask": [1.0] * supervised_width + [0.0] * (action_dim - supervised_width),
+            **metadata, **views, **progress_mapping}
 
 
 def compose_data_config(factory, assets_dirs, model_config, *, include_model_transforms=True, load_norm_stats=True):
@@ -637,12 +677,18 @@ def compose_data_config(factory, assets_dirs, model_config, *, include_model_tra
         model_inputs = [transforms.InjectDefaultPrompt(None), transforms.ResizeImages(224, 224)]
         if stage == "offline_rl":
             model_inputs.insert(1, transforms.ACPConditionPrompt(indicator_key="is_positive", dropout=float(dropout), default_positive=False))
-        flat_state = spec["model_transform"] == "flat_state"
+        state_layout = spec["model_transform"]
+        flat_state = state_layout != "standard"
         if flat_state:
             model_inputs.append(transforms.FlattenState())
+        if state_layout == "kai0_pad32":
+            model_inputs.append(transforms.PadKai0StateTokens())
         model_inputs.append(transforms.TokenizePrompt(tokenizer.PaligemmaTokenizer(model_config.max_token_len),
                             discrete_state_input=bool(getattr(model_config, "discrete_state_input", False))))
-        if pi05:
+        if state_layout == "kai0_pad32":
+            method = getattr(base, "normalization_method", None) or spec["normalization"]
+            model_inputs.append(transforms.PadKai0Actions(0.0 if method == "zscore" else -1.0))
+        elif pi05:
             model_inputs.append(transforms.PadActionsOnly(action_dim))
             if not flat_state:
                 model_inputs.append(transforms.FlattenState())

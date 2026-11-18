@@ -68,16 +68,23 @@ class CaptureUnnormalize(CaptureNormalize):
     pass
 
 
+@dataclasses.dataclass(frozen=True)
+class PadKai0Actions:
+    padding_value: float
+
+
 @pytest.fixture
 def loaders():
-    transforms = SimpleNamespace(Normalize=CaptureNormalize, InjectActionLossMask=lambda value: value)
+    transforms = SimpleNamespace(Normalize=CaptureNormalize, InjectActionLossMask=lambda value: value,
+                                 PadKai0Actions=PadKai0Actions)
     namespace = dict(dataclasses=dataclasses, logging=logging, _transforms=transforms,
         _config=SimpleNamespace(_set_robot_type=lambda data, _: data),
         TransformedDataset=lambda dataset, pipeline: SimpleNamespace(dataset=dataset, pipeline=pipeline),
         IterableTransformedDataset=lambda dataset, pipeline, **kwargs: SimpleNamespace(dataset=dataset, pipeline=pipeline),
         create_torch_data_loader=lambda data, **_: data, create_rlds_data_loader=lambda data, **_: data)
     actual("src/openpi/training/data_loader.py",
-        {"_apply_global_normalization", "transform_dataset", "transform_iterable_dataset", "create_data_loader"}, namespace)
+        {"_apply_global_normalization", "_model_transforms_for_normalization", "transform_dataset",
+         "transform_iterable_dataset", "create_data_loader"}, namespace)
     return SimpleNamespace(**namespace)
 
 
@@ -92,6 +99,27 @@ def test_core_loader_passes_final_explicit_method_without_reinterpreting_old_boo
     result = transform([], data)
     normalizer = next(item for item in result.pipeline if isinstance(item, CaptureNormalize))
     assert normalizer.method == (method or "quantile") and normalizer.use_quantiles is True
+
+
+@pytest.mark.parametrize("method,use_quantiles,skip_stats,expected", [
+    ("quantile", False, False, -1.0),
+    ("minmax", False, False, -1.0),
+    ("zscore", True, False, 0.0),
+    (None, True, False, -1.0),
+    (None, False, False, 0.0),
+    ("quantile", True, True, 0.0),
+])
+@pytest.mark.parametrize("iterable", [False, True])
+def test_kai0_action_padding_follows_the_effective_normalizer(loaders, method, use_quantiles, skip_stats, expected, iterable):
+    original_padding = PadKai0Actions(0.0 if use_quantiles else -1.0)
+    ordinary_transform = object()
+    data = Data(norm_stats={"actions": object()}, use_quantile_norm=use_quantiles,
+                model_transforms=Group(inputs=(ordinary_transform, original_padding)), action_loss_mask=(1.0,) * 32)
+    data = loaders._apply_global_normalization(data, SimpleNamespace(normalization_method=method))
+    transform = loaders.transform_iterable_dataset if iterable else loaders.transform_dataset
+    pipeline = transform([], data, skip_norm_stats=skip_stats).pipeline
+    assert isinstance(pipeline[0], CaptureNormalize)
+    assert pipeline[1:] == [ordinary_transform, PadKai0Actions(expected), (1.0,) * 32]
 
 
 @pytest.mark.parametrize("rlds", [False, True])
@@ -112,12 +140,16 @@ def test_global_loader_rejects_invalid_explicit_method(loaders, method):
 @pytest.mark.parametrize("method", ["minmax", None])
 def test_multi_loader_keeps_resolved_global_method_in_each_checkpoint_data_config(loaders, method):
     seen = []
+    def transform_dataset(dataset, data, **kwargs):
+        seen.append(loaders.transform_dataset(dataset, data, **kwargs))
+        return dataset
+
     fake_torch = SimpleNamespace(utils=SimpleNamespace(data=SimpleNamespace(
         Dataset=object, WeightedRandomSampler=lambda weights, **kwargs: weights)),
         tensor=lambda weights, **_: np.asarray(weights), double=np.float64)
     data_loader = SimpleNamespace(_apply_global_normalization=loaders._apply_global_normalization,
         create_torch_dataset=lambda *_: [0, 1],
-        transform_dataset=lambda dataset, dc, **_: (seen.append(dc) or dataset),
+        transform_dataset=transform_dataset,
         TorchDataLoader=lambda dataset, **kwargs: SimpleNamespace(dataset=dataset, options=kwargs))
     namespace = dict(math=math, numbers=numbers, logging=logging, torch=fake_torch,
         jax=SimpleNamespace(process_count=lambda: 1), _data_loader=data_loader,
@@ -126,10 +158,15 @@ def test_multi_loader_keeps_resolved_global_method_in_each_checkpoint_data_confi
         {"WeightedConcatDataset", "create_multi_data_loader"}, namespace)
     config = SimpleNamespace(model=SimpleNamespace(action_horizon=2, image_keys=None, depth_keys=None),
         batch_size=2, num_workers=0, seed=0, normalization_method=method)
-    data = [Data(repo_id=str(i), normalization_method="zscore") for i in range(3)]
+    model_transforms = Group(inputs=(PadKai0Actions(0.0),))
+    mask = (1.0,) * 32
+    data = [Data(repo_id=str(i), normalization_method="zscore", norm_stats={"actions": object()},
+                 model_transforms=model_transforms, action_loss_mask=mask) for i in range(3)]
     result = namespace["create_multi_data_loader"](config, list(zip(data, [1, 2, 2])))
-    assert len(seen) == 3 and result.configs == seen
+    assert len(seen) == len(result.configs) == 3
     assert all(dc.normalization_method == (method or "zscore") for dc in result.configs)
+    expected_padding = PadKai0Actions(-1.0 if method == "minmax" else 0.0)
+    assert all(transformed.pipeline[1:] == [expected_padding, mask] for transformed in seen)
 
 
 @pytest.fixture

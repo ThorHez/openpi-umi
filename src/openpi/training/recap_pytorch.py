@@ -1,5 +1,6 @@
 """Native PyTorch training and checkpoint handling for the ReCap stages."""
 
+import contextlib
 import dataclasses
 import functools
 import json
@@ -20,6 +21,9 @@ from openpi.models import model as observation_model
 from openpi.models_pytorch import recap
 from openpi.training import checkpoints, optimizer
 from openpi.training.training_normalization import prepare_training_normalization
+
+
+PLATFORM_STAGE_PROGRESS_VALIDATION_VERSION = 1
 
 
 _OBSERVATION_FIELDS = ({field.name for field in dataclasses.fields(observation_model.Observation)}
@@ -84,12 +88,29 @@ def make_loader(dataset, config, *, batch_size, sampler=None, shuffle=False, dro
     )
 
 
-def _training_dataset(config):
+def _training_datasets(config, rank):
     if config.recap_training_stage == "stage_progress":
         from openpi.training import stage_progress
 
         source = stage_progress.StageProgressSource(config, skip_norm_stats=True)
-        return stage_progress.StageProgressPairs(source, include_actions=True), [source.data_config], None
+        if not config.val_ratio:
+            return stage_progress.StageProgressPairs(source, include_actions=True), None, [source.data_config], None
+        if not 0 < config.val_ratio < 1:
+            raise ValueError("阶段进度验证集比例须大于 0 且小于 1")
+        episodes = [rows for rows in source.episodes if len(rows) > 1]
+        if len(episodes) < 2:
+            raise ValueError("阶段进度验证至少需要两条各含两帧的轨迹。请增加轨迹或将验证集比例设为 0")
+        validation_size = min(len(episodes) - 1, max(1, round(len(episodes) * config.val_ratio)))
+        order = np.random.default_rng(config.seed).permutation(len(episodes))
+        held_out = set(order[:validation_size])
+        train = stage_progress.StageProgressPairs(
+            source, include_actions=True, episodes=[rows for index, rows in enumerate(episodes) if index not in held_out]
+        )
+        validation = stage_progress.StageProgressPairs(
+            source, include_actions=True, episodes=[episodes[index] for index in order[:validation_size]],
+            reference_seed=config.seed,
+        ) if rank == 0 else None
+        return train, validation, [source.data_config], None
     from openpi.training import data_loader
     from openpi.training.multi_data_loader import WeightedConcatDataset
 
@@ -103,16 +124,15 @@ def _training_dataset(config):
     weights = config.data.weights if multi else None
     dataset = WeightedConcatDataset(datasets, weights=weights)
     sample_weights = dataset.get_dataset_weights_for_sampler() if weights and len(set(weights)) > 1 else None
-    return dataset, configs, sample_weights
+    return dataset, None, configs, sample_weights
 
 
 def _training_loaders(config, rank, world_size):
-    dataset, configs, weights = _training_dataset(config)
-    train, validation = dataset, None
+    train, validation, configs, weights = _training_datasets(config, rank)
     if config.recap_training_stage == "value" and config.val_ratio:
-        validation_size = max(1, round(len(dataset) * config.val_ratio))
+        validation_size = max(1, round(len(train) * config.val_ratio))
         train, validation = torch.utils.data.random_split(
-            dataset, [len(dataset) - validation_size, validation_size],
+            train, [len(train) - validation_size, validation_size],
             generator=torch.Generator().manual_seed(config.seed),
         )
         if weights is not None:
@@ -164,13 +184,24 @@ def _batch_loss(model, batch, stage, device):
 def _evaluate(model, loader, config, device):
     import itertools
 
-    model.eval()
+    stage = config.recap_training_stage
+    progress_validation = stage == "stage_progress"
+    devices = [device] if device.type == "cuda" else []
+    rng = torch.random.fork_rng(devices=devices) if progress_validation else contextlib.nullcontext()
     total, count = 0.0, 0
-    for batch in itertools.islice(loader, config.eval_batches):
-        loss = _batch_loss(model, batch, "value", device)
-        total += loss.float().sum().item()
-        count += loss.numel()
-    model.train()
+    model.eval()
+    try:
+        with rng:
+            if progress_validation:
+                torch.random.default_generator.manual_seed(config.seed)
+                if devices:
+                    torch.cuda.manual_seed(config.seed)
+            for batch in itertools.islice(loader, config.eval_batches):
+                loss = _batch_loss(model, batch, stage, device)
+                total += loss.float().sum().item()
+                count += loss.numel()
+    finally:
+        model.train()
     return total / count
 
 
@@ -271,7 +302,8 @@ def _train(config, rank, world_size, device):
         optim.step()
         final = step == config.num_train_steps - 1
         log = step % config.log_interval == 0 or final
-        evaluate = stage == "value" and config.val_ratio > 0 and (step % config.eval_interval == 0 or final)
+        evaluate = (stage in {"value", "stage_progress"} and config.val_ratio > 0
+                    and (step % config.eval_interval == 0 or final))
         save = final or (step > 0 and step % config.save_interval == 0)
         if log:
             metrics = torch.stack((loss.detach(), grad_norm.detach().float()))
@@ -299,30 +331,7 @@ def load_scoring_model(config, checkpoint, stage, device):
     return model.to(device).eval()
 
 
-def _annotate_stage_progress(config, output_dir):
-    from openpi.training import data_loader, stage_progress, stage_progress_labels
-
-    device = _device(0)
-    torch.manual_seed(config.seed)
-    source = stage_progress.StageProgressSource(config, skip_norm_stats=True)
-    checkpoint = config.checkpoint_dir / str(config.num_train_steps - 1)
-    model = load_scoring_model(config, checkpoint, "stage_progress", device)
-    collate = functools.partial(data_loader._collate_fn, image_keys=config.model.image_keys,
-                                depth_keys=config.model.depth_keys)
-
-    @torch.inference_mode()
-    def predict(reference, current):
-        samples = {int(row): source.observation(row) for row in np.union1d(reference, current)}
-        ref = torch_observation(collate([samples[int(row)] for row in reference]), device)
-        cur = torch_observation(collate([samples[int(row)] for row in current]), device)
-        return model.predict_progress(ref, cur).detach().float().cpu().reshape(-1).numpy()
-
-    device_count = max(1, torch.cuda.device_count())
-    scoring = dataclasses.replace(config, batch_size=config.batch_size // device_count)
-    stage_progress_labels.annotate_dataset(scoring, source, predict, output_dir)
-
-
-def run(config, *, output_dir=None, worker_setup=None):
+def run(config, *, worker_setup=None):
     stage = config.recap_training_stage
     if stage not in {"value", "stage_progress", "offline_rl"} or config.pytorch_weight_path is None:
         raise ValueError("PyTorch ReCap 要求选择训练阶段和包含 model.safetensors 的初始权重")
@@ -341,5 +350,3 @@ def run(config, *, output_dir=None, worker_setup=None):
         with tempfile.TemporaryDirectory(dir=config.checkpoint_dir, prefix=".ddp-") as temporary:
             rendezvous = (Path(temporary) / "store").as_uri()
             torch.multiprocessing.spawn(_train_rank, args=(world_size, config, rendezvous, worker_setup), nprocs=world_size)
-    if stage == "stage_progress":
-        _annotate_stage_progress(config, Path(output_dir) if output_dir is not None else Path(config.checkpoint_base_dir).parent)

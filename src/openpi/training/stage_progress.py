@@ -6,10 +6,11 @@ import random
 import numpy as np
 
 from openpi.models import model
+from openpi.training import composed_processing
 from openpi.training import data_loader
 
 
-_SOURCE_COLUMNS = ("index", "episode_index", "frame_index", "task_index", "stage_progress_gt")
+_INDEX_COLUMNS = ("index", "episode_index", "frame_index", "task_index")
 
 
 def _integer_column(frames, key, size):
@@ -28,6 +29,10 @@ class StageProgressSource:
             raise ValueError("阶段进度训练只支持一组 LeRobot 数据")
         resolved = config.data.create(config.assets_dirs, config.model)
         self.data_config = data_loader._apply_global_normalization(resolved, config)
+        repack = next((transform for transform in self.data_config.repack_transforms.inputs
+                       if isinstance(transform, composed_processing.LeRobotComposedRepack)), None)
+        progress_key = composed_processing.stage_progress_source_key(repack.composition if repack is not None else {})
+        source_columns = (*_INDEX_COLUMNS, progress_key)
         if not self.data_config.repo_id or self.data_config.rlds_data_dir is not None:
             raise ValueError("阶段进度训练需要本地 LeRobot 数据集")
         self.root = Path(self.data_config.repo_id).resolve(strict=True)
@@ -35,20 +40,20 @@ class StageProgressSource:
         raw_dataset = dataset._dataset if isinstance(dataset, data_loader.TransformedDataset) else dataset
         frames = raw_dataset.hf_dataset
         size = len(frames)
-        missing = set(_SOURCE_COLUMNS) - set(frames.column_names)
+        missing = set(source_columns) - set(frames.column_names)
         if size == 0 or missing:
             raise ValueError(f"阶段进度数据为空或缺少物理列：{', '.join(sorted(missing))}")
-        columns = frames.with_format("numpy", columns=list(_SOURCE_COLUMNS))[:]
+        columns = frames.with_format("numpy", columns=list(source_columns))[:]
         self.indices = _integer_column(columns, "index", size)
         self.task_indices = _integer_column(columns, "task_index", size)
         episodes = _integer_column(columns, "episode_index", size)
         frame_indices = _integer_column(columns, "frame_index", size)
         if np.unique(self.indices).size != size:
             raise ValueError("阶段进度数据的全局 index 必须唯一")
-        progress = np.asarray(columns["stage_progress_gt"])
+        progress = np.asarray(columns[progress_key])
         if (progress.shape not in {(size,), (size, 1)} or progress.dtype.kind not in "iuf"
                 or not np.all(np.isfinite(progress)) or np.any((progress < 0) | (progress > 1))):
-            raise ValueError("stage_progress_gt 必须是 [0, 1] 内的有限数值标量")
+            raise ValueError(f"{progress_key} 必须是 [0, 1] 内的有限数值标量")
         self.progress = progress.astype(np.float32, copy=False).reshape(-1)
 
         ordered_rows = np.lexsort((frame_indices, episodes))
@@ -86,10 +91,11 @@ class StageProgressSource:
 class StageProgressPairs:
     """Sample a uniform, distinct reference within each current frame's episode."""
 
-    def __init__(self, source, *, include_actions=False):
+    def __init__(self, source, *, include_actions=False, episodes=None, reference_seed=None):
         self.source = source
         self._include_actions = include_actions
-        episodes = [rows for rows in source.episodes if len(rows) > 1]
+        self._reference_seed = reference_seed
+        episodes = [rows for rows in (source.episodes if episodes is None else episodes) if len(rows) > 1]
         if not episodes:
             raise ValueError("阶段进度训练至少需要一条含两帧的轨迹")
         self._rows = np.concatenate(episodes)
@@ -103,7 +109,8 @@ class StageProgressPairs:
     def __getitem__(self, position):
         first = int(self._starts[position])
         size = int(self._sizes[position])
-        offset = random.randrange(size - 1)
+        rng = random if self._reference_seed is None else random.Random(self._reference_seed + int(position))
+        offset = rng.randrange(size - 1)
         reference_position = first + offset
         if reference_position >= position:
             reference_position += 1

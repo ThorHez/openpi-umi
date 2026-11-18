@@ -247,6 +247,22 @@ class SchemaTests(unittest.TestCase):
             spec = composition();mutate(spec)
             with self.subTest(spec=spec), self.assertRaises(ValueError):COMPOSED.normalize_composition(spec)
 
+    def test_stage_progress_source_column_is_a_training_only_mapping(self):
+        spec = composition()
+        spec["aux_keys"] = ["stage_progress_gt"]
+        legacy = COMPOSED.normalize_composition(spec)
+        self.assertEqual(COMPOSED.normalize_composition({**spec, "stage_progress_key": "stage_progress_gt"}), legacy)
+
+        alias = {**spec, "stage_progress_key": " annotation.progress "}
+        self.assertEqual(COMPOSED.normalize_composition(alias)["stage_progress_key"], "annotation.progress")
+        self.assertEqual(COMPOSED.normalize_composition(alias, norm_stats=True),
+                         COMPOSED.normalize_composition(spec, norm_stats=True))
+        for invalid in ("actions", "timestamp", "absolute_advantage", "annotation/progress", ""):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                COMPOSED.normalize_composition({**spec, "stage_progress_key": invalid})
+        with self.assertRaises(ValueError):
+            COMPOSED.normalize_composition({**alias, "aux_keys": []})
+
 
 def actual_definitions(path, names, namespace):
     nodes = [node for node in ast.parse(path.read_text()).body if getattr(node, "name", None) in names]
@@ -482,6 +498,19 @@ class NumericTests(unittest.TestCase):
         sample["is_positive"] = np.asarray([2])
         with self.assertRaises(ValueError):self.apply(spec, sample)
 
+    def test_stage_progress_repack_uses_selected_physical_column(self):
+        spec = composition()
+        spec.update(aux_keys=["stage_progress_gt"], stage_progress_key="annotation.progress")
+        sample = self.sample(spec)
+        sample.update({"stage_progress_gt": 0.5, "annotation.progress": 0.25})
+        self.assertEqual(self.apply(spec, sample)["stage_progress_gt"].item(), 0.25)
+        for invalid in (True, 1.5):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "annotation.progress"):
+                self.apply(spec, {**sample, "annotation.progress": invalid})
+        del sample["annotation.progress"]
+        with self.assertRaisesRegex(ValueError, "annotation.progress"):
+            self.apply(spec, sample)
+
 
 @unittest.skipIf(np is None, "NumPy required for real pipeline checks")
 class BuilderTests(unittest.TestCase):
@@ -494,7 +523,8 @@ class BuilderTests(unittest.TestCase):
                      "ACP_POSITIVE_TAG": "Advantage: positive", "ACP_NEGATIVE_TAG": "Advantage: negative"}
         actual_definitions(ROOT / "src/openpi/transforms.py", {
             "Group", "InjectDefaultPrompt", "ResizeImages", "TokenizePrompt", "PadActionsOnly", "PadStatesAndActions",
-            "FlattenState", "KeepModelKeys", "ACPConditionPrompt", "InjectActionLossMask", "build_acp_tagged_task", "pad_to_dim"}, namespace)
+            "FlattenState", "PadKai0StateTokens", "PadKai0Actions", "KeepModelKeys", "ACPConditionPrompt", "InjectActionLossMask",
+            "build_acp_tagged_task", "pad_to_dim"}, namespace)
         namespace["MODEL_KEYS"] = {"state", "actions", "image", "image_mask", "tokenized_prompt", "tokenized_prompt_mask", "value_target"}
         transforms = types.ModuleType("openpi.transforms")
         transforms.__dict__.update(namespace)
@@ -514,8 +544,10 @@ class BuilderTests(unittest.TestCase):
             gripper_binary_indices: tuple[int, ...] | None = None
         class Pi0ValueConfig(Pi0Config):pass
         class Pi0MemConfig(Pi0Config):pass
+        class Pi0RTCConfig(Pi0Config):pass
         self.models = types.SimpleNamespace(Pi0Config=Pi0Config, Pi0ValueConfig=Pi0ValueConfig,
-                                            Pi0GripperConfig=Pi0GripperConfig, Pi0MemConfig=Pi0MemConfig)
+                                            Pi0GripperConfig=Pi0GripperConfig, Pi0MemConfig=Pi0MemConfig,
+                                            Pi0RTCConfig=Pi0RTCConfig)
         @dataclasses.dataclass(frozen=True)
         class DataConfig:
             repo_id: str
@@ -547,6 +579,7 @@ class BuilderTests(unittest.TestCase):
             module = types.ModuleType("openpi.models." + name)
             setattr(module, "PaligemmaTokenizer" if name == "tokenizer" else value.__name__, value)
             setattr(models, name, module);modules[module.__name__] = module
+        models.pi0_config.Pi0RTCConfig = Pi0RTCConfig
         self.patch = patch.dict(sys.modules, modules);self.patch.start();self.addCleanup(self.patch.stop)
         self.transforms = transforms
         shared = {"dataclasses": dataclasses, "_transforms": transforms}
@@ -862,6 +895,42 @@ class BuilderTests(unittest.TestCase):
                     np.testing.assert_array_equal(tokenized_state, state.ravel() if mode == "flat_state" else state)
                     np.testing.assert_array_equal(output["actions"][:, :14], sample["actions"])
                     np.testing.assert_array_equal(output["actions"][:, 14:], 0)
+                    self.assertEqual(config.action_loss_mask, (1.0,) * 14 + (0.0,) * 18)
+
+    def test_kai0_state_token_padding_matches_the_normalized_kai0_tail(self):
+        spec = {**composite_composition(), "model_transform": "kai0_pad32"}
+        normalized = np.linspace(-0.9, 0.9, 14, dtype=np.float32)
+        kai0_raw_padding = np.zeros(18)
+        kai0_normalized_padding = (kai0_raw_padding - 0) / (0 - 0 + 1e-6) * 2 - 1
+        expected = np.concatenate((normalized, kai0_normalized_padding))
+        for model_type in (self.models.Pi0Config, self.models.Pi0RTCConfig):
+            with self.subTest(model=model_type):
+                config = self.build(spec, model=model_type(discrete_state_input=True))
+                sample = self.sample(spec)
+                output = config.data_transforms.inputs[0](config.repack_transforms.inputs[0](sample))
+                self.assertEqual(output["state"].shape, (1, 14))
+                self.assertEqual(config.normalize_masks["state"], (True,) * 14)
+                output["state"] = normalized[None]
+                for transform in config.model_transforms.inputs:
+                    output = transform(output)
+                np.testing.assert_array_equal(self.tokenizer_calls[-1]["state"], expected)
+                np.testing.assert_array_equal(output["state"], expected)
+                np.testing.assert_array_equal(output["actions"][:, :14], sample["actions"])
+                np.testing.assert_array_equal(output["actions"][:, 14:], -1)
+                self.assertEqual(config.action_loss_mask, (1.0,) * 32)
+                output = self.transforms.InjectActionLossMask(config.action_loss_mask)(output)
+                np.testing.assert_array_equal(output["action_loss_mask"], np.ones(32))
+
+        model = self.models.Pi0Config(discrete_state_input=True)
+        for bad_spec, bad_model in (
+            ({**spec, "state_history": 2}, model),
+            ({**joint_composition(), "model_transform": "kai0_pad32"}, model),
+            (spec, dataclasses.replace(model, action_dim=24)),
+            (spec, dataclasses.replace(model, discrete_state_input=False)),
+        ):
+            with self.subTest(spec=bad_spec, model=bad_model), self.assertRaisesRegex(
+                    ValueError, "COMPOSITION_MODEL_UNSUPPORTED"):
+                self.build(bad_spec, model=bad_model)
 
     def test_pi0_flattens_and_pads_state_without_silently_truncating(self):
         spec = joint_composition();model = self.models.Pi0Config(pi05=False)
